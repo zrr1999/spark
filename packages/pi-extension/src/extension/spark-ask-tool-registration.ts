@@ -1,13 +1,16 @@
 import { Type } from "typebox";
 import { replaySparkAskTool, runSparkAskTool, type SparkAskToolParams } from "./spark-ask-tool.ts";
-import type { ArtifactRef } from "@zendev-lab/spark-core";
-import { normalizeArtifactRef } from "./artifact-tools.ts";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import { sparkAskUi } from "./spark-ask-ui.ts";
 import type { SparkToolRegistrar } from "./spark-tool-registration.ts";
 
-export function normalizeSparkAskReplayArtifactRef(value: unknown): ArtifactRef | undefined {
+export function normalizeSparkAskReplayEvidenceRef(value: unknown): EvidenceRef | undefined {
   if (value === undefined || value === null) return undefined;
-  return normalizeArtifactRef(value);
+  if (typeof value !== "string") throw new Error("evidenceRef must be a string");
+  if (!value.startsWith("evidence:") || value.length === "evidence:".length) {
+    throw new Error("evidenceRef must be an evidence: ref");
+  }
+  return value as EvidenceRef;
 }
 
 export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): void {
@@ -15,9 +18,9 @@ export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): vo
     name: "impl_ask",
     label: "Spark Ask",
     description:
-      "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as an artifact.",
+      "Ask the user a structured multi-question clarification, decision, approval, or unblock form and persist the answer as internal evidence.",
     promptGuidelines: [
-      "Use ask as the canonical ask tool; this implementation persists Spark ask artifacts.",
+      "Use ask as the canonical ask tool; this implementation persists Spark ask evidence.",
       "When user-facing open questions or decision points would change task scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order, turn them into context-specific ask questions instead of leaving them as prose.",
       "Each option needs a stable id, short label, and clear description explaining what choosing it means.",
       "Use freeform questions for notes/context instead of creating business options named Other or Type your own.",
@@ -83,14 +86,14 @@ export function registerSparkAskTools(registerSparkTool: SparkToolRegistrar): vo
     name: "impl_ask_replay",
     label: "Spark Ask Replay",
     description:
-      "Replay the latest Spark ask artifact, or a specified ask artifact, preserving prior answers where possible.",
+      "Replay the latest Spark ask evidence, or a specified evidence entry, preserving prior answers where possible.",
     parameters: Type.Object({
-      artifactRef: Type.Optional(Type.String()),
+      evidenceRef: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return replaySparkAskTool({
         cwd: ctx.cwd,
-        artifactRef: normalizeSparkAskReplayArtifactRef(params.artifactRef),
+        evidenceRef: normalizeSparkAskReplayEvidenceRef(params.evidenceRef),
         ui: sparkAskUi(ctx),
       });
     },

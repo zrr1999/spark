@@ -1,4 +1,4 @@
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import {
   runSparkAskTool,
   type SparkAskToolParams,
@@ -7,7 +7,7 @@ import {
 
 export interface ProjectPurposeClarificationResult {
   asked: boolean;
-  artifactRef?: ArtifactRef;
+  evidenceRef?: EvidenceRef;
   summary?: string;
   blocked: boolean;
 }
@@ -60,13 +60,13 @@ export async function clarifyProjectPurposeIfNeeded(input: {
   };
   const response = await runSparkAskTool(request, { cwd: input.cwd, ui: input.ui });
   const details = response.details as {
-    artifactRef?: ArtifactRef;
+    evidenceRef?: EvidenceRef;
     blocked?: boolean;
     summary?: string;
   };
   return {
     asked: true,
-    artifactRef: details.artifactRef,
+    evidenceRef: details.evidenceRef,
     summary: details.summary,
     blocked: details.blocked === true,
   };

@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
-import type { Artifact } from "@zendev-lab/spark-artifacts";
+import type { Evidence } from "@zendev-lab/spark-artifacts";
 import {
   readJsonFileOptional,
   writeJsonFileAtomic,
-  type ArtifactRef,
+  type EvidenceRef,
 } from "@zendev-lab/spark-core";
 
 import type { SparkAskAutoAnswerRequest } from "./action-tool.ts";
 
-export interface SparkAskEvidenceArtifactBody {
+export interface SparkAskEvidenceBody {
   schema: "spark.ask.evidence/v1";
   request: SparkAskAutoAnswerRequest;
   result: unknown;
@@ -31,57 +31,55 @@ export interface VerifiedCanonicalAskEvidence {
 
 interface CanonicalAskEvidenceReceipt {
   schema: "spark.ask.evidence-receipt/v1";
-  artifactRef: ArtifactRef;
-  artifactHash: string;
+  evidenceRef: EvidenceRef;
+  evidenceHash: string;
   answersHash: string;
   recordedAt: string;
 }
 
-export function isUserAnsweredAskEvidenceArtifactBody(
-  value: unknown,
-): value is SparkAskEvidenceArtifactBody {
+export function isUserAnsweredAskEvidenceBody(value: unknown): value is SparkAskEvidenceBody {
   return normalizeUserAnsweredAskEvidence(value) !== undefined;
 }
 
 /**
- * Persist a receipt outside the public artifact surface. The receipt binds the
- * artifact ref, content hash, and normalized user answers to the canonical ask
- * execution that created it. A caller using artifact action=record cannot mint
+ * Persist a receipt outside the product-artifact surface. The receipt binds the
+ * evidence ref, content hash, and normalized user answers to the canonical ask
+ * execution that created it. A caller using evidence action=record cannot mint
  * this receipt merely by claiming provenance.producer=ask.
  */
 export async function recordCanonicalAskEvidenceReceipt(
   cwd: string,
-  artifact: Artifact,
+  entry: Evidence,
 ): Promise<void> {
-  const answers = normalizeUserAnsweredAskEvidence(artifact.body);
+  const answers = normalizeUserAnsweredAskEvidence(entry.body);
   if (!answers) throw new Error("canonical ask evidence requires a user-answered result");
-  if (!artifact.hash)
-    throw new Error("canonical ask evidence artifact is missing its content hash");
+  if (!entry.hash) throw new Error("canonical ask evidence is missing its content hash");
   const receipt: CanonicalAskEvidenceReceipt = {
     schema: "spark.ask.evidence-receipt/v1",
-    artifactRef: artifact.ref,
-    artifactHash: artifact.hash,
+    evidenceRef: asEvidenceRef(entry.ref),
+    evidenceHash: entry.hash,
     answersHash: hashAnswers(answers),
     recordedAt: new Date().toISOString(),
   };
-  await writeJsonFileAtomic(canonicalAskEvidenceReceiptPath(cwd, artifact.ref), receipt);
+  await writeJsonFileAtomic(canonicalAskEvidenceReceiptPath(cwd, receipt.evidenceRef), receipt);
 }
 
-export async function verifyCanonicalAskEvidenceArtifact(
+export async function verifyCanonicalAskEvidence(
   cwd: string,
-  artifact: Artifact,
+  entry: Evidence,
 ): Promise<VerifiedCanonicalAskEvidence | undefined> {
-  const answers = normalizeUserAnsweredAskEvidence(artifact.body);
-  if (!answers || !artifact.hash) return undefined;
+  const answers = normalizeUserAnsweredAskEvidence(entry.body);
+  if (!answers || !entry.hash) return undefined;
+  const evidenceRef = asEvidenceRef(entry.ref);
   const raw = await readJsonFileOptional(
-    canonicalAskEvidenceReceiptPath(cwd, artifact.ref),
+    canonicalAskEvidenceReceiptPath(cwd, evidenceRef),
     (filePath, message) => new Error(`${filePath}: ${message}`),
   );
   const receipt = parseCanonicalAskEvidenceReceipt(raw);
   if (
     !receipt ||
-    receipt.artifactRef !== artifact.ref ||
-    receipt.artifactHash !== artifact.hash ||
+    receipt.evidenceRef !== evidenceRef ||
+    receipt.evidenceHash !== entry.hash ||
     receipt.answersHash !== hashAnswers(answers)
   ) {
     return undefined;
@@ -144,7 +142,7 @@ function normalizeUserAnsweredAskEvidence(
   return answers.sort((left, right) => left.questionId.localeCompare(right.questionId));
 }
 
-function canonicalAskEvidenceReceiptPath(cwd: string, ref: ArtifactRef): string {
+function canonicalAskEvidenceReceiptPath(cwd: string, ref: EvidenceRef): string {
   const filename = `${createHash("sha256").update(ref).digest("hex")}.json`;
   return join(cwd, ".spark", "asks", "evidence-receipts", filename);
 }
@@ -152,10 +150,10 @@ function canonicalAskEvidenceReceiptPath(cwd: string, ref: ArtifactRef): string 
 function parseCanonicalAskEvidenceReceipt(value: unknown): CanonicalAskEvidenceReceipt | undefined {
   if (!isRecord(value) || value.schema !== "spark.ask.evidence-receipt/v1") return undefined;
   if (
-    typeof value.artifactRef !== "string" ||
-    !value.artifactRef.startsWith("artifact:") ||
-    typeof value.artifactHash !== "string" ||
-    !value.artifactHash ||
+    typeof value.evidenceRef !== "string" ||
+    !value.evidenceRef.startsWith("evidence:") ||
+    typeof value.evidenceHash !== "string" ||
+    !value.evidenceHash ||
     typeof value.answersHash !== "string" ||
     !value.answersHash ||
     typeof value.recordedAt !== "string" ||
@@ -165,6 +163,20 @@ function parseCanonicalAskEvidenceReceipt(value: unknown): CanonicalAskEvidenceR
   }
   return value as unknown as CanonicalAskEvidenceReceipt;
 }
+
+function asEvidenceRef(value: string): EvidenceRef {
+  if (!value.startsWith("evidence:") || value.length === "evidence:".length) {
+    throw new Error("canonical ask evidence requires an evidence: ref");
+  }
+  return value as EvidenceRef;
+}
+
+/** @deprecated Migration alias. */
+export type SparkAskEvidenceArtifactBody = SparkAskEvidenceBody;
+/** @deprecated Migration alias. */
+export const isUserAnsweredAskEvidenceArtifactBody = isUserAnsweredAskEvidenceBody;
+/** @deprecated Migration alias. */
+export const verifyCanonicalAskEvidenceArtifact = verifyCanonicalAskEvidence;
 
 function hashAnswers(answers: readonly CanonicalAskEvidenceAnswer[]): string {
   return createHash("sha256").update(JSON.stringify(answers)).digest("hex");

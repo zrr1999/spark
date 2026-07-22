@@ -117,9 +117,9 @@ describe("session live events", () => {
           type: "daemon.view_event",
           sessionId: "sess_current",
           view: {
-            type: "artifact.update",
-            artifact: {
-              ref: "artifact:1",
+            type: "evidence.update",
+            evidence: {
+              ref: "evidence:1",
               title: "UI diff",
               kind: "document",
               format: "markdown",
@@ -136,7 +136,7 @@ describe("session live events", () => {
       status: "idle",
       messages: [{ id: "msg_1", text: "Working" }],
       tasks: [{ ref: "task:1", title: "Inspect UI" }],
-      evidence: [{ ref: "artifact:1", title: "UI diff" }],
+      evidence: [{ ref: "evidence:1", title: "UI diff" }],
     });
     expect(state.cursor).toBe("2026-07-13T08:00:00.000Z|evt_artifact");
   });

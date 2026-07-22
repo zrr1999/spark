@@ -1,9 +1,9 @@
 /** Spark repro tool adapter for the host-neutral reproduction contract. */
 
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import { verifyCanonicalAskEvidenceArtifact } from "@zendev-lab/spark-ask";
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
+import { verifyCanonicalAskEvidence } from "@zendev-lab/spark-ask";
+import { nowIso, type EvidenceRef } from "@zendev-lab/spark-core";
 import { clearSessionGoal } from "./spark-session-goals.ts";
 import { clearSessionLoop } from "./spark-session-loops.ts";
 import { sparkActiveLens } from "./spark-drive-state.ts";
@@ -11,7 +11,6 @@ import {
   advanceReproPhase,
   advanceReproStage,
   createSparkSessionRepro,
-  currentPhaseAcceptance,
   currentReproStage,
   evaluateStageGate,
   isPhaseComplete,
@@ -58,7 +57,10 @@ export function registerSparkReproTool(
       "Prefer the main session for repro scheduling and execution; do not default to role/session/assign/workflow fan-out.",
       "When blocked by a missing decision, ambiguity, or a problem the user can unblock, call ask immediately; do not guess or end with only a prose blocker.",
       "Use repro action=record with requirementId and a matching evidence, decision, or validation proof.",
-      "Evidence and validation refs must name existing artifacts. Decision refs must name a user-answered canonical ask artifact created with recordAsEvidence=true.",
+      "Evidence and validation refs must name existing evidence entries. Decision refs must name canonical user-answer evidence created with recordAsEvidence=true.",
+      "Treat real tool execution as the evidence trigger: reuse evidence refs returned by tools, and record one concise evidence entry only when a requirement boundary otherwise lacks a durable ref. Do not record evidence for status narration.",
+      "Every foreground repro turn must create, update, or sync at least one product artifact (issue, PR, or one stable Markdown progress preview); evidence records and chat are not product progress.",
+      "For durable, reusable learnings, maintain normally one and at most three concise human-facing Markdown preview artifacts across the whole repro. Reuse/update them; do not write one every turn or store these documents in memory.",
       "Use repro action=evaluate to derive the current stage gate from recorded proof; it cannot force-pass a gate.",
       "Use repro action=advance only when requirements and any derived gate are complete.",
       "Use repro action=stop to clear the repro drive.",
@@ -90,7 +92,7 @@ export function registerSparkReproTool(
         Type.String({ description: "Legacy requirement id/description for action=satisfy." }),
       ),
       evidenceRef: Type.Optional(
-        Type.String({ description: "Required existing artifact ref for legacy action=satisfy." }),
+        Type.String({ description: "Required existing evidence ref for legacy action=satisfy." }),
       ),
       objective: Type.Optional(
         Type.String({
@@ -169,7 +171,7 @@ export function registerSparkReproTool(
           action === "record"
             ? normalizeReproProof(params.proof)
             : legacyEvidenceProof(params.evidenceRef);
-        const proof = await validateReproProofArtifacts(cwd, unverifiedProof);
+        const proof = await validateReproProofEvidence(cwd, unverifiedProof);
         const updated = recordReproRequirementProof(repro, requirementId, proof);
         if (!updated) {
           return {
@@ -328,14 +330,14 @@ function normalizeReproProof(value: unknown): SparkReproRequirementProof {
     return {
       kind: "evidence",
       evidenceRefs: value.evidenceRefs.map((ref, index) =>
-        normalizeArtifactRef(ref, `proof.evidenceRefs[${index}]`),
+        normalizeEvidenceRef(ref, `proof.evidenceRefs[${index}]`),
       ),
     };
   }
   if (value.kind === "decision") {
     return {
       kind: "decision",
-      decisionRef: normalizeArtifactRef(value.decisionRef, "proof.decisionRef"),
+      decisionRef: normalizeEvidenceRef(value.decisionRef, "proof.decisionRef"),
       selectedValue: normalizeRequiredString(value.selectedValue, "proof.selectedValue"),
       ...(typeof value.rationale === "string" && value.rationale.trim()
         ? { rationale: value.rationale.trim() }
@@ -349,7 +351,7 @@ function normalizeReproProof(value: unknown): SparkReproRequirementProof {
     return {
       kind: "validation",
       command: normalizeRequiredString(value.command, "proof.command"),
-      resultRef: normalizeArtifactRef(value.resultRef, "proof.resultRef"),
+      resultRef: normalizeEvidenceRef(value.resultRef, "proof.resultRef"),
       passed: value.passed,
     };
   }
@@ -357,7 +359,7 @@ function normalizeReproProof(value: unknown): SparkReproRequirementProof {
 }
 
 function legacyEvidenceProof(value: unknown): SparkReproRequirementProof {
-  return { kind: "evidence", evidenceRefs: [normalizeArtifactRef(value, "evidenceRef")] };
+  return { kind: "evidence", evidenceRefs: [normalizeEvidenceRef(value, "evidenceRef")] };
 }
 
 function resolveLegacyRequirementId(repro: SparkSessionRepro, value: unknown): string {
@@ -374,22 +376,22 @@ function resolveLegacyRequirementId(repro: SparkSessionRepro, value: unknown): s
   return requirement.id;
 }
 
-async function validateReproProofArtifacts(
+async function validateReproProofEvidence(
   cwd: string,
   proof: SparkReproRequirementProof,
 ): Promise<SparkReproRequirementProof> {
-  const store = defaultArtifactStore(cwd);
+  const store = defaultEvidenceStore(cwd);
   const refs =
     proof.kind === "evidence"
       ? proof.evidenceRefs
       : [proof.kind === "decision" ? proof.decisionRef : proof.resultRef];
-  const artifacts = await Promise.all(refs.map((ref) => store.tryGet(ref)));
+  const evidence = await Promise.all(refs.map((ref) => store.tryGet(ref)));
   for (let index = 0; index < refs.length; index += 1) {
-    if (!artifacts[index]) throw new Error(`repro proof artifact not found: ${refs[index]}`);
+    if (!evidence[index]) throw new Error(`repro proof evidence not found: ${refs[index]}`);
   }
   if (proof.kind !== "decision") return proof;
-  const artifact = artifacts[0]!;
-  const verified = await verifyCanonicalAskEvidenceArtifact(cwd, artifact);
+  const entry = evidence[0]!;
+  const verified = await verifyCanonicalAskEvidence(cwd, entry);
   if (!verified) {
     throw new Error(
       "decision proof must reference canonical ask evidence with a valid receipt created by recordAsEvidence=true",
@@ -404,11 +406,11 @@ async function validateReproProofArtifacts(
   return { ...proof, selectedValue };
 }
 
-function normalizeArtifactRef(value: unknown, field: string): ArtifactRef {
-  if (typeof value !== "string" || !value.startsWith("artifact:") || value.length <= 9) {
-    throw new Error(`${field} must be an artifact: ref`);
+function normalizeEvidenceRef(value: unknown, field: string): EvidenceRef {
+  if (typeof value !== "string" || !value.startsWith("evidence:") || value.length <= 9) {
+    throw new Error(`${field} must be an evidence: ref`);
   }
-  return value as ArtifactRef;
+  return value as EvidenceRef;
 }
 
 function normalizeRequiredString(value: unknown, field: string): string {
@@ -513,110 +515,4 @@ function requirementDetails(requirement: SparkReproRequirement): Record<string, 
         }
       : {}),
   };
-}
-
-export function renderReproTickInstruction(repro: SparkSessionRepro): string {
-  const stage = currentReproStage(repro);
-  const requirements = currentPhaseAcceptance(repro);
-  const unsatisfied = requirements.filter(
-    (requirement) => !isReproRequirementSatisfied(requirement),
-  );
-  const gateBlocking = stage.gate && stage.gate.evaluation?.passed !== true;
-  const lines = [
-    `Spark repro drive tick — Stage ${repro.currentStageIndex + 1}/${repro.stages.length}: ${stage.title} (${stage.name}), phase=${repro.currentPhase}.`,
-    repro.objective ? `Repro objective: ${repro.objective}` : undefined,
-    "",
-    "Milestone-driven reproduction workflow. Stages are linear (setup → scaffold → reproduce → scale → deliver); do one concrete step per tick.",
-    "",
-    "Current evidence-backed requirements:",
-    ...requirements.map(
-      (requirement) =>
-        `  ${isReproRequirementSatisfied(requirement) ? "[x]" : "[ ]"} [${requirement.kind}] ${requirement.id} — ${requirement.description}`,
-    ),
-  ];
-
-  const next = unsatisfied[0];
-  if (next) lines.push("", renderRequirementNextStep(next));
-  else if (gateBlocking) {
-    lines.push(
-      "",
-      'All requirements have proof. Call repro({ action: "evaluate" }); if it passes, call repro({ action: "advance" }).',
-    );
-  } else {
-    lines.push(
-      "",
-      'All current requirements are satisfied. Call repro({ action: "advance" }) to move to the next phase or stage.',
-    );
-  }
-
-  if (gateBlocking) {
-    lines.push(
-      "",
-      `Stage gate (${stage.gate!.id}): ${stage.gate!.description} — evaluation is derived from recorded proof and cannot be force-passed.`,
-    );
-  }
-
-  lines.push(
-    "",
-    "Repro drive requirements:",
-    `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for plan or implement work.`,
-    '- Prefer the main session for scheduling and every concrete step. Do not default to role({ action: "call" }), session({ action: "call"|"send" }), assign, or workflow_run during repro ticks; use those only when the user explicitly requests multi-agent/workflow fan-out.',
-    "- When blocked by a missing user decision, ambiguous requirement, unclear baseline/source, conflicting evidence, failing validation whose next step is unclear, or any problem the user can unblock, call ask immediately with a concrete question. Do not guess, invent substitutes, or end the turn with only a prose blocker report when ask can resolve it.",
-    "- Advance milestones with repro record/evaluate/advance. Never treat prose, an unverified ref, or a bare boolean as proof.",
-    "- Before ending every repro turn, leave a verifiable checkpoint. If the turn produced a coherent set of repository changes and committing is authorized and safe, create a small git commit promptly. Never include unrelated pre-existing changes.",
-    "- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete artifact refs or file paths, summarize the relevant diff, report commands/tests and their results, or ask about the exact blocker. Do not end with only a progress claim.",
-    "- If blocked on an external dependency the user cannot resolve, report that blocker; otherwise prefer ask over /repro stop.",
-    "- End the turn after one concrete step; the next repro tick is scheduled automatically.",
-  );
-
-  if (repro.currentPhase === "plan") {
-    lines.push(
-      "",
-      "Plan-phase research-first guidance:",
-      "- Classify each unknown as fact, reversible choice, material user decision, or validation uncertainty.",
-      "- Research facts from the workspace, dependencies, environment, and primary upstream sources before asking the user.",
-      "- Prioritize whether a runnable competitor/reference baseline already exists (typically a Megatron implementation). Prove availability with concrete paths, entrypoints, or failed-lookup evidence; do not assume a paper or announcement means the baseline is runnable.",
-      "- If that baseline is missing (for example a model whose Megatron path is not landed yet), ask the user how to construct or obtain it before any baseline probe. Do not invent a substitute baseline.",
-      "- For implementation strategy, find the owning module and compare reuse, adaptation, and new implementation with concrete code-path evidence.",
-      "- For alignment strategy, inspect the real module path first and compare it with an eager probe. Treat eager as a focused diagnostic unless the evidence or user-approved target makes it the intended path.",
-      "- Run a focused probe for validation uncertainty only after baseline availability or construction strategy is settled; record the command and result artifact.",
-      "- Use a recommended default for reversible low-risk choices and record it in the research artifact.",
-      "- Ask exactly one material user decision at a time with canonical ask and recordAsEvidence=true; do not use reviewer auto-answer for that decision.",
-      "- Keep research and decision-making in the main session; do not spawn anonymous role calls for ordinary setup research.",
-    );
-  } else {
-    lines.push(
-      "",
-      "Implement-phase guidance:",
-      "- Execute the planned tasks in the main session: write code, run tests, and fix failures.",
-      "- If a failure, missing credential, unclear expected behavior, or ambiguous fix path needs a user decision, call ask before inventing a workaround.",
-      "- Record the matching artifact-backed requirement proof before advancing.",
-    );
-  }
-  return lines.filter((line): line is string => line !== undefined).join("\n");
-}
-
-function renderRequirementNextStep(requirement: SparkReproRequirement): string {
-  switch (requirement.id) {
-    case "competitor-baseline-availability-researched":
-      return `Next: verify whether a runnable competitor/reference baseline already exists (typically Megatron). Record concrete entrypoints/paths if found, or explicit failed-lookup evidence if not (for example the model has no landed Megatron implementation yet). Store findings as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "evidence", evidenceRefs: ["artifact:..."] } }).`;
-    case "baseline-construction-strategy-approved":
-      return `Next: if a runnable baseline exists, ask the user to confirm reuse (or an alternate source); if it does not exist, ask how to construct or obtain it before probing. Use ask({ mode: "decision", delivery: "blocking", recordAsEvidence: true, questions: [...] }), then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "decision", decisionRef: "artifact:...", selectedValue: "..." } }).`;
-    case "baseline-probe-passed":
-      return `Next: only after baseline availability or construction strategy is settled, run the smallest real probe for "${requirement.description}", store its command output as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "validation", command: "...", resultRef: "artifact:...", passed: true } }).`;
-    default:
-      break;
-  }
-  switch (requirement.kind) {
-    case "evidence":
-      return `Next: research "${requirement.description}", store the findings as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "evidence", evidenceRefs: ["artifact:..."] } }).`;
-    case "decision":
-      return `Next: after research narrows the options, ask the user one material decision with ask({ mode: "decision", delivery: "blocking", recordAsEvidence: true, questions: [...] }), then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "decision", decisionRef: "artifact:...", selectedValue: "..." } }).`;
-    case "validation":
-      return `Next: run the smallest real probe for "${requirement.description}", store its command output as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "validation", command: "...", resultRef: "artifact:...", passed: true } }).`;
-    default: {
-      const exhaustive: never = requirement;
-      return exhaustive;
-    }
-  }
 }

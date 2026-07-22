@@ -30,7 +30,7 @@ import {
   appendSparkStateHousekeepingLines,
 } from "./state-housekeeping-rendering.ts";
 import {
-  SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+  SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES,
   collectSparkStateCleanupPlan,
   collectSparkStateDiagnostics,
   collectSparkStateHousekeeping,
@@ -50,7 +50,7 @@ type SparkStateAction =
   | "store_v2_migrate"
   | "cache_cleanup"
   | "workflow_run_prune"
-  | "role_run_artifact_compact";
+  | "role_run_evidence_compact";
 
 const SPARK_STATE_ACTIONS: SparkStateAction[] = [
   "state_status",
@@ -58,11 +58,11 @@ const SPARK_STATE_ACTIONS: SparkStateAction[] = [
   "store_v2_migrate",
   "cache_cleanup",
   "workflow_run_prune",
-  "role_run_artifact_compact",
+  "role_run_evidence_compact",
 ];
 
 const SPARK_STATE_ACTION_ERROR =
-  "action must be state_status, state_doctor, store_v2_migrate, cache_cleanup, workflow_run_prune, or role_run_artifact_compact";
+  "action must be state_status, state_doctor, store_v2_migrate, cache_cleanup, workflow_run_prune, or role_run_evidence_compact";
 
 export function normalizeSparkStateAction(value: unknown): SparkStateAction {
   if (value === undefined || value === null) return "state_status";
@@ -88,20 +88,20 @@ export function registerSparkStateTool(
     name: "impl_state",
     label: "Spark State",
     description:
-      "Inspect, doctor, migrate, or explicitly clean Spark state through domain-specific actions. action=state_status and action=state_doctor are read-only; action=store_v2_migrate previews or applies explicit V2 imports with backups; action=cache_cleanup defaults to dryRun=true and never deletes canonical stores; action=workflow_run_prune handles workflow-run retention; action=role_run_artifact_compact previews or applies historical role-run transcript blob replacement and defaults to dry-run.",
+      "Inspect, doctor, migrate, or explicitly clean Spark state through domain-specific actions. action=state_status and action=state_doctor are read-only; action=store_v2_migrate previews or applies explicit V2 imports with backups; action=cache_cleanup defaults to dryRun=true and never deletes canonical stores; action=workflow_run_prune handles workflow-run retention; action=role_run_evidence_compact previews or applies historical role-run evidence transcript blob replacement and defaults to dry-run.",
     parameters: Type.Object({
       action: Type.Optional(
         Type.String({
           default: "state_status",
           description:
-            "state_status | state_doctor | store_v2_migrate | cache_cleanup | workflow_run_prune | role_run_artifact_compact. state_status summarizes canonical/import-only state; state_doctor reports protected-store and migration findings read-only; store_v2_migrate previews/applies explicit imports with backups; cache_cleanup previews/deletes safe cache files; workflow_run_prune previews/applies typed workflow-run retention; role_run_artifact_compact previews/applies role-run transcript blob replacement.",
+            "state_status | state_doctor | store_v2_migrate | cache_cleanup | workflow_run_prune | role_run_evidence_compact. state_status summarizes canonical/import-only state; state_doctor reports protected-store and migration findings read-only; store_v2_migrate previews/applies explicit imports with backups; cache_cleanup previews/deletes safe cache files; workflow_run_prune previews/applies typed workflow-run retention; role_run_evidence_compact previews/applies role-run evidence transcript blob replacement.",
         }),
       ),
       dryRun: Type.Optional(
         Type.Boolean({
           default: true,
           description:
-            "Preview deletions without removing files. Defaults to true for cache_cleanup, workflow_run_prune, role_run_artifact_compact, and store_v2_migrate.",
+            "Preview deletions without removing files. Defaults to true for cache_cleanup, workflow_run_prune, role_run_evidence_compact, and store_v2_migrate.",
         }),
       ),
       olderThanDays: Type.Optional(
@@ -119,29 +119,29 @@ export function registerSparkStateTool(
       ),
       thresholdBytes: Type.Optional(
         Type.Number({
-          default: SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+          default: SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES,
           description:
-            "For action=role_run_artifact_compact, only consider role-run blobs at or above this byte size.",
+            "For action=role_run_evidence_compact, only consider role-run evidence blobs at or above this byte size.",
         }),
       ),
       tailBytes: Type.Optional(
         Type.Number({
           default: SPARK_ROLE_RUN_RETENTION_TAIL_BYTES,
           description:
-            "For action=role_run_artifact_compact, retain this many bytes of serialized transcript tail in replacement metadata.",
+            "For action=role_run_evidence_compact, retain this many bytes of serialized transcript tail in replacement metadata.",
         }),
       ),
       exportDir: Type.Optional(
         Type.String({
           description:
-            "For action=role_run_artifact_compact apply, copy each transcript blob to this directory before deleting the in-store blob.",
+            "For action=role_run_evidence_compact apply, copy each transcript blob to this directory before deleting the in-store blob.",
         }),
       ),
       limit: Type.Optional(
         Type.Number({
           default: SPARK_ROLE_RUN_RETENTION_RENDER_LIMIT,
           description:
-            "For action=role_run_artifact_compact, maximum candidate rows to render in text output.",
+            "For action=role_run_evidence_compact, maximum candidate rows to render in text output.",
         }),
       ),
       keepRecent: Type.Optional(
@@ -184,7 +184,7 @@ export function registerSparkStateTool(
       );
       const thresholdBytes = normalizePositiveInteger(
         (params as { thresholdBytes?: unknown }).thresholdBytes,
-        SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+        SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES,
         "thresholdBytes",
       );
       const tailBytes = normalizePositiveInteger(
@@ -270,7 +270,7 @@ export function registerSparkStateTool(
           details: { found: true, action, prune },
         };
       }
-      if (action === "role_run_artifact_compact") {
+      if (action === "role_run_evidence_compact") {
         const retention = await collectRoleRunArtifactRetentionPlan(cwd, {
           dryRun,
           thresholdBytes,
@@ -278,7 +278,7 @@ export function registerSparkStateTool(
           exportDir,
         });
         const lines = [
-          `Spark role-run artifact retention ${dryRun ? "dry-run" : "apply"}: ${dryRun ? "would replace" : "replaced"} ${retention.candidates.length} large transcript blob(s).`,
+          `Spark role-run evidence retention ${dryRun ? "dry-run" : "apply"}: ${dryRun ? "would replace" : "replaced"} ${retention.candidates.length} large transcript blob(s).`,
         ];
         appendRoleRunArtifactRetentionLines(lines, retention, limit);
         return {

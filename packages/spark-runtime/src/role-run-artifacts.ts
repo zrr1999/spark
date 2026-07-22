@@ -110,7 +110,15 @@ export async function readRoleRunArtifactPreview(
   artifactRef: ArtifactRef,
   options: { maxMetadataBytes?: number } = {},
 ): Promise<RoleRunArtifactPreview> {
-  const metadataPath = join(cwd, ".spark", "artifacts", `${refId(artifactRef)}.json`);
+  const evidencePath = join(cwd, ".spark", "evidence", `${refId(artifactRef)}.json`);
+  const legacyPath = join(cwd, ".spark", "artifacts", `${refId(artifactRef)}.json`);
+  const metadataPath = await firstExistingPath([evidencePath, legacyPath]);
+  if (!metadataPath) {
+    return {
+      artifactRef,
+      skippedReason: `metadata_unavailable: ${evidencePath} not found`,
+    };
+  }
   const metadataStat = await stat(metadataPath).catch((error: NodeJS.ErrnoException) => {
     if (isFileNotFoundError(error)) return undefined;
     throw error;
@@ -127,7 +135,7 @@ export async function readRoleRunArtifactPreview(
     return {
       artifactRef,
       bodySize: metadataStat.size,
-      skippedReason: `metadata_too_large: ${metadataStat.size} bytes; artifact body not loaded`,
+      skippedReason: `metadata_too_large: ${metadataStat.size} bytes; evidence body not loaded`,
     };
   }
   const rawMetadata = await readFile(metadataPath, "utf8").catch((error: NodeJS.ErrnoException) => {
@@ -164,7 +172,7 @@ export async function readRoleRunArtifactPreview(
       artifactRef,
       bodySize: artifact.bodySize,
       bodyTruncated: artifact.bodyTruncated,
-      skippedReason: "unsupported_role_run_body: artifact body not loaded",
+      skippedReason: "unsupported_role_run_body: evidence body not loaded",
     };
   }
   return {
@@ -252,10 +260,10 @@ export async function collectRoleRunArtifactRetentionPlan(
   cwd: string,
   options: { dryRun: boolean; thresholdBytes: number; tailBytes: number; exportDir?: string },
 ): Promise<RoleRunArtifactRetentionPlan> {
-  const artifactRoot = join(cwd, ".spark", "artifacts");
+  const artifactRoot = join(cwd, ".spark", "evidence");
   const metadataFiles = await listRoleRunArtifactMetadataFiles(artifactRoot);
   const plan: RoleRunArtifactRetentionPlan = {
-    root: relative(cwd, artifactRoot) || ".spark/artifacts",
+    root: relative(cwd, artifactRoot) || ".spark/evidence",
     generatedAt: nowIso(),
     dryRun: options.dryRun,
     thresholdBytes: options.thresholdBytes,
@@ -584,8 +592,9 @@ function roleRunArtifactRefFromMetadata(
   file: RoleRunArtifactMetadataFile,
   raw: Record<string, unknown>,
 ): ArtifactRef {
-  const ref = typeof raw.ref === "string" ? raw.ref : `artifact:${basename(file.name, ".json")}`;
-  return ref.startsWith("artifact:") ? (ref as ArtifactRef) : (`artifact:${ref}` as ArtifactRef);
+  const ref = typeof raw.ref === "string" ? raw.ref : `evidence:${basename(file.name, ".json")}`;
+  if (ref.startsWith("evidence:") || ref.startsWith("artifact:")) return ref as ArtifactRef;
+  return `evidence:${ref}` as ArtifactRef;
 }
 
 function isHistoricalRoleRunArtifactKind(kind: string | undefined): boolean {
@@ -638,6 +647,19 @@ function roleRunRetentionRecord(value: unknown): Record<string, unknown> | undef
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+async function firstExistingPath(paths: readonly string[]): Promise<string | undefined> {
+  for (const path of paths) {
+    const exists = await stat(path)
+      .then((entry) => entry.isFile())
+      .catch((error: NodeJS.ErrnoException) => {
+        if (isFileNotFoundError(error)) return false;
+        throw error;
+      });
+    if (exists) return path;
+  }
+  return undefined;
 }
 
 function roleRunRetentionString(value: unknown): string | undefined {

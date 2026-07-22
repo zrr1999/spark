@@ -889,7 +889,7 @@ describe("session activity projection", () => {
           artifact: {
             ref: "artifact:reload-report",
             title: "Reload report",
-            kind: "document",
+            kind: "preview",
             format: "markdown",
             status: "ready",
             producer: "spark-runtime",
@@ -971,7 +971,7 @@ describe("session activity projection", () => {
       }),
       {
         id: "artifact:reload-report",
-        kind: "evidence.update",
+        kind: "artifact.update",
         title: "Reload report",
         text: "The persisted activity projection is available.",
         role: "spark-runtime",

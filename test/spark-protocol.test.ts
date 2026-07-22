@@ -25,7 +25,8 @@ test("spark protocol validates core session/message/tool/run/task/artifact view 
     tools: [{ id: "tc1", name: "read", status: "running", input: { path: "README.md" } }],
     runs: [{ id: "run:1", kind: "task", status: "running", progress: 0.5 }],
     tasks: [{ ref: "task:1", title: "Implement", status: "running" }],
-    artifacts: [{ ref: "artifact:1", title: "Evidence", kind: "record", format: "json" }],
+    artifacts: [{ ref: "artifact:1", title: "Progress preview", kind: "preview", format: "mdx" }],
+    evidence: [{ ref: "evidence:1", title: "Evidence", kind: "record", format: "json" }],
   });
 
   assert.equal(session.version, SPARK_PROTOCOL_VERSION);

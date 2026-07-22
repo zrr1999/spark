@@ -1,4 +1,4 @@
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
+import { nowIso, type EvidenceRef } from "@zendev-lab/spark-core";
 
 export type SparkSessionPhase = "plan" | "implement";
 
@@ -13,13 +13,13 @@ interface SparkReproRequirementBase {
 
 export interface SparkReproEvidenceRequirement extends SparkReproRequirementBase {
   kind: "evidence";
-  evidenceRefs: ArtifactRef[];
+  evidenceRefs: EvidenceRef[];
 }
 
 export interface SparkReproDecisionRequirement extends SparkReproRequirementBase {
   kind: "decision";
   /** Artifact produced by canonical ask with recordAsEvidence=true. */
-  decisionRef?: ArtifactRef;
+  decisionRef?: EvidenceRef;
   selectedValue?: string;
   rationale?: string;
 }
@@ -27,7 +27,7 @@ export interface SparkReproDecisionRequirement extends SparkReproRequirementBase
 export interface SparkReproValidationRequirement extends SparkReproRequirementBase {
   kind: "validation";
   command?: string;
-  resultRef?: ArtifactRef;
+  resultRef?: EvidenceRef;
   passed?: boolean;
 }
 
@@ -40,14 +40,14 @@ export type SparkReproRequirement =
 export type SparkReproAcceptanceCondition = SparkReproRequirement;
 
 export type SparkReproRequirementProof =
-  | { kind: "evidence"; evidenceRefs: ArtifactRef[] }
-  | { kind: "decision"; decisionRef: ArtifactRef; selectedValue: string; rationale?: string }
-  | { kind: "validation"; command: string; resultRef: ArtifactRef; passed: boolean };
+  | { kind: "evidence"; evidenceRefs: EvidenceRef[] }
+  | { kind: "decision"; decisionRef: EvidenceRef; selectedValue: string; rationale?: string }
+  | { kind: "validation"; command: string; resultRef: EvidenceRef; passed: boolean };
 
 export interface SparkReproGateEvaluation {
   passed: boolean;
   blockers: string[];
-  evidenceRefs: ArtifactRef[];
+  evidenceRefs: EvidenceRef[];
   evaluatedAt: string;
 }
 
@@ -231,12 +231,12 @@ export function reproRequirementBlockers(requirement: SparkReproRequirement): st
   if (isReproRequirementSatisfied(requirement)) return [];
   switch (requirement.kind) {
     case "evidence":
-      return [`${requirement.id} has no evidence artifact`];
+      return [`${requirement.id} has no evidence ref`];
     case "decision":
       return [`${requirement.id} has no recorded user decision`];
     case "validation":
       return [
-        `${requirement.id} requires a command, result artifact, and passing validation result`,
+        `${requirement.id} requires a command, result evidence ref, and passing validation result`,
       ];
     default: {
       const exhaustive: never = requirement;
@@ -299,9 +299,9 @@ export function recordReproRequirementProof(
 export function satisfyAcceptanceCondition(
   repro: SparkSessionRepro,
   conditionIdOrDescription: string,
-  evidenceRef?: string,
+  ref?: string,
 ): SparkSessionRepro | undefined {
-  if (!evidenceRef) return undefined;
+  if (!ref) return undefined;
   const requirement = currentReproStage(repro).acceptance.find(
     (candidate) =>
       candidate.id === conditionIdOrDescription ||
@@ -310,7 +310,7 @@ export function satisfyAcceptanceCondition(
   if (!requirement || requirement.kind !== "evidence") return undefined;
   return recordReproRequirementProof(repro, requirement.id, {
     kind: "evidence",
-    evidenceRefs: [artifactRef(evidenceRef, "evidenceRef")],
+    evidenceRefs: [evidenceRef(ref, "evidenceRef")],
   });
 }
 
@@ -397,7 +397,7 @@ export function isReproComplete(repro: SparkSessionRepro): boolean {
   return repro.status === "complete";
 }
 
-export function reproRequirementEvidenceRefs(requirement: SparkReproRequirement): ArtifactRef[] {
+export function reproRequirementEvidenceRefs(requirement: SparkReproRequirement): EvidenceRef[] {
   switch (requirement.kind) {
     case "evidence":
       return requirement.evidenceRefs;
@@ -446,13 +446,13 @@ function requirementWithProof(
       if (proof.evidenceRefs.length === 0) throw new Error("evidence proof requires evidenceRefs");
       return {
         ...requirement,
-        evidenceRefs: uniqueArtifactRefs([...requirement.evidenceRefs, ...proof.evidenceRefs]),
+        evidenceRefs: uniqueEvidenceRefs([...requirement.evidenceRefs, ...proof.evidenceRefs]),
       };
     case "decision":
       if (requirement.kind !== "decision") return requirement;
       return {
         ...requirement,
-        decisionRef: artifactRef(proof.decisionRef, "decisionRef"),
+        decisionRef: evidenceRef(proof.decisionRef, "decisionRef"),
         selectedValue: nonEmpty(proof.selectedValue, "selectedValue"),
         ...(proof.rationale?.trim() ? { rationale: proof.rationale.trim() } : {}),
       };
@@ -461,7 +461,7 @@ function requirementWithProof(
       return {
         ...requirement,
         command: nonEmpty(proof.command, "command"),
-        resultRef: artifactRef(proof.resultRef, "resultRef"),
+        resultRef: evidenceRef(proof.resultRef, "resultRef"),
         passed: proof.passed,
       };
     default: {
@@ -471,15 +471,15 @@ function requirementWithProof(
   }
 }
 
-function uniqueArtifactRefs(refs: readonly ArtifactRef[]): ArtifactRef[] {
-  return [...new Set(refs.map((ref, index) => artifactRef(ref, `evidenceRefs[${index}]`)))];
+function uniqueEvidenceRefs(refs: readonly EvidenceRef[]): EvidenceRef[] {
+  return [...new Set(refs.map((ref, index) => evidenceRef(ref, `evidenceRefs[${index}]`)))];
 }
 
-function artifactRef(value: string, field: string): ArtifactRef {
-  if (!value.startsWith("artifact:") || value.length === "artifact:".length) {
-    throw new Error(`${field} must be an artifact: ref`);
+function evidenceRef(value: string, field: string): EvidenceRef {
+  if (!value.startsWith("evidence:") || value.length === "evidence:".length) {
+    throw new Error(`${field} must be an evidence: ref`);
   }
-  return value as ArtifactRef;
+  return value as EvidenceRef;
 }
 
 function nonEmpty(value: string, field: string): string {

@@ -1710,6 +1710,7 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
           status: "running",
           progress: 0.5,
           artifactRefs: [],
+          evidenceRefs: [],
           metadata: { selector: "builtin:review" },
         },
         {
@@ -1719,7 +1720,8 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
           title: "Reviewer pass",
           status: "running",
           progress: 0.4,
-          artifactRefs: ["artifact:review-ok"],
+          artifactRefs: [],
+          evidenceRefs: ["evidence:review-ok"],
           metadata: { reviewer: "goal", outcome: "approved" },
         },
         {
@@ -1728,7 +1730,8 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
           kind: "task",
           title: "Apply Graft patch",
           status: "succeeded",
-          artifactRefs: ["artifact:graft-patch"],
+          artifactRefs: [],
+          evidenceRefs: ["evidence:graft-patch"],
           metadata: { patchRef: "patch:abc", graftStatus: "admitted" },
         },
       ],
@@ -1746,14 +1749,16 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
             { id: "render", content: "Render cockpit panels", status: "in_progress", notes: [] },
           ],
           runRefs: ["run:release-readiness"],
-          artifactRefs: ["artifact:review-ok"],
+          artifactRefs: [],
+          evidenceRefs: ["evidence:review-ok"],
           metadata: {},
         },
       ],
-      artifacts: [
+      artifacts: [],
+      evidence: [
         {
           version: SPARK_PROTOCOL_VERSION,
-          ref: "artifact:review-ok",
+          ref: "evidence:review-ok",
           title: "Reviewer verdict for cockpit task",
           kind: "record",
           format: "json",
@@ -1764,7 +1769,7 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
         },
         {
           version: SPARK_PROTOCOL_VERSION,
-          ref: "artifact:graft-patch",
+          ref: "evidence:graft-patch",
           title: "Graft patch provenance",
           kind: "record",
           format: "json",
@@ -1778,7 +1783,6 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
           },
         },
       ],
-      evidence: [],
       metadata: {},
     },
   });
@@ -1809,7 +1813,7 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
   assert.equal(harness.app.cockpitSnapshot().activePanel, "runs");
   assert.match(
     stripAnsi(harness.render()),
-    /role role:reviewer \[running\] 40% artifacts=1 Reviewer pass/,
+    /role role:reviewer \[running\] 40% evidence=1 Reviewer pass/,
   );
   assert.match(
     stripAnsi(harness.render()),
@@ -1829,24 +1833,24 @@ test("Spark cockpit renders shared workflow, run, task, artifact, review, and Gr
   assert.equal(await harness.submit("/artifacts"), "command");
   assert.match(
     stripAnsi(harness.render()),
-    /artifact:review-ok \[record\/json\] producer=review status=approved Reviewer verdict/,
+    /evidence:review-ok \[record\/json\] producer=review status=approved Reviewer verdict/,
   );
   assert.match(
     stripAnsi(harness.render()),
-    /artifact:graft-patch \[record\/json\] producer=task status=admitted Graft patch provenance/,
+    /evidence:graft-patch \[record\/json\] producer=task status=admitted Graft patch provenance/,
   );
 
   assert.equal(await harness.submit("/reviews"), "command");
   assert.match(
     stripAnsi(harness.render()),
-    /artifact:review-ok \[approved\] Reviewer verdict for cockpit task/,
+    /evidence:review-ok \[approved\] Reviewer verdict for cockpit task/,
   );
   assert.match(stripAnsi(harness.render()), /role:role:reviewer \[approved\] Reviewer pass/);
 
   assert.equal(await harness.submit("/graft"), "command");
   assert.match(
     stripAnsi(harness.render()),
-    /artifact:graft-patch patch=patch:abc candidate=candidate:abc status=admitted/,
+    /evidence:graft-patch patch=patch:abc candidate=candidate:abc status=admitted/,
   );
   assert.match(
     stripAnsi(harness.render()),
@@ -1890,6 +1894,7 @@ test("Spark cockpit supports selectable workflow run keyboard controls", async (
           status: "running",
           progress: 0.25,
           artifactRefs: [],
+          evidenceRefs: [],
           metadata: { dynamicStatus: "running" },
         },
         {
@@ -1900,6 +1905,7 @@ test("Spark cockpit supports selectable workflow run keyboard controls", async (
           status: "running",
           progress: 0.75,
           artifactRefs: [],
+          evidenceRefs: [],
           metadata: { dynamicStatus: "paused" },
         },
       ],

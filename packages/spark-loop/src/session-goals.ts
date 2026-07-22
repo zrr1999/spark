@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
+import { nowIso, type EvidenceRef } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import { JsonStoreFormatError, readJsonFileOptional, writeJsonFileAtomic } from "./json-store.ts";
 import {
@@ -20,7 +20,7 @@ export interface SparkSessionGoalReviewSummary {
   remainingWork?: string;
   blockers: string[];
   reviewRef?: string;
-  artifactRef?: string;
+  evidenceRef?: string;
   reviewedAt: string;
 }
 
@@ -43,7 +43,7 @@ export interface SparkSessionGoal {
   pauseReason?: string;
   completedReason?: string;
   lastReviewRef?: string;
-  lastReviewArtifactRef?: ArtifactRef;
+  lastReviewEvidenceRef?: EvidenceRef;
   lastReviewedAt?: string;
   retryState?: SparkSessionGoalRetryState;
   createdAt: string;
@@ -127,7 +127,7 @@ export async function editSessionGoalObjective(
     objective: normalizeGoalObjective(objective),
     source: "explicit",
     lastReviewRef: undefined,
-    lastReviewArtifactRef: undefined,
+    lastReviewEvidenceRef: undefined,
     lastReviewedAt: undefined,
     retryState: undefined,
     updatedAt: nowIso(),
@@ -283,11 +283,11 @@ function normalizeSessionGoal(
 
 function goalReviewPointerFields(
   review: SparkSessionGoalReviewSummary,
-): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewArtifactRef" | "lastReviewedAt"> {
-  const artifactRef = review.artifactRef as ArtifactRef | undefined;
+): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewEvidenceRef" | "lastReviewedAt"> {
+  const evidenceRef = review.evidenceRef as EvidenceRef | undefined;
   return {
-    lastReviewRef: review.reviewRef ?? artifactRef,
-    lastReviewArtifactRef: artifactRef,
+    lastReviewRef: review.reviewRef ?? evidenceRef,
+    lastReviewEvidenceRef: evidenceRef,
     lastReviewedAt: review.reviewedAt,
   };
 }
@@ -295,7 +295,7 @@ function goalReviewPointerFields(
 function normalizeGoalReviewPointer(
   value: Record<string, unknown>,
   filePath: string,
-): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewArtifactRef" | "lastReviewedAt"> {
+): Pick<SparkSessionGoal, "lastReviewRef" | "lastReviewEvidenceRef" | "lastReviewedAt"> {
   const legacyReview = value.lastReview;
   const legacyArtifactRef = isRecord(legacyReview)
     ? optionalString(legacyReview.artifactRef, filePath, "goal.lastReview.artifactRef")
@@ -304,7 +304,12 @@ function normalizeGoalReviewPointer(
     ? optionalString(legacyReview.reviewedAt, filePath, "goal.lastReview.reviewedAt")
     : undefined;
   const lastReviewRef = optionalString(value.lastReviewRef, filePath, "goal.lastReviewRef");
-  const lastReviewArtifactRef = optionalString(
+  const lastReviewEvidenceRef = optionalString(
+    value.lastReviewEvidenceRef,
+    filePath,
+    "goal.lastReviewEvidenceRef",
+  );
+  const legacyLastReviewArtifactRef = optionalString(
     value.lastReviewArtifactRef,
     filePath,
     "goal.lastReviewArtifactRef",
@@ -314,13 +319,23 @@ function normalizeGoalReviewPointer(
     ...(lastReviewRef || legacyArtifactRef
       ? { lastReviewRef: lastReviewRef ?? legacyArtifactRef }
       : {}),
-    ...(lastReviewArtifactRef || legacyArtifactRef
-      ? { lastReviewArtifactRef: (lastReviewArtifactRef ?? legacyArtifactRef) as ArtifactRef }
+    ...(lastReviewEvidenceRef || legacyLastReviewArtifactRef || legacyArtifactRef
+      ? {
+          lastReviewEvidenceRef: migrateGoalEvidenceRef(
+            lastReviewEvidenceRef ?? legacyLastReviewArtifactRef ?? legacyArtifactRef!,
+          ),
+        }
       : {}),
     ...(lastReviewedAt || legacyReviewedAt
       ? { lastReviewedAt: lastReviewedAt ?? legacyReviewedAt }
       : {}),
   };
+}
+
+function migrateGoalEvidenceRef(value: string): EvidenceRef {
+  return (
+    value.startsWith("artifact:") ? `evidence:${value.slice("artifact:".length)}` : value
+  ) as EvidenceRef;
 }
 
 function normalizeGoalRetryState(value: unknown, filePath: string): SparkSessionGoalRetryState {

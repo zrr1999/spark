@@ -944,37 +944,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
     for (const run of view.runs) this.recordRunView(run, false);
     if (view.runs.length === 0) this.recordActiveRunStatus();
     for (const task of view.tasks) this.cockpit.tasks.set(task.ref, task);
-    for (const artifact of view.artifacts) {
-      if (artifact.kind === "issue" || artifact.kind === "pr" || artifact.kind === "preview") {
-        this.cockpit.artifacts.set(artifact.ref, artifact);
-      } else {
-        this.cockpit.evidence.set(artifact.ref, {
-          version: artifact.version,
-          ref: artifact.ref,
-          title: artifact.title,
-          kind:
-            artifact.kind === "document" ||
-            artifact.kind === "record" ||
-            artifact.kind === "trace" ||
-            artifact.kind === "knowledge"
-              ? artifact.kind
-              : "other",
-          format:
-            artifact.format === "markdown" ||
-            artifact.format === "json" ||
-            artifact.format === "text" ||
-            artifact.format === "blob"
-              ? artifact.format
-              : "other",
-          ...(artifact.status ? { status: artifact.status } : {}),
-          ...(artifact.producer ? { producer: artifact.producer } : {}),
-          ...(artifact.createdAt ? { createdAt: artifact.createdAt } : {}),
-          ...(artifact.updatedAt ? { updatedAt: artifact.updatedAt } : {}),
-          ...(artifact.preview ? { preview: artifact.preview } : {}),
-          metadata: artifact.metadata,
-        });
-      }
-    }
+    for (const artifact of view.artifacts) this.cockpit.artifacts.set(artifact.ref, artifact);
     for (const evidence of view.evidence ?? []) this.cockpit.evidence.set(evidence.ref, evidence);
   }
 
@@ -1008,14 +978,18 @@ export class SparkNativeTuiApp implements Component, Focusable {
 
   private taskCompletionEvidenceSummary(task: SparkTaskView): string | undefined {
     if (!isDoneTaskStatus(task.status)) return undefined;
-    const key = `${task.ref}:${task.status}:${task.artifactRefs.join(",")}`;
+    const key = `${task.ref}:${task.status}:${task.artifactRefs.join(",")}:${task.evidenceRefs.join(",")}`;
     if (this.completedTaskSummaryKeys.has(key)) return undefined;
     this.completedTaskSummaryKeys.add(key);
+    const evidenceCount = task.evidenceRefs.length;
     const artifactCount = task.artifactRefs.length;
     const reviewStatus = this.taskReviewStatus(task);
     return [
       "✔ task done",
-      `${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`,
+      `${evidenceCount} evidence`,
+      ...(artifactCount > 0
+        ? [`${artifactCount} product artifact${artifactCount === 1 ? "" : "s"}`]
+        : []),
       reviewStatus ? `review ${reviewStatus}` : "review not recorded",
       cockpitTaskDeepLink(task.ref),
     ].join(" · ");
@@ -1029,14 +1003,13 @@ export class SparkNativeTuiApp implements Component, Focusable {
       stringFromRecord(task.metadata, "verdict") ??
       stringFromRecord(task.metadata, "outcome");
     if (metadataStatus) return metadataStatus;
-    for (const ref of task.artifactRefs) {
-      const artifact =
-        this.cockpit.artifacts.get(ref) ?? this.cockpit.evidence.get(ref) ?? undefined;
-      if (!artifact || !isReviewArtifact(artifact)) continue;
+    for (const ref of task.evidenceRefs) {
+      const evidence = this.cockpit.evidence.get(ref);
+      if (!evidence || !isReviewArtifact(evidence)) continue;
       return (
-        stringFromRecord(artifact.metadata, "outcome") ??
-        stringFromRecord(artifact.metadata, "verdict") ??
-        artifact.status ??
+        stringFromRecord(evidence.metadata, "outcome") ??
+        stringFromRecord(evidence.metadata, "verdict") ??
+        evidence.status ??
         "recorded"
       );
     }
@@ -1525,11 +1498,13 @@ export class SparkNativeTuiApp implements Component, Focusable {
     const runs = [...this.cockpit.runs.values()].sort(compareRunsForCockpit);
     for (const run of runs.slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const progress = run.progress === undefined ? "" : ` ${(run.progress * 100).toFixed(0)}%`;
-      const artifacts = run.artifactRefs.length > 0 ? ` artifacts=${run.artifactRefs.length}` : "";
+      const artifacts =
+        run.artifactRefs.length > 0 ? ` product-artifacts=${run.artifactRefs.length}` : "";
+      const evidence = run.evidenceRefs.length > 0 ? ` evidence=${run.evidenceRefs.length}` : "";
       const marker = run.kind === "workflow" && run.id === selected?.id ? "▸" : "├";
       const status = run.kind === "workflow" ? workflowRunDisplayStatus(run) : run.status;
       lines.push(
-        `${marker}─ ${run.kind} ${run.id} [${status}]${progress}${artifacts} ${run.title ?? run.summary ?? ""}`.trimEnd(),
+        `${marker}─ ${run.kind} ${run.id} [${status}]${progress}${artifacts}${evidence} ${run.title ?? run.summary ?? ""}`.trimEnd(),
       );
       if (run.kind === "workflow" && run.id === selected?.id) {
         for (const hint of workflowRunControlHints(run)) lines.push(`│  ${hint}`);
@@ -1547,8 +1522,12 @@ export class SparkNativeTuiApp implements Component, Focusable {
     for (const task of [...this.cockpit.tasks.values()].slice(0, MAX_COCKPIT_PANEL_ROWS)) {
       const doneTodos = task.todos.filter((todo) => todo.status === "done").length;
       const todoSummary = task.todos.length > 0 ? ` todos=${doneTodos}/${task.todos.length}` : "";
-      const artifacts = task.artifactRefs.length > 0 ? ` evidence=${task.artifactRefs.length}` : "";
-      lines.push(`├─ ${task.ref} [${task.status}]${todoSummary}${artifacts} ${task.title}`);
+      const evidence = task.evidenceRefs.length > 0 ? ` evidence=${task.evidenceRefs.length}` : "";
+      const artifacts =
+        task.artifactRefs.length > 0 ? ` product-artifacts=${task.artifactRefs.length}` : "";
+      lines.push(
+        `├─ ${task.ref} [${task.status}]${todoSummary}${evidence}${artifacts} ${task.title}`,
+      );
     }
     if (lines.length === (this.cockpit.sessionTitle ? 2 : 1))
       lines.push("└─ No task/project view-model updates have been published yet.");
@@ -1556,7 +1535,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
   }
 
   private renderArtifactCockpit(): string[] {
-    const lines = ["◆ Spark cockpit: artifacts"];
+    const lines = ["◆ Spark cockpit: product artifacts and evidence"];
     const rows = [...this.cockpit.artifacts.values(), ...this.cockpit.evidence.values()].slice(
       0,
       MAX_COCKPIT_PANEL_ROWS,
@@ -1570,7 +1549,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       if (artifact.preview) lines.push(`│  ${artifact.preview}`);
     }
     if (lines.length === 1)
-      lines.push("└─ No artifact view-model updates have been published yet.");
+      lines.push("└─ No product artifact or evidence view-model updates have been published yet.");
     return lines;
   }
 
@@ -1580,7 +1559,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
       lines.push(`├─ ${item}`);
     }
     if (lines.length === 1)
-      lines.push("└─ No reviewer verdict artifacts or run metadata have been published yet.");
+      lines.push("└─ No reviewer verdict evidence or run metadata has been published yet.");
     return lines;
   }
 

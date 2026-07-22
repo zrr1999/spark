@@ -720,7 +720,7 @@ export type SparkRef = Ref<"spark">;
 export type ProjectRef = Ref<"proj">;
 export type TaskRef = Ref<"task">;
 export type RoleRef = Ref<"role">;
-/** Stable artifact identity; evidence writes may use `evidence:` while remaining artifact-shaped. */
+/** Legacy task/store ref union. Public product APIs use ProductArtifactRef; evidence APIs use EvidenceRef. */
 export type ArtifactRef = Ref<"artifact"> | Ref<"evidence">;
 export type EvidenceRef = Ref<"evidence">;
 export type RunRef = Ref<"run">;
@@ -1064,7 +1064,7 @@ export interface TaskPlanItem {
   status: TaskPlanItemStatus;
   notes?: string[];
   blockedBy?: string[];
-  evidenceRefs?: ArtifactRef[];
+  evidenceRefs?: EvidenceRef[];
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -1216,7 +1216,7 @@ export interface SparkRunTrace {
   ref: SparkRef;
   idea: string;
   projectRef?: ProjectRef;
-  sparkMdArtifactRef?: ArtifactRef;
+  sparkMdEvidenceRef?: EvidenceRef;
   taskRefs: TaskRef[];
   reviewRefs: ReviewRef[];
   askRefs: AskRef[];

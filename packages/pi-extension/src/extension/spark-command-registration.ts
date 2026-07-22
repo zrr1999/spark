@@ -6,6 +6,7 @@ import {
 } from "@zendev-lab/spark-loop";
 import { isUnfinishedTaskStatus, type TaskGraph } from "@zendev-lab/spark-tasks";
 import { nowIso, type ProjectRef } from "@zendev-lab/spark-core";
+import { renderReproTickInstruction } from "@zendev-lab/spark-repro/instructions";
 import type { SparkEntryIntent } from "./spark-entry.ts";
 import { applySparkEntryResolution } from "./spark-entry-application.ts";
 import { detectSparkProjectState, resolveSparkEntry } from "./spark-entry-resolution.ts";
@@ -38,7 +39,6 @@ import {
   updateSessionReproRetryState,
   writeSessionRepro,
 } from "./spark-session-repro.ts";
-import { renderReproTickInstruction } from "./spark-repro-tool-registration.ts";
 import {
   goalContextStrings,
   goalInstructions,

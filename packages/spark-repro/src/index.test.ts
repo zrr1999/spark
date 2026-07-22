@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import {
   createSparkSessionRepro,
   evaluateStageGate,
@@ -10,7 +10,7 @@ import {
   type SparkSessionRepro,
 } from "./index.ts";
 
-const ref = (id: string) => `artifact:${id}` as ArtifactRef;
+const ref = (id: string) => `evidence:${id}` as EvidenceRef;
 
 describe("spark-repro", () => {
   it("requires research, explicit decisions, and a passing probe during setup", () => {

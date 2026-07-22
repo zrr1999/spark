@@ -3,7 +3,7 @@
  * Legacy v1/v2 snapshots are migrated fail-closed into evidence-backed v3 requirements.
  */
 
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import {
   DEFAULT_REPRO_STAGES,
   isReproRequirementSatisfied,
@@ -185,7 +185,7 @@ function migrateLegacyRequirement(
   const legacy = legacyAcceptance.find((candidate) =>
     legacyDescriptions.includes(candidate.description),
   );
-  const evidenceRef = legacy?.satisfied ? legacyArtifactRef(legacy.evidenceRef) : undefined;
+  const evidenceRef = legacy?.satisfied ? migrateLegacyEvidenceRef(legacy.evidenceRef) : undefined;
   if (!evidenceRef) return requirement;
   switch (requirement.kind) {
     case "evidence":
@@ -233,8 +233,12 @@ function normalizeLegacyPhase(phase: SparkSessionPhase | "research"): SparkSessi
   return phase === "research" ? "plan" : phase;
 }
 
-function legacyArtifactRef(value: string | undefined): ArtifactRef | undefined {
-  return value?.startsWith("artifact:") && value.length > "artifact:".length
-    ? (value as ArtifactRef)
-    : undefined;
+function migrateLegacyEvidenceRef(value: string | undefined): EvidenceRef | undefined {
+  if (value?.startsWith("evidence:") && value.length > "evidence:".length) {
+    return value as EvidenceRef;
+  }
+  if (value?.startsWith("artifact:") && value.length > "artifact:".length) {
+    return `evidence:${value.slice("artifact:".length)}` as EvidenceRef;
+  }
+  return undefined;
 }

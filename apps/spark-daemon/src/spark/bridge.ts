@@ -58,7 +58,7 @@ type TaskGraphLike = {
 };
 
 type SparkRuntimeModules = {
-  defaultArtifactStore(cwd: string): ArtifactStoreLike;
+  defaultEvidenceStore(cwd: string): ArtifactStoreLike;
   builtinRoleRef(id: "worker"): RoleRef;
   createDefaultRoleRegistry(): unknown;
   hydrateDefaultRoleRegistry(
@@ -153,7 +153,7 @@ async function dynamicImport<T>(specifier: string): Promise<T> {
 
 async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
   const [artifacts, roles, tasks, runtime, headless] = await Promise.all([
-    dynamicImport<{ defaultArtifactStore: SparkRuntimeModules["defaultArtifactStore"] }>(
+    dynamicImport<{ defaultEvidenceStore: SparkRuntimeModules["defaultEvidenceStore"] }>(
       "@zendev-lab/spark-artifacts",
     ),
     dynamicImport<{
@@ -173,7 +173,7 @@ async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
     }),
   ]);
   return {
-    defaultArtifactStore: artifacts.defaultArtifactStore,
+    defaultEvidenceStore: artifacts.defaultEvidenceStore,
     builtinRoleRef: roles.builtinRoleRef,
     createDefaultRoleRegistry: roles.createDefaultRoleRegistry,
     hydrateDefaultRoleRegistry: roles.hydrateDefaultRoleRegistry,
@@ -260,7 +260,7 @@ export async function runSparkCommandBridge(
   const taskGraphStore =
     input.taskGraphStore ?? spark!.defaultTaskGraphStore(input.workspace.localPath);
   const artifactStore =
-    input.artifactStore ?? spark!.defaultArtifactStore(input.workspace.localPath);
+    input.artifactStore ?? spark!.defaultEvidenceStore(input.workspace.localPath);
 
   let binding: SparkTaskBinding | undefined;
   try {

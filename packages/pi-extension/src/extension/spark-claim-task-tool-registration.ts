@@ -3,7 +3,7 @@ import type { RoleRegistry } from "@zendev-lab/spark-roles";
 import {
   nowIso,
   stableId,
-  type ArtifactRef,
+  type EvidenceRef,
   type RoleRef,
   type Task,
   type TaskPlan,
@@ -37,7 +37,7 @@ import { NO_SPARK_PROJECT_FOUND_HINT } from "./spark-project-guidance.ts";
 import { activeSparkRoleRunProcessesForCwd } from "./background-runs.ts";
 import {
   evaluateSparkTaskClaimRecovery,
-  recordSparkTaskClaimRecoveryArtifact,
+  recordSparkTaskClaimRecoveryEvidence,
   type SparkTaskClaimRecoveryDecision,
 } from "./task-claim-recovery.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
@@ -189,7 +189,7 @@ export function registerSparkClaimTaskTool(
             tasks.find((task) => Boolean(input.name) && task.name === input.name) ??
             tasks.find((task) => Boolean(input.title) && task.title === input.title) ??
             resolveObviousTaskRenameCandidate(graph, project.ref, tasks);
-          let recoveredClaimArtifactRef: ArtifactRef | undefined;
+          let recoveredClaimEvidenceRef: EvidenceRef | undefined;
           let claimRecovery: SparkTaskClaimRecoveryDecision | undefined;
           if (existing && taskClaimedBy(existing) && !isClaimOwnedBySession(existing, sessionKey)) {
             claimRecovery = await evaluateSparkTaskClaimRecovery({
@@ -207,8 +207,8 @@ export function registerSparkClaimTaskTool(
                 activeTask: existing,
                 claimRecovery,
               };
-            recoveredClaimArtifactRef = (
-              await recordSparkTaskClaimRecoveryArtifact({
+            recoveredClaimEvidenceRef = (
+              await recordSparkTaskClaimRecoveryEvidence({
                 cwd,
                 task: existing,
                 projectRef: project.ref,
@@ -257,7 +257,7 @@ export function registerSparkClaimTaskTool(
           return {
             task: graph.getTask(task.ref),
             hasActiveTodos,
-            recoveredClaimArtifactRef,
+            recoveredClaimEvidenceRef,
             claimRecovery,
           };
         },
@@ -335,14 +335,14 @@ export function registerSparkClaimTaskTool(
           {
             type: "text",
             text: renderClaimedTaskText(claimed.result.task, claimed.result.hasActiveTodos, {
-              recoveredClaimArtifactRef: claimed.result.recoveredClaimArtifactRef,
+              recoveredClaimEvidenceRef: claimed.result.recoveredClaimEvidenceRef,
               claimRecovery: claimed.result.claimRecovery,
             }),
           },
         ],
         details: {
           task: claimed.result.task as unknown as Record<string, unknown>,
-          recoveredClaimArtifactRef: claimed.result.recoveredClaimArtifactRef,
+          recoveredClaimEvidenceRef: claimed.result.recoveredClaimEvidenceRef,
           claimRecovery: claimed.result.claimRecovery,
         },
       };
@@ -414,7 +414,7 @@ function renderClaimedTaskText(
   task: Task,
   hasActiveTodos: boolean,
   recovery?: {
-    recoveredClaimArtifactRef?: ArtifactRef;
+    recoveredClaimEvidenceRef?: EvidenceRef;
     claimRecovery?: SparkTaskClaimRecoveryDecision;
   },
 ): string {
@@ -437,11 +437,11 @@ function renderClaimedTaskText(
       `- constraints: ${renderPlanList(plan.constraints)}`,
     );
   }
-  if (recovery?.recoveredClaimArtifactRef) {
+  if (recovery?.recoveredClaimEvidenceRef) {
     lines.push(
       "",
       `Recovered previous task claim: ${recovery.claimRecovery?.reason ?? "unknown"}`,
-      `Recovery evidence: ${recovery.recoveredClaimArtifactRef}`,
+      `Recovery evidence: ${recovery.recoveredClaimEvidenceRef}`,
     );
   }
   lines.push("");

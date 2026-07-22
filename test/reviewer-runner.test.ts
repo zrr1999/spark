@@ -232,7 +232,7 @@ test("goal reviewer approval requires explicit evidence and objective semantic g
     objective: "Finish bootstrap fixed point evidence",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: ["artifact:compiler-proof"],
+    evidenceRefs: ["evidence:compiler-proof"],
   };
 
   const missing = parseReviewerVerdictForInput(
@@ -283,13 +283,13 @@ test("goal reviewer rejects an approved verdict when any requirement is missing"
     objective: "Ship the complete feature",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: ["artifact:implemented"],
+    evidenceRefs: ["evidence:implemented"],
     requirements: [
       {
         id: "implemented",
         description: "Feature is implemented",
         status: "verified",
-        evidenceRefs: ["artifact:implemented"],
+        evidenceRefs: ["evidence:implemented"],
       },
       {
         id: "validated",
@@ -329,7 +329,7 @@ test("goal reviewer rejects unresolved work and verified requirements without ev
     objective: "Ship the complete feature",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: ["artifact:global-only"],
+    evidenceRefs: ["evidence:global-only"],
     requirements: [
       {
         id: "acceptance",
@@ -368,19 +368,19 @@ test("goal reviewer approves only an evidence-mapped fully resolved protocol", (
     objective: "Ship the complete feature",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: ["artifact:implementation", "artifact:acceptance"],
+    evidenceRefs: ["evidence:implementation", "evidence:acceptance"],
     requirements: [
       {
         id: "implemented",
         description: "Feature is implemented",
         status: "verified",
-        evidenceRefs: ["artifact:implementation"],
+        evidenceRefs: ["evidence:implementation"],
       },
       {
         id: "validated",
         description: "Acceptance behavior passes",
         status: "verified",
-        evidenceRefs: ["artifact:acceptance"],
+        evidenceRefs: ["evidence:acceptance"],
       },
     ],
     validationRuns: ["pnpm test: passed"],
@@ -530,10 +530,10 @@ test("goal reviewer instruction does not treat missing current project as comple
     objective: "Continue discovering and planning remaining crate surface work",
     status: "active",
     requestedStatus: "complete",
-    evidenceRefs: ["artifact:completed-project-evidence"],
+    evidenceRefs: ["evidence:completed-project-evidence"],
     evidencePreviews: [
       {
-        ref: "artifact:completed-project-evidence",
+        ref: "evidence:completed-project-evidence",
         title: "Completed project evidence",
         kind: "record",
         format: "markdown",

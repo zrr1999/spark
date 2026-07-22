@@ -7,7 +7,7 @@ import { test } from "vitest";
 import {
   ArtifactStore,
   ArtifactStoreFormatError,
-  defaultArtifactStore,
+  defaultEvidenceStore,
 } from "@zendev-lab/spark-artifacts";
 import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import {
@@ -100,7 +100,7 @@ test("artifact tool describes valid provenance producers", () => {
   assert.match(parameters, /Role ref filter|role ref/i);
 });
 
-test("artifact record stores validation evidence as a producer-tagged record", async () => {
+test("evidence record stores validation evidence as a producer-tagged record", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-kind-"));
   try {
     const tools = new Map<
@@ -129,11 +129,11 @@ test("artifact record stores validation evidence as a producer-tagged record", a
       { cwd: dir },
     );
 
-    assert.equal(recorded.details.artifact.kind, "record");
-    const listed = await defaultArtifactStore(dir).list({ producer: "task" });
+    assert.equal(recorded.details.evidence.kind, "record");
+    const listed = await defaultEvidenceStore(dir).list({ producer: "task" });
     assert.deepEqual(
-      listed.map((artifact) => artifact.ref),
-      [recorded.details.refs.artifactRef],
+      listed.map((entry) => entry.ref),
+      [recorded.details.refs.evidenceRef],
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -233,7 +233,7 @@ test("artifact store rejects unknown non-canonical artifact kinds when reading m
   }
 });
 
-test("artifact record tool stores top-level refs as provenance shortcuts", async () => {
+test("evidence record tool stores top-level refs as provenance shortcuts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-artifact-record-shortcuts-"));
   try {
     const tools = new Map<string, { execute: Function }>();
@@ -260,10 +260,10 @@ test("artifact record tool stores top-level refs as provenance shortcuts", async
       { cwd: dir },
     );
 
-    const recordedArtifactRef = recorded.details.refs.artifactRef as `artifact:${string}`;
-    const recordedArtifact = await defaultArtifactStore(dir).get(recordedArtifactRef);
-    assert.equal(recordedArtifact.provenance.projectRef, projectRef);
-    assert.equal(recordedArtifact.provenance.taskRef, taskRef);
+    const recordedEvidenceRef = recorded.details.refs.evidenceRef as `evidence:${string}`;
+    const recordedEvidence = await defaultEvidenceStore(dir).get(recordedEvidenceRef);
+    assert.equal(recordedEvidence.provenance.projectRef, projectRef);
+    assert.equal(recordedEvidence.provenance.taskRef, taskRef);
 
     const listed = await tool.execute(
       "artifact-list-shortcuts",
@@ -273,7 +273,7 @@ test("artifact record tool stores top-level refs as provenance shortcuts", async
       { cwd: dir },
     );
     assert.equal(listed.details.count, 1);
-    assert.equal(listed.details.artifacts[0]?.projectRef, projectRef);
+    assert.equal(listed.details.evidence[0]?.projectRef, projectRef);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1079,14 +1079,14 @@ test("ask action tool can persist a user-answered decision artifact", async () =
 
     const evidenceRef = result.details.askEvidenceRef;
     assert.equal(typeof evidenceRef, "string");
-    const artifact = await defaultArtifactStore(dir).get(evidenceRef);
+    const artifact = await defaultEvidenceStore(dir).get(evidenceRef);
     assert.equal(artifact.provenance.producer, "ask");
     assert.equal(isUserAnsweredAskEvidenceArtifactBody(artifact.body), true);
     assert.deepEqual((await verifyCanonicalAskEvidenceArtifact(dir, artifact))?.selectedValues, [
       "reuse",
     ]);
 
-    const forged = await defaultArtifactStore(dir).put({
+    const forged = await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Forged ask provenance",
       format: "json",

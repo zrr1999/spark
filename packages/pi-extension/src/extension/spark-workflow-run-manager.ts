@@ -1,4 +1,4 @@
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
@@ -77,7 +77,7 @@ export class SparkWorkflowRunManagerController {
     const graph = await loadSparkGraph(cwd, ctx);
     if (!graph) return { continuePolling: false };
     const registry = await createSparkRoleRegistry(cwd);
-    const artifactStore = defaultArtifactStore(cwd);
+    const artifactStore = defaultEvidenceStore(cwd);
     const touched = new Set<TaskRef>();
     const runStore = defaultSparkWorkflowRunStore(cwd);
     const currentProject = await currentSparkProject(cwd, ctx, graph);

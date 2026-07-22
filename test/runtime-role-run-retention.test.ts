@@ -91,10 +91,10 @@ test("runtime role-run artifact preview owns bounded metadata reads", async () =
   }
 });
 
-test("runtime role-run retention ignores legacy agent-run artifact kind", async () => {
+test("runtime role-run retention ignores legacy agent-run evidence kind", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-runtime-agent-run-retention-"));
   try {
-    const artifactRoot = join(dir, ".spark", "artifacts");
+    const artifactRoot = join(dir, ".spark", "evidence");
     const blobDir = join(artifactRoot, "blobs");
     await mkdir(blobDir, { recursive: true });
     await writeFile(join(blobDir, "legacy-agent-run.txt"), "x".repeat(2048), "utf8");
@@ -102,7 +102,7 @@ test("runtime role-run retention ignores legacy agent-run artifact kind", async 
       join(artifactRoot, "legacy-agent-run.json"),
       `${JSON.stringify(
         {
-          ref: "artifact:legacy-agent-run",
+          ref: "evidence:legacy-agent-run",
           kind: "agent-run",
           title: "Legacy agent run",
           format: "text",
@@ -123,7 +123,7 @@ test("runtime role-run retention ignores legacy agent-run artifact kind", async 
     });
 
     assert.equal(plan.candidates.length, 0);
-    const skipped = plan.skipped.find((item) => item.ref === "artifact:legacy-agent-run");
+    const skipped = plan.skipped.find((item) => item.ref === "evidence:legacy-agent-run");
     assert.equal(skipped?.kind, "agent-run");
     assert.equal(skipped?.reason, "not_role_run_artifact");
   } finally {
@@ -135,7 +135,8 @@ test("runtime role-run retention compacts historical transcript blobs without ex
   const dir = await mkdtemp(join(tmpdir(), "spark-runtime-role-run-retention-"));
   try {
     const store = new ArtifactStore({
-      rootDir: join(dir, ".spark", "artifacts"),
+      rootDir: join(dir, ".spark", "evidence"),
+      refKind: "evidence",
       inlineBodyThresholdBytes: 512,
     });
     const body = {
@@ -178,7 +179,7 @@ test("runtime role-run retention compacts historical transcript blobs without ex
     const before = JSON.parse(await readFile(store.pathFor(artifact.ref), "utf8")) as {
       blobPath: string;
     };
-    const blobPath = join(dir, ".spark", "artifacts", before.blobPath);
+    const blobPath = join(dir, ".spark", "evidence", before.blobPath);
     assert.equal(existsSync(blobPath), true);
 
     const dryRun = await collectRoleRunArtifactRetentionPlan(dir, {

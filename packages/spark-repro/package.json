@@ -11,7 +11,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./instructions": "./src/instructions.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import type { ArtifactRef } from "@zendev-lab/spark-core";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import {
   createElaborationResult,
   createSparkAskFlowRequest,
@@ -16,7 +16,7 @@ import {
   runSparkAskTool,
 } from "../packages/pi-extension/src/extension/spark-ask-tool.ts";
 
-type AskArtifactBodyForTest = {
+type AskEvidenceBodyForTest = {
   summary?: string;
   result: {
     status: string;
@@ -29,7 +29,7 @@ type AskArtifactBodyForTest = {
 type SparkToolDetailsForTest = {
   status: string;
   blocked: boolean;
-  artifactRef: string;
+  evidenceRef: string;
   summary: string;
   nextAction?: string;
   answers: Record<string, { values: string[]; labels?: string[]; customText?: string }>;
@@ -39,7 +39,7 @@ function assertSparkToolDetails(details: unknown): asserts details is SparkToolD
   assert.ok(details && typeof details === "object");
   assert.equal(typeof (details as { status?: unknown }).status, "string");
   assert.equal(typeof (details as { blocked?: unknown }).blocked, "boolean");
-  assert.equal(typeof (details as { artifactRef?: unknown }).artifactRef, "string");
+  assert.equal(typeof (details as { evidenceRef?: unknown }).evidenceRef, "string");
   assert.equal(typeof (details as { summary?: unknown }).summary, "string");
   assert.ok(
     (details as { answers?: unknown }).answers &&
@@ -404,7 +404,7 @@ test("impl_ask headless no-UI decision returns blocked no-selection", async () =
   }
 });
 
-test("impl_ask tool persists multi-question answers in one artifact", async () => {
+test("impl_ask tool persists multi-question answers in one evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-flow-"));
   try {
     const response = await runSparkAskTool(
@@ -460,17 +460,17 @@ test("impl_ask tool persists multi-question answers in one artifact", async () =
       /Plan next ask work: answered; scope=Tool schema; notes=Keep specialized wrappers as compat only\./,
     );
 
-    const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
-      response.details.artifactRef as ArtifactRef,
+    const evidence = await defaultEvidenceStore(dir).get<AskEvidenceBodyForTest>(
+      response.details.evidenceRef as EvidenceRef,
     );
     assert.equal(
-      artifact.body.summary,
+      evidence.body.summary,
       "Plan next ask work: answered; scope=Tool schema; notes=Keep specialized wrappers as compat only.",
     );
-    assert.equal(artifact.body.result.status, "answered");
-    assert.deepEqual(artifact.body.result.answers.scope!.values, ["tool"]);
+    assert.equal(evidence.body.result.status, "answered");
+    assert.deepEqual(evidence.body.result.answers.scope!.values, ["tool"]);
     assert.equal(
-      artifact.body.result.answers.notes!.customText,
+      evidence.body.result.answers.notes!.customText,
       "Keep specialized wrappers as compat only.",
     );
   } finally {
@@ -521,7 +521,7 @@ test("impl_ask tool requires clear option descriptions", () => {
   );
 });
 
-test("impl_ask tool persists decision no-selection as a blocked artifact", async () => {
+test("impl_ask tool persists decision no-selection as a blocked evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-tool-"));
   try {
     const response = await runSparkAskTool(
@@ -548,16 +548,16 @@ test("impl_ask tool persists decision no-selection as a blocked artifact", async
     assert.equal(response.details.nextAction, "block");
     assert.match(response.content[0]!.text, /Dispatch roles\? blocked: no_selection; no selection/);
 
-    const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
-      response.details.artifactRef as ArtifactRef,
+    const evidence = await defaultEvidenceStore(dir).get<AskEvidenceBodyForTest>(
+      response.details.evidenceRef as EvidenceRef,
     );
     assert.match(
-      artifact.body.summary ?? "",
+      evidence.body.summary ?? "",
       /Dispatch roles\? blocked: no_selection; no selection/,
     );
-    assert.equal(artifact.body.result.status, "no_selection");
-    assert.equal(artifact.body.result.nextAction, "block");
-    assert.equal(artifact.body.result.mode, "submit");
+    assert.equal(evidence.body.result.status, "no_selection");
+    assert.equal(evidence.body.result.nextAction, "block");
+    assert.equal(evidence.body.result.mode, "submit");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -595,17 +595,17 @@ test("impl_ask tool preserves custom decision text instead of reporting no-selec
       /Dispatch roles\? blocked: answered; dispatch=先修 widget; next=block/,
     );
 
-    const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
-      response.details.artifactRef as ArtifactRef,
+    const evidence = await defaultEvidenceStore(dir).get<AskEvidenceBodyForTest>(
+      response.details.evidenceRef as EvidenceRef,
     );
     assert.match(
-      artifact.body.summary ?? "",
+      evidence.body.summary ?? "",
       /Dispatch roles\? blocked: answered; dispatch=先修 widget; next=block/,
     );
-    assert.equal(artifact.body.result.status, "answered");
-    assert.equal(artifact.body.result.nextAction, "block");
-    assert.deepEqual(artifact.body.result.answers.dispatch!.values, []);
-    assert.equal(artifact.body.result.answers.dispatch!.customText, "先修 widget");
+    assert.equal(evidence.body.result.status, "answered");
+    assert.equal(evidence.body.result.nextAction, "block");
+    assert.deepEqual(evidence.body.result.answers.dispatch!.values, []);
+    assert.equal(evidence.body.result.answers.dispatch!.customText, "先修 widget");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -644,10 +644,10 @@ test("impl_ask tool multi-select decision persists explicit selections", async (
     );
     assert.doesNotMatch(response.content[0]!.text, /docs, tests/);
 
-    const artifact = await defaultArtifactStore(dir).get<AskArtifactBodyForTest>(
-      response.details.artifactRef as ArtifactRef,
+    const evidence = await defaultEvidenceStore(dir).get<AskEvidenceBodyForTest>(
+      response.details.evidenceRef as EvidenceRef,
     );
-    assert.deepEqual(artifact.body.result.answers.workstreams!.values, ["docs", "tests"]);
+    assert.deepEqual(evidence.body.result.answers.workstreams!.values, ["docs", "tests"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

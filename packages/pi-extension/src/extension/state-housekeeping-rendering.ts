@@ -53,17 +53,17 @@ export function appendSparkStateDiagnosticsLines(
   diagnostics: SparkStateDiagnosticsSummary,
 ): void {
   lines.push(
-    `Bounded output: showing at most ${diagnostics.boundedLimit} item(s) per category; large artifact threshold=${formatByteSize(diagnostics.largeArtifactThresholdBytes)}.`,
+    `Bounded output: showing at most ${diagnostics.boundedLimit} item(s) per category; large evidence threshold=${formatByteSize(diagnostics.largeEvidenceThresholdBytes)}.`,
   );
   appendTerminalProjectDiagnostics(lines, diagnostics.terminalProjects);
   appendInactiveWorkflowRunDiagnostics(lines, diagnostics.inactiveWorkflowRuns);
-  appendLargeArtifactDiagnostics(lines, diagnostics.largeArtifacts);
-  appendOrphanBlobDiagnostics(lines, diagnostics.orphanBlobs);
+  appendLargeEvidenceDiagnostics(lines, diagnostics.largeEvidence);
+  appendOrphanEvidenceBlobDiagnostics(lines, diagnostics.orphanEvidenceBlobs);
   appendProtectedFileDiagnostics(lines, "notes", diagnostics.notes);
   appendProtectedFileDiagnostics(lines, "role reports", diagnostics.roleReports);
   appendStoreV2DoctorFindings(lines, diagnostics.doctor);
   lines.push(
-    "Protected-store diagnostics are read-only; no project graph, TODO record, session state, artifact, note, role-report, workflow-run, or review index files were deleted.",
+    "Protected-store diagnostics are read-only; no project graph, TODO record, session state, evidence, product artifact, note, role-report, workflow-run, or review index files were deleted.",
   );
 }
 
@@ -93,7 +93,7 @@ export function appendRoleRunArtifactRetentionLines(
   limit: number,
 ): void {
   lines.push(
-    `Scanned ${plan.scanned} artifact metadata file(s); threshold=${formatByteSize(plan.thresholdBytes)}; tail=${formatByteSize(plan.tailBytes)}.`,
+    `Scanned ${plan.scanned} evidence metadata file(s); threshold=${formatByteSize(plan.thresholdBytes)}; tail=${formatByteSize(plan.tailBytes)}.`,
   );
   if (plan.exportDir) lines.push(`Export directory: ${plan.exportDir}`);
   const visible = plan.candidates.slice(0, limit);
@@ -184,34 +184,34 @@ export function appendSparkWorkflowRunPruneLines(
     );
 }
 
-function appendLargeArtifactDiagnostics(
+function appendLargeEvidenceDiagnostics(
   lines: string[],
-  summary: SparkStateDiagnosticsSummary["largeArtifacts"],
+  summary: SparkStateDiagnosticsSummary["largeEvidence"],
 ): void {
   lines.push(
-    `Large artifacts: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
+    `Large evidence entries: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
   );
-  for (const artifact of summary.candidates) {
+  for (const evidence of summary.candidates) {
     const provenance = [
-      artifact.producer ? `producer=${artifact.producer}` : undefined,
-      artifact.projectRef ? `project=${artifact.projectRef}` : undefined,
-      artifact.taskRef ? `task=${artifact.taskRef}` : undefined,
-      artifact.roleRef ? `role=${artifact.roleRef}` : undefined,
+      evidence.producer ? `producer=${evidence.producer}` : undefined,
+      evidence.projectRef ? `project=${evidence.projectRef}` : undefined,
+      evidence.taskRef ? `task=${evidence.taskRef}` : undefined,
+      evidence.roleRef ? `role=${evidence.roleRef}` : undefined,
     ]
       .filter(Boolean)
       .join(" ");
     lines.push(
-      `  - ${artifact.ref} [${artifact.kind}] ${formatByteSize(artifact.bytes)} metadata=${formatByteSize(artifact.metadataBytes)} updated=${artifact.updatedAt ?? "unknown"}${provenance ? ` ${provenance}` : ""}`,
+      `  - ${evidence.ref} [${evidence.kind}] ${formatByteSize(evidence.bytes)} metadata=${formatByteSize(evidence.metadataBytes)} updated=${evidence.updatedAt ?? "unknown"}${provenance ? ` ${provenance}` : ""}`,
     );
   }
 }
 
-function appendOrphanBlobDiagnostics(
+function appendOrphanEvidenceBlobDiagnostics(
   lines: string[],
-  summary: SparkStateDiagnosticsSummary["orphanBlobs"],
+  summary: SparkStateDiagnosticsSummary["orphanEvidenceBlobs"],
 ): void {
   lines.push(
-    `Orphan artifact blobs: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
+    `Orphan evidence blobs: ${summary.count}${summary.shown < summary.count ? ` (showing ${summary.shown})` : ""}`,
   );
   for (const blob of summary.candidates)
     lines.push(`  - ${blob.path} ${formatByteSize(blob.bytes)} mtime=${blob.mtime}`);
@@ -260,8 +260,10 @@ export function formatSparkStateCacheKind(kind: SparkStateCacheKind): string {
 
 export function formatSparkProtectedStoreReason(reason: SparkProtectedStoreReason): string {
   switch (reason) {
-    case "artifact-history":
-      return "artifacts";
+    case "evidence-history":
+      return "evidence";
+    case "product-artifacts":
+      return "product artifacts";
     case "task-graph":
       return "project graph";
     case "todo-records":

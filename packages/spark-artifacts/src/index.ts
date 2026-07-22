@@ -9,10 +9,11 @@ export { writeJsonFileAtomic, writeTextFileAtomic };
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
+/** Legacy generic-store ref union. Public evidence and product APIs use narrower refs. */
 export type ArtifactRef = (`artifact:${string}` | `evidence:${string}`) & {
   readonly __kind?: "artifact" | "evidence";
 };
-/** Prefer `evidence:` for new evidence writes; legacy evidence may still use `artifact:`. */
+/** Canonical identity for all new evidence writes. */
 export type EvidenceRef = `evidence:${string}` & { readonly __kind?: "evidence" };
 export type ProjectRef = `proj:${string}` & { readonly __kind?: "proj" };
 export type TaskRef = `task:${string}` & { readonly __kind?: "task" };
@@ -50,6 +51,8 @@ export interface Provenance {
   projectRef?: ProjectRef;
   taskRef?: TaskRef;
   roleRef?: RoleRef;
+  parentEvidenceRefs?: EvidenceRef[];
+  /** @deprecated Legacy evidence identity only. */
   parentArtifactRefs?: ArtifactRef[];
   note?: string;
 }
@@ -192,6 +195,8 @@ export interface ArtifactStoreOptions {
   rootDir: string;
   /** Optional legacy evidence root (typically `.spark/artifacts`) read as fallback. */
   legacyRootDir?: string;
+  /** Identity emitted by new writes. Evidence stores must use `evidence:`. */
+  refKind?: "artifact" | "evidence";
   inlineBodyThresholdBytes?: number;
   bodyPreviewChars?: number;
 }
@@ -313,6 +318,7 @@ export function canonicalArtifactKindForPersistedKind(value: unknown): ArtifactK
 export class ArtifactStore {
   readonly rootDir: string;
   readonly legacyRootDir?: string;
+  readonly refKind: "artifact" | "evidence";
   readonly blobDir: string;
   readonly inlineBodyThresholdBytes: number;
   readonly bodyPreviewChars: number;
@@ -320,6 +326,7 @@ export class ArtifactStore {
   constructor(options: ArtifactStoreOptions) {
     this.rootDir = options.rootDir;
     this.legacyRootDir = options.legacyRootDir;
+    this.refKind = options.refKind ?? "artifact";
     this.blobDir = join(options.rootDir, "blobs");
     this.inlineBodyThresholdBytes =
       options.inlineBodyThresholdBytes ?? DEFAULT_INLINE_BODY_THRESHOLD_BYTES;
@@ -330,15 +337,16 @@ export class ArtifactStore {
     await mkdir(this.rootDir, { recursive: true });
     await mkdir(this.blobDir, { recursive: true });
     const now = nowIso();
-    const ref = input.ref ?? newArtifactRef();
+    const ref = input.ref ?? (this.refKind === "evidence" ? newEvidenceRef() : newArtifactRef());
     const existing = input.ref ? await this.tryGet<T>(input.ref) : null;
-    const parentLinks: ArtifactLink[] = (input.provenance.parentArtifactRefs ?? []).map(
-      (parent) => ({
-        from: ref,
-        to: parent,
-        relation: "parent",
-      }),
-    );
+    const parentLinks: ArtifactLink[] = [
+      ...(input.provenance.parentEvidenceRefs ?? []),
+      ...(input.provenance.parentArtifactRefs ?? []),
+    ].map((parent) => ({
+      from: ref,
+      to: parent,
+      relation: "parent",
+    }));
     const artifact: Artifact<T> = {
       ref,
       kind: input.kind,
@@ -479,7 +487,7 @@ export class ArtifactStore {
         const filePath = join(root, entry.name);
         let artifact: Artifact;
         try {
-          artifact = await readArtifactMetadataFile(filePath);
+          artifact = this.normalizeStoredIdentity(await readArtifactMetadataFile(filePath));
         } catch (error) {
           // Product issue/pr/preview files may share a legacy root; skip quietly.
           if (isSkippableNonEvidenceMetadata(error)) continue;
@@ -542,12 +550,28 @@ export class ArtifactStore {
     ref: ArtifactRef | EvidenceRef,
   ): Promise<Artifact<T>> {
     try {
-      return (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>;
+      return this.normalizeStoredIdentity(
+        (await readArtifactMetadataFile(this.pathFor(ref))) as Artifact<T>,
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !this.legacyRootDir) throw error;
       const legacyPath = join(this.legacyRootDir, `${refId(ref)}.json`);
-      return (await readArtifactMetadataFile(legacyPath)) as Artifact<T>;
+      return this.normalizeStoredIdentity(
+        (await readArtifactMetadataFile(legacyPath)) as Artifact<T>,
+      );
     }
+  }
+
+  private normalizeStoredIdentity<T extends JsonValue | string>(
+    artifact: Artifact<T>,
+  ): Artifact<T> {
+    if (this.refKind !== "evidence" || !artifact.ref.startsWith("artifact:")) return artifact;
+    const ref = `evidence:${refId(artifact.ref)}` as EvidenceRef;
+    return {
+      ...artifact,
+      ref,
+      links: artifact.links.map((link) => ({ ...link, from: ref })),
+    };
   }
 }
 
@@ -568,24 +592,85 @@ function artifactListDiagnostic(filePath: string, error: unknown): ArtifactListD
  * `.spark/evidence`; legacy evidence under `.spark/artifacts` remains readable.
  * Product issue/pr/preview also live under `.spark/artifacts` (kind-filtered).
  */
-export function defaultEvidenceStore(cwd: string): ArtifactStore {
-  return new ArtifactStore({
+export function defaultEvidenceStore(cwd: string): EvidenceStore {
+  return new EvidenceStore({
     rootDir: join(cwd, ".spark", "evidence"),
     legacyRootDir: join(cwd, ".spark", "artifacts"),
   });
 }
 
 /**
- * Historical evidence root under `.spark/artifacts`. Prefer `defaultEvidenceStore`
- * for new tool/host wiring; kept so existing ask/learning/runtime call sites
- * continue writing the same on-disk path.
+ * Legacy generic store under `.spark/artifacts`. Active hosts must use
+ * `defaultEvidenceStore` or `defaultProductArtifactStore`; this remains only for
+ * migration and compatibility tests.
  */
 export function defaultArtifactStore(cwd: string): ArtifactStore {
   return new ArtifactStore({ rootDir: join(cwd, ".spark", "artifacts") });
 }
 
-/** @deprecated Alias for ArtifactStore (internal evidence). */
-export type EvidenceStore = ArtifactStore;
+/** Evidence store with canonical `evidence:` identity and legacy read fallback. */
+export class EvidenceStore extends ArtifactStore {
+  constructor(options: Omit<ArtifactStoreOptions, "refKind">) {
+    super({ ...options, refKind: "evidence" });
+  }
+
+  override async put<T extends JsonValue | string>(
+    input: PutArtifactInput<T>,
+  ): Promise<Evidence<T>> {
+    return (await super.put(input)) as Evidence<T>;
+  }
+
+  override async update<T extends JsonValue | string>(
+    ref: ArtifactRef | EvidenceRef,
+    patch: Partial<Omit<PutArtifactInput<T>, "ref">>,
+  ): Promise<Evidence<T>> {
+    return (await super.update(ref, patch)) as Evidence<T>;
+  }
+
+  override async get<T extends JsonValue | string = JsonValue | string>(
+    ref: ArtifactRef | EvidenceRef,
+  ): Promise<Evidence<T>> {
+    return (await super.get<T>(ref)) as Evidence<T>;
+  }
+
+  override async tryGet<T extends JsonValue | string = JsonValue | string>(
+    ref: ArtifactRef | EvidenceRef,
+  ): Promise<Evidence<T> | null> {
+    return (await super.tryGet<T>(ref)) as Evidence<T> | null;
+  }
+
+  override async list(filter: ArtifactQuery = {}): Promise<Evidence[]> {
+    return (await super.list(filter)) as Evidence[];
+  }
+}
+
+/** Canonical evidence-domain names. Artifact-prefixed exports below remain migration-only. */
+export type Evidence<T extends JsonValue | string = JsonValue | string> = Omit<
+  Artifact<T>,
+  "ref"
+> & { ref: EvidenceRef };
+export type EvidenceProducer = ArtifactProducer;
+export type EvidenceProvenance = Provenance;
+export type EvidenceFormat = ArtifactFormat;
+export type EvidenceCurationStatus = ArtifactCurationStatus;
+export type EvidenceRetention = ArtifactRetention;
+export type EvidenceCuration = ArtifactCuration;
+export type EvidenceTranscriptRetention = ArtifactTranscriptRetention;
+export type EvidenceLink = ArtifactLink;
+export type PutEvidenceInput<T extends JsonValue | string = JsonValue | string> =
+  PutArtifactInput<T>;
+export type EvidenceQuery = ArtifactQuery;
+export type EvidenceMetadataCompactionOptions = ArtifactMetadataCompactionOptions;
+export type EvidenceMetadataCompactionCandidate = ArtifactMetadataCompactionCandidate;
+export type EvidenceMetadataCompactionResult = ArtifactMetadataCompactionResult;
+export type EvidenceListDiagnostic = ArtifactListDiagnostic;
+export type EvidenceListWithDiagnosticsResult = ArtifactListWithDiagnosticsResult;
+export const EVIDENCE_PRODUCERS = ARTIFACT_PRODUCERS;
+export const EVIDENCE_KINDS = ARTIFACT_KINDS;
+export const EVIDENCE_FORMATS = ARTIFACT_FORMATS;
+export const EVIDENCE_CURATION_STATUSES = ARTIFACT_CURATION_STATUSES;
+export const EVIDENCE_RETENTIONS = ARTIFACT_RETENTIONS;
+export const EVIDENCE_LINK_RELATIONS = ARTIFACT_LINK_RELATIONS;
 
 export async function readArtifactMetadataFile(filePath: string): Promise<Artifact> {
   const text = await readFile(filePath, "utf8");
@@ -802,12 +887,20 @@ export function isArtifactProducer(value: unknown): value is ArtifactProducer {
   return ARTIFACT_PRODUCERS.includes(value as ArtifactProducer);
 }
 
+export const isEvidenceKind = isArtifactKind;
+export const isEvidenceFormat = isArtifactFormat;
+export const isEvidenceCurationStatus = isArtifactCurationStatus;
+export const isEvidenceRetention = isArtifactRetention;
+export const isEvidenceLinkRelation = isArtifactLinkRelation;
+export const isEvidenceProducer = isArtifactProducer;
+export const validateEvidence = validateArtifact;
+
 export function newArtifactRef(id: string = randomUUID()): ArtifactRef {
   if (!id || id.includes(":")) throw new ArtifactValidationError(`invalid artifact id: ${id}`);
   return `artifact:${id}` as ArtifactRef;
 }
 
-/** Prefer for new evidence writes. Legacy callers may still use newArtifactRef. */
+/** Create a canonical evidence ref. */
 export function newEvidenceRef(id: string = randomUUID()): EvidenceRef {
   if (!id || id.includes(":")) throw new ArtifactValidationError(`invalid evidence id: ${id}`);
   return `evidence:${id}` as EvidenceRef;
@@ -852,9 +945,11 @@ export function defaultArtifactCuration(
   return { status: "raw", retention: "task" };
 }
 
+export const defaultEvidenceCuration = defaultArtifactCuration;
+
 function validateArtifactLink(link: unknown, index: number): void {
   if (!isRecord(link)) throw new ArtifactValidationError(`links[${index}] must be an object`);
-  assertRefValue(link.from, "artifact", `links[${index}].from`);
+  assertEvidenceRefValue(link.from, `links[${index}].from`);
   if (typeof link.to !== "string" || !isRef(link.to)) {
     throw new ArtifactValidationError(`links[${index}].to must be a valid ref`);
   }
@@ -873,6 +968,14 @@ function validateProvenance(provenance: unknown): void {
   assertOptionalRefValue(provenance.taskRef, "task", "provenance.taskRef");
   assertOptionalRefValue(provenance.roleRef, "role", "provenance.roleRef");
   assertOptionalNonEmptyString(provenance.note, "provenance.note");
+  if (provenance.parentEvidenceRefs !== undefined) {
+    if (!Array.isArray(provenance.parentEvidenceRefs)) {
+      throw new ArtifactValidationError("provenance.parentEvidenceRefs must be an array");
+    }
+    provenance.parentEvidenceRefs.forEach((ref, index) =>
+      assertRefValue(ref, "evidence", `provenance.parentEvidenceRefs[${index}]`),
+    );
+  }
   if (provenance.parentArtifactRefs !== undefined) {
     if (!Array.isArray(provenance.parentArtifactRefs)) {
       throw new ArtifactValidationError("provenance.parentArtifactRefs must be an array");
@@ -894,7 +997,9 @@ function validateArtifactCuration(curation: unknown): void {
   assertOptionalNonEmptyString(curation.reason, "curation.reason");
   assertOptionalArtifactRefArray(curation.promotedFrom, "curation.promotedFrom");
   assertOptionalArtifactRefArray(curation.supersededBy, "curation.supersededBy");
-  assertOptionalRefValue(curation.compactedInto, "artifact", "curation.compactedInto");
+  if (curation.compactedInto !== undefined) {
+    assertEvidenceRefValue(curation.compactedInto, "curation.compactedInto");
+  }
   assertOptionalNonEmptyString(curation.expiresAt, "curation.expiresAt");
 }
 

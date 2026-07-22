@@ -660,19 +660,6 @@ function reportFromDaemonPayload(
       const title = stringValue(artifact, "title") || artifactRef || "Artifact update";
       const status = stringValue(artifact, "status");
       const preview = stringValue(artifact, "preview");
-      const artifactKind = stringValue(artifact, "kind");
-      // Legacy tool side-channels used artifact.update for evidence kinds.
-      if (!PRODUCT_ARTIFACT_KINDS.has(artifactKind ?? "")) {
-        return {
-          id: artifactRef || row.id,
-          kind: "evidence.update",
-          title,
-          text: preview || (status ? `Evidence ${status}.` : "Evidence updated."),
-          role: stringValue(artifact, "producer"),
-          status,
-          createdAt: row.createdAt,
-        };
-      }
       return {
         id: artifactRef || row.id,
         kind: viewType,

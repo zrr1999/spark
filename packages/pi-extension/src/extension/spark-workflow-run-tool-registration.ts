@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import {
-  defaultArtifactStore,
+  defaultEvidenceStore,
   type ArtifactFormat,
   type JsonValue,
 } from "@zendev-lab/spark-artifacts";
@@ -886,7 +886,7 @@ async function recordWorkflowArtifact(
   deps: SparkWorkflowRunToolDeps,
 ): Promise<{ ref: string }> {
   if (deps.artifactRecord) return deps.artifactRecord({ cwd, record });
-  const artifact = await defaultArtifactStore(cwd).put({
+  const artifact = await defaultEvidenceStore(cwd).put({
     kind:
       record.kind === "record" || record.kind === "trace" || record.kind === "knowledge"
         ? record.kind

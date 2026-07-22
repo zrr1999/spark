@@ -16,12 +16,12 @@ import { existingLegacyImportOnlyPaths } from "./store-v2-migration.ts";
 
 export {
   SPARK_STATE_DIAGNOSTIC_ITEM_LIMIT,
-  SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+  SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES,
   collectSparkStateDiagnostics,
   type SparkStateDiagnosticsSummary,
   type SparkStateInactiveWorkflowRunCandidate,
-  type SparkStateLargeArtifactCandidate,
-  type SparkStateOrphanBlobCandidate,
+  type SparkStateLargeEvidenceCandidate,
+  type SparkStateOrphanEvidenceBlobCandidate,
   type SparkStateDoctorFinding,
   type SparkStateProtectedFileCandidate,
   type SparkStateTerminalProjectCandidate,

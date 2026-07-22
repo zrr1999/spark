@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultProductArtifactStore } from "@zendev-lab/spark-artifacts";
 import { defaultTaskGraphStore, TaskGraph } from "@zendev-lab/spark-tasks";
 import type { ProjectRef } from "@zendev-lab/spark-core";
 
@@ -68,15 +68,15 @@ async function readGoalSummary(cwd: string): Promise<SparkCockpitGoalSummary | n
 
 async function readArtifactSummaries(cwd: string): Promise<SparkCockpitArtifactSummary[]> {
   try {
-    const { artifacts } = await defaultArtifactStore(cwd).listWithDiagnostics({
-      includeRaw: true,
-      includeArchived: true,
-    });
+    const artifacts = await defaultProductArtifactStore(cwd).list();
     return artifacts.map((artifact) => ({
       artifactRef: artifact.ref,
       title: artifact.title,
       kind: artifact.kind,
-      status: artifact.curation?.status,
+      status:
+        artifact.body.kind === "issue" || artifact.body.kind === "pr"
+          ? artifact.body.state
+          : undefined,
     }));
   } catch {
     return [];

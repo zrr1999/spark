@@ -836,6 +836,7 @@ function addCompactTaskView(output: SparkTaskView[], value: unknown): void {
     })),
     runRefs: [],
     artifactRefs: [],
+    evidenceRefs: [],
     metadata: {},
   });
 }

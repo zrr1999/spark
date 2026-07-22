@@ -17,6 +17,10 @@ import {
 import { assistantConversationParts, displaySafeAssistantText } from "./conversation-parts.ts";
 
 let viewMessageCounter = 0;
+const PRODUCT_ARTIFACT_PREVIEW_MAX_CHARS = 8_000;
+// Keep daemon view events comfortably below Cockpit's 256 KiB inline-preview budget,
+// including worst-case multi-byte UTF-8 input.
+const PRODUCT_ARTIFACT_INLINE_MAX_CHARS = 64 * 1_024;
 
 export function nextViewMessageId(sessionId: string, role: string): string {
   viewMessageCounter += 1;
@@ -306,11 +310,14 @@ export function taskViewFromCandidate(
     artifactRefs: [
       ...stringArrayField(candidate, "artifactRefs"),
       ...stringArrayField(candidate, "outputArtifacts"),
-      ...stringArrayField(candidate, "evidenceRefs"),
     ].filter(
-      (value, index, array) =>
-        (value.startsWith("artifact:") || value.startsWith("evidence:")) &&
-        array.indexOf(value) === index,
+      (value, index, array) => value.startsWith("artifact:") && array.indexOf(value) === index,
+    ),
+    evidenceRefs: [
+      ...stringArrayField(candidate, "evidenceRefs"),
+      ...stringArrayField(candidate, "outputArtifacts"),
+    ].filter(
+      (value, index, array) => value.startsWith("evidence:") && array.indexOf(value) === index,
     ),
     metadata: jsonMetadata(metadata),
   };
@@ -353,15 +360,27 @@ export function entityViewFromCandidate(
   };
 
   if (isProductArtifactKind(rawKind) && isArtifactRef) {
+    const rawFormat = stringField(candidate, "format");
+    if (!rawFormat && !recordField(candidate, "body") && !stringField(candidate, "preview")) {
+      // artifact.list returns summary rows. They are useful for lookup but must
+      // not overwrite a previously projected Cockpit body with an empty update.
+      return undefined;
+    }
+    const productPreview = productArtifactPreview(candidate);
+    const contentRef = productArtifactContentRef(candidate, rawKind, ref);
     return {
       type: "artifact",
       artifact: {
         ...common,
         kind: rawKind,
-        format: productArtifactFormat(stringField(candidate, "format")),
+        format: productArtifactFormat(rawFormat),
+        ...(productPreview ? { preview: productPreview } : {}),
+        ...(contentRef ? { contentRef } : {}),
       },
     };
   }
+
+  if (!isEvidenceRef) return undefined;
 
   return {
     type: "evidence",
@@ -371,6 +390,45 @@ export function entityViewFromCandidate(
       format: evidenceFormat(stringField(candidate, "format")),
     },
   };
+}
+
+function productArtifactPreview(candidate: Record<string, unknown>): string | undefined {
+  const direct = stringField(candidate, "preview");
+  const body = recordField(candidate, "body");
+  const content =
+    stringField(body, "kind") === "preview" && typeof body?.content === "string"
+      ? body.content
+      : undefined;
+  const value = content?.trim() ? content : direct;
+  if (!value) return undefined;
+  return value.length <= PRODUCT_ARTIFACT_PREVIEW_MAX_CHARS
+    ? value
+    : `${value.slice(0, PRODUCT_ARTIFACT_PREVIEW_MAX_CHARS - 1)}…`;
+}
+
+function productArtifactContentRef(
+  candidate: Record<string, unknown>,
+  kind: "issue" | "pr" | "preview",
+  ref: string,
+): NonNullable<SparkArtifactView["contentRef"]> | undefined {
+  const body = recordField(candidate, "body");
+  if (!body) return undefined;
+  if (kind === "preview") {
+    if (typeof body.content !== "string") return undefined;
+    const format = stringField(body, "format") ?? stringField(candidate, "format");
+    if (body.content.length > PRODUCT_ARTIFACT_INLINE_MAX_CHARS) {
+      return { sparkArtifactRef: ref, inlinePreviewOmitted: "too_large" };
+    }
+    return jsonMetadata({
+      sparkArtifactRef: ref,
+      ...(format === "html" ? { inlineText: body.content } : { inlineMarkdown: body.content }),
+    });
+  }
+  const safeBody = jsonMetadata(body);
+  if (JSON.stringify(safeBody).length > PRODUCT_ARTIFACT_INLINE_MAX_CHARS) {
+    return { sparkArtifactRef: ref, inlinePreviewOmitted: "too_large" };
+  }
+  return { sparkArtifactRef: ref, inlineJson: safeBody };
 }
 
 export function taskTodosFromCandidate(candidate: Record<string, unknown>): SparkTaskTodoView[] {
@@ -466,10 +524,9 @@ export function productArtifactFormat(value: string | undefined): SparkArtifactV
     value === "json" ||
     value === "text" ||
     value === "mdx" ||
-    value === "html" ||
-    value === "blob"
+    value === "html"
   ) {
     return value;
   }
-  return "other";
+  return "json";
 }

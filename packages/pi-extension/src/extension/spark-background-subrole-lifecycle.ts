@@ -1,4 +1,4 @@
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import { newRef, nowIso } from "@zendev-lab/spark-core";
 import {
   createRoleRunClaimId,
@@ -84,7 +84,7 @@ export async function resumeOwnedBackgroundSubroles(
   const resumable = findResumableBackgroundRoleRunTasks(graph, ownerSessionId);
   if (resumable.length === 0) return 0;
   const registry = await createSparkRoleRegistry(cwd);
-  const artifactStore = defaultArtifactStore(cwd);
+  const artifactStore = defaultEvidenceStore(cwd);
   let resumed = 0;
   for (const task of resumable) {
     const runName = task.claim?.runName;

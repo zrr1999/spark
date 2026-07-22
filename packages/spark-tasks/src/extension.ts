@@ -286,12 +286,12 @@ export function registerSparkTaskTool(pi: SparkTaskHostApi, options: SparkTaskTo
       ),
       summary: Type.Optional(Type.String({ description: "Task completion/failure summary." })),
       evidenceRefs: Type.Optional(
-        Type.Array(Type.String({ description: "Artifact refs that evidence task completion." })),
+        Type.Array(Type.String({ description: "evidence: refs that prove task completion." })),
       ),
       evidence: Type.Optional(
         Type.Any({
           description:
-            "Optional structured finish evidence. Spark can turn validationCommands, changedFiles, sourceRefs, and notes into a bounded task evidence artifact automatically.",
+            "Optional structured finish evidence. Spark can turn validationCommands, changedFiles, sourceRefs, and notes into one bounded evidence entry automatically.",
         }),
       ),
       dryRun: Type.Optional(

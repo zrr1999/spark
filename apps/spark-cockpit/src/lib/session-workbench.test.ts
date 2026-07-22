@@ -18,6 +18,7 @@ function session(overrides: Record<string, unknown> = {}) {
     runs: [],
     tasks: [],
     artifacts: [],
+    evidence: [],
     ...overrides,
   });
 }
@@ -33,7 +34,8 @@ describe("session workbench projection", () => {
             title: "Implement inspector",
             status: "running",
             progress: 0.5,
-            artifactRefs: ["artifact:report-1"],
+            artifactRefs: [],
+            evidenceRefs: ["evidence:report-1"],
             startedAt: "2026-07-13T08:00:00.000Z",
           },
         ],
@@ -49,12 +51,13 @@ describe("session workbench projection", () => {
               { id: "todo-2", content: "Render tabs", status: "in_progress", notes: [] },
             ],
             runRefs: ["run:inv-1"],
-            artifactRefs: ["artifact:report-1"],
+            artifactRefs: [],
+            evidenceRefs: ["evidence:report-1"],
           },
         ],
-        artifacts: [
+        evidence: [
           {
-            ref: "artifact:report-1",
+            ref: "evidence:report-1",
             title: "Inspector report",
             kind: "document",
             format: "markdown",
@@ -276,16 +279,16 @@ describe("session workbench projection", () => {
   it("shows changes only for explicit canonical diff markers", () => {
     const view = buildSessionWorkbenchView({
       session: session({
-        artifacts: [
+        evidence: [
           {
-            ref: "artifact:looks-like-diff",
+            ref: "evidence:looks-like-diff",
             title: "Changes.diff",
             kind: "document",
             format: "text",
             preview: "diff --git a/a.ts b/a.ts",
           },
           {
-            ref: "artifact:canonical-diff",
+            ref: "evidence:canonical-diff",
             title: "Working tree patch",
             kind: "trace",
             format: "text",
@@ -311,8 +314,10 @@ describe("session workbench projection", () => {
             format: "json",
             preview: '{"number":1}',
           },
+        ],
+        evidence: [
           {
-            ref: "artifact:note-1",
+            ref: "evidence:note-1",
             title: "Internal note",
             kind: "record",
             format: "json",
@@ -547,9 +552,9 @@ describe("session workbench projection", () => {
     const longOutput = "x".repeat(5_000);
     const view = buildSessionWorkbenchView({
       session: session({
-        artifacts: [
+        evidence: [
           {
-            ref: "artifact:same",
+            ref: "evidence:same",
             title: "Canonical evidence",
             kind: "document",
             format: "markdown",

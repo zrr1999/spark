@@ -55,6 +55,7 @@ const PRODUCT_KIND_DESCRIPTION =
 const PRODUCT_PROMPT_GUIDELINES = [
   "Use artifact for product-facing ISSUE / PR / preview only. Internal evidence (document/record/trace/knowledge) uses the evidence tool.",
   "When producing a webpage, MDX, or Markdown deliverable, create a preview artifact and keep updating it as work progresses — do not leave progress only in chat or local files.",
+  "Human-facing learning documents are Markdown preview artifacts. Keep a small stable set, update existing documents instead of creating per-turn copies, and do not place these user deliverables in memory.",
   "When working on a PR artifact, attach and use its git worktree; do not mutate the main working tree by default.",
   "Sync ISSUE/PR state from GitHub (gh) or GitLab (glab) with action=sync so Cockpit stays accurate.",
   PRODUCT_KIND_DESCRIPTION,

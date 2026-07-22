@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "$lib/Icon.svelte";
+  import SafeMarkdown from "$lib/SafeMarkdown.svelte";
   import SparkUiRenderer from "$lib/SparkUiRenderer.svelte";
   import { buildArtifactSparkUiReplay } from "$lib/artifact-ui-replay";
   import { enumLabel, formatByteSize, formatRelativeTime } from "$lib/i18n";
@@ -86,7 +87,13 @@
       </div>
     {:else if preview.status === "ready" && preview.body}
       {#if preview.body.text !== null}
-        <pre class="preview-body">{preview.body.text}</pre>
+        {#if data.artifact.kind === "preview" && (data.artifact.format === "markdown" || data.artifact.format === "mdx")}
+          <div class="preview-body markdown-preview-body">
+            <SafeMarkdown source={preview.body.text} />
+          </div>
+        {:else}
+          <pre class="preview-body">{preview.body.text}</pre>
+        {/if}
         <div class="preview-actions">
           {#if preview.body.truncated}<span>{t.preview.truncatedPrefix} {formatSize(preview.inlineLimitBytes)}.</span>{/if}
           <Button variant="secondary" href={`/api/v1/artifacts/${data.artifact.id}/content`}>
@@ -225,6 +232,7 @@
   .spark-ui-replay-body { padding: var(--spacing-xl); }
   :global(.preview-panel .ui-panel-body) { gap: 0; }
   .preview-body { background: var(--color-ink); color: var(--color-border); font-size: var(--text-caption); margin: 0; max-height: 60vh; overflow: auto; padding: var(--spacing-xl); white-space: pre-wrap; }
+  .markdown-preview-body { background: var(--color-surface); color: var(--color-ink); font-size: var(--text-body); white-space: normal; }
 
   .preview-empty { align-items: center; display: grid; gap: var(--spacing-sm); justify-items: center; padding: var(--spacing-xxl); text-align: center; }
   .preview-empty p { color: var(--color-ink-subtle); line-height: var(--leading-body); max-width: 48ch; }

@@ -2,10 +2,10 @@ import { readdir } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 
 import { resolveArtifactBlobPath } from "@zendev-lab/spark-artifacts";
-import type { ArtifactKind } from "@zendev-lab/spark-artifacts";
+import type { EvidenceKind } from "@zendev-lab/spark-artifacts";
 import {
   nowIso,
-  type ArtifactRef,
+  type EvidenceRef,
   type RunRef,
   type ProjectRef,
   type TaskRef,
@@ -36,9 +36,9 @@ export interface SparkStateInactiveWorkflowRunCandidate {
   acknowledgedAt?: string;
 }
 
-export interface SparkStateLargeArtifactCandidate {
-  ref: ArtifactRef;
-  kind: ArtifactKind;
+export interface SparkStateLargeEvidenceCandidate {
+  ref: EvidenceRef;
+  kind: EvidenceKind;
   title?: string;
   format?: string;
   bytes: number;
@@ -52,7 +52,7 @@ export interface SparkStateLargeArtifactCandidate {
   blobPath?: string;
 }
 
-export interface SparkStateOrphanBlobCandidate {
+export interface SparkStateOrphanEvidenceBlobCandidate {
   path: string;
   bytes: number;
   mtime: string;
@@ -76,7 +76,7 @@ export interface SparkStateDiagnosticsSummary {
   root: string;
   generatedAt: string;
   boundedLimit: number;
-  largeArtifactThresholdBytes: number;
+  largeEvidenceThresholdBytes: number;
   terminalProjects: {
     count: number;
     shown: number;
@@ -87,15 +87,15 @@ export interface SparkStateDiagnosticsSummary {
     shown: number;
     candidates: SparkStateInactiveWorkflowRunCandidate[];
   };
-  largeArtifacts: {
+  largeEvidence: {
     count: number;
     shown: number;
-    candidates: SparkStateLargeArtifactCandidate[];
+    candidates: SparkStateLargeEvidenceCandidate[];
   };
-  orphanBlobs: {
+  orphanEvidenceBlobs: {
     count: number;
     shown: number;
-    candidates: SparkStateOrphanBlobCandidate[];
+    candidates: SparkStateOrphanEvidenceBlobCandidate[];
   };
   notes: {
     count: number;
@@ -115,14 +115,14 @@ export interface SparkStateDiagnosticsSummary {
 }
 
 export const SPARK_STATE_DIAGNOSTIC_ITEM_LIMIT = 20;
-export const SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES = 64 * 1024;
+export const SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES = 64 * 1024;
 
 export async function collectSparkStateDiagnostics(
   cwd: string,
   graph: TaskGraph,
 ): Promise<SparkStateDiagnosticsSummary> {
   const root = join(cwd, ".spark");
-  const artifactRoot = join(root, "artifacts");
+  const evidenceRoot = join(root, "evidence");
   const allTerminalProjects = graph
     .projects()
     .map((project) => {
@@ -155,7 +155,7 @@ export async function collectSparkStateDiagnostics(
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  const artifactInventory = await collectSparkArtifactDiagnostics(cwd, artifactRoot);
+  const evidenceInventory = await collectSparkEvidenceDiagnostics(cwd, evidenceRoot);
   const noteCandidates = await protectedFileDiagnostics(cwd, join(root, "notes"));
   const roleReportCandidates = await protectedFileDiagnostics(cwd, join(root, "role-reports"));
   const doctorFindings = await collectStoreV2DoctorFindings(cwd, root, graph);
@@ -164,11 +164,11 @@ export async function collectSparkStateDiagnostics(
     root: relative(cwd, root) || ".spark",
     generatedAt: nowIso(),
     boundedLimit: SPARK_STATE_DIAGNOSTIC_ITEM_LIMIT,
-    largeArtifactThresholdBytes: SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES,
+    largeEvidenceThresholdBytes: SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES,
     terminalProjects: boundedDiagnostics(allTerminalProjects),
     inactiveWorkflowRuns: boundedDiagnostics(allInactiveWorkflowRuns),
-    largeArtifacts: boundedDiagnostics(artifactInventory.largeArtifacts),
-    orphanBlobs: boundedDiagnostics(artifactInventory.orphanBlobs),
+    largeEvidence: boundedDiagnostics(evidenceInventory.largeEvidence),
+    orphanEvidenceBlobs: boundedDiagnostics(evidenceInventory.orphanEvidenceBlobs),
     notes: boundedDiagnostics(noteCandidates),
     roleReports: boundedDiagnostics(roleReportCandidates),
     doctor: boundedDoctorFindings(doctorFindings),
@@ -284,7 +284,7 @@ async function collectStoreV2DoctorFindings(
           path: relative(cwd, file.path),
           message: "Subject-owned review record is missing subjectKind or subjectRef.",
           repair:
-            "Recreate the review record from the review artifact or move it to import quarantine.",
+            "Recreate the review record from its review evidence or move it to import quarantine.",
         });
         continue;
       }
@@ -328,24 +328,24 @@ async function subjectReviewDirectories(root: string): Promise<string[]> {
   return [...new Set(dirs)].sort();
 }
 
-async function collectSparkArtifactDiagnostics(
+async function collectSparkEvidenceDiagnostics(
   cwd: string,
-  artifactRoot: string,
+  evidenceRoot: string,
 ): Promise<{
-  largeArtifacts: SparkStateLargeArtifactCandidate[];
-  orphanBlobs: SparkStateOrphanBlobCandidate[];
+  largeEvidence: SparkStateLargeEvidenceCandidate[];
+  orphanEvidenceBlobs: SparkStateOrphanEvidenceBlobCandidate[];
 }> {
-  const metadataFiles = (await listSparkStateFiles(artifactRoot)).filter((file) =>
+  const metadataFiles = (await listSparkStateFiles(evidenceRoot)).filter((file) =>
     file.name.endsWith(".json"),
   );
   const referencedBlobPaths = new Set<string>();
-  const largeArtifacts: SparkStateLargeArtifactCandidate[] = [];
+  const largeEvidence: SparkStateLargeEvidenceCandidate[] = [];
 
   for (const file of metadataFiles) {
     const raw = await readJsonObject(file.path);
     if (!raw) continue;
     const blobPath = typeof raw.blobPath === "string" ? raw.blobPath : undefined;
-    const resolvedBlobPath = blobPath ? resolveArtifactBlobPath(artifactRoot, blobPath) : undefined;
+    const resolvedBlobPath = blobPath ? resolveArtifactBlobPath(evidenceRoot, blobPath) : undefined;
     if (resolvedBlobPath) referencedBlobPaths.add(resolvedBlobPath);
     const bodySize =
       typeof raw.bodySize === "number" && Number.isFinite(raw.bodySize) ? raw.bodySize : undefined;
@@ -355,14 +355,14 @@ async function collectSparkArtifactDiagnostics(
         : undefined;
     const blobBytes = blobInfo?.isFile() ? blobInfo.size : undefined;
     const bytes = bodySize ?? blobBytes ?? file.bytes;
-    if (bytes < SPARK_STATE_LARGE_ARTIFACT_THRESHOLD_BYTES) continue;
+    if (bytes < SPARK_STATE_LARGE_EVIDENCE_THRESHOLD_BYTES) continue;
     const provenance =
       raw.provenance && typeof raw.provenance === "object"
         ? (raw.provenance as Record<string, unknown>)
         : undefined;
-    largeArtifacts.push({
-      ref: (typeof raw.ref === "string" ? raw.ref : basename(file.name, ".json")) as ArtifactRef,
-      kind: (typeof raw.kind === "string" ? raw.kind : "document") as ArtifactKind,
+    largeEvidence.push({
+      ref: (typeof raw.ref === "string" ? raw.ref : basename(file.name, ".json")) as EvidenceRef,
+      kind: (typeof raw.kind === "string" ? raw.kind : "document") as EvidenceKind,
       title: typeof raw.title === "string" ? raw.title : undefined,
       format: typeof raw.format === "string" ? raw.format : undefined,
       bytes,
@@ -377,8 +377,8 @@ async function collectSparkArtifactDiagnostics(
     });
   }
 
-  const blobFiles = await listSparkStateFiles(join(artifactRoot, "blobs"), true);
-  const orphanBlobs = blobFiles
+  const blobFiles = await listSparkStateFiles(join(evidenceRoot, "blobs"), true);
+  const orphanEvidenceBlobs = blobFiles
     .filter((file) => !referencedBlobPaths.has(resolve(file.path)))
     .map((file) => ({
       path: relative(cwd, file.path),
@@ -388,10 +388,10 @@ async function collectSparkArtifactDiagnostics(
     .sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path));
 
   return {
-    largeArtifacts: largeArtifacts.sort(
+    largeEvidence: largeEvidence.sort(
       (a, b) => b.bytes - a.bytes || (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
     ),
-    orphanBlobs,
+    orphanEvidenceBlobs,
   };
 }
 

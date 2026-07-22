@@ -14,6 +14,10 @@ import type {
 
 const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionInspector.svelte");
 const workspacePath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionsWorkspace.svelte");
+const artifactDetailPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../routes/(workbench)/[workspaceId]/artifacts/[artifactId]/+page.svelte",
+);
 
 const labels: SessionInspectorLabels = {
   ariaLabel: "SESSION_INSPECTOR",
@@ -137,6 +141,16 @@ describe("SessionInspector component contract", () => {
     expect(source).not.toContain("git status");
     expect(source).not.toContain("terminal.write");
     expect(source).not.toContain("<form");
+  });
+
+  it("renders product Markdown previews safely in artifact detail", () => {
+    const inspectorSource = readFileSync(componentPath, "utf8");
+    const detailSource = readFileSync(artifactDetailPath, "utf8");
+
+    expect(inspectorSource).toContain('<pre class="artifact-preview">{artifact.preview}</pre>');
+    expect(detailSource).toContain('import SafeMarkdown from "$lib/SafeMarkdown.svelte"');
+    expect(detailSource).toContain('data.artifact.kind === "preview"');
+    expect(detailSource).toContain("<SafeMarkdown source={preview.body.text} />");
   });
 
   it("groups only canonical task project references without inventing project metadata", () => {

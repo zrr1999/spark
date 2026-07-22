@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "vitest";
 
 import type { RoleRef, RunRef } from "@zendev-lab/spark-core";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
@@ -120,7 +120,7 @@ test("stale claim recovery allows needs_changes recovery when owner is inactive"
       now: "2026-06-17T00:00:00.000Z",
       leaseMs: 24 * 60 * 60 * 1_000,
     });
-    await defaultArtifactStore(dir).put({
+    await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Task finish review for @claimed-task",
       format: "json",
@@ -156,7 +156,7 @@ test("stale claim recovery refuses when owner activity is newer than needs_chang
       now: "2026-06-17T00:00:00.000Z",
       leaseMs: 24 * 60 * 60 * 1_000,
     });
-    await defaultArtifactStore(dir).put({
+    await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Task finish review for @claimed-task",
       format: "json",

@@ -12,6 +12,7 @@ import {
 } from "@zendev-lab/spark-artifacts";
 import {
   type ArtifactRef,
+  type EvidenceRef,
   type JsonValue,
   isRef,
   newRef,
@@ -696,14 +697,14 @@ function summarizeEvidence(evidenceRefs: string[]): string {
 }
 
 function relationLinks(record: LearningRecord): Omit<ArtifactLink, "from">[] {
-  return evidenceArtifactRefs(record.evidenceRefs).map((artifactRef) => ({
-    to: artifactRef,
+  return evidenceRefs(record.evidenceRefs).map((evidenceRef) => ({
+    to: evidenceRef,
     relation: "derived-from" as const,
   }));
 }
 
-function evidenceArtifactRefs(evidenceRefs: string[]): ArtifactRef[] {
-  return evidenceRefs.filter((ref): ref is ArtifactRef => isRef(ref, "artifact"));
+function evidenceRefs(refs: string[]): EvidenceRef[] {
+  return refs.filter((ref): ref is EvidenceRef => isRef(ref, "evidence"));
 }
 
 function requireNonEmpty(value: unknown, label: string): string {

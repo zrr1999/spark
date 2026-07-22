@@ -6,29 +6,29 @@ import type {
   ToolRenderTheme,
 } from "@zendev-lab/spark-core";
 import {
-  ARTIFACT_CURATION_STATUSES,
-  ARTIFACT_FORMATS,
-  ARTIFACT_KINDS,
-  ARTIFACT_LINK_RELATIONS,
-  ARTIFACT_PRODUCERS,
-  ARTIFACT_RETENTIONS,
-  defaultArtifactStore,
-  isArtifactCurationStatus,
-  isArtifactFormat,
-  isArtifactKind,
-  isArtifactLinkRelation,
-  isArtifactProducer,
-  isArtifactRetention,
-  type Artifact,
-  type ArtifactCuration,
-  type ArtifactCurationStatus,
-  type ArtifactFormat,
-  type ArtifactKind,
-  type ArtifactLink,
-  type ArtifactRef,
-  type ArtifactRetention,
+  EVIDENCE_CURATION_STATUSES,
+  EVIDENCE_FORMATS,
+  EVIDENCE_KINDS,
+  EVIDENCE_LINK_RELATIONS,
+  EVIDENCE_PRODUCERS,
+  EVIDENCE_RETENTIONS,
+  defaultEvidenceStore,
+  isEvidenceCurationStatus,
+  isEvidenceFormat,
+  isEvidenceKind,
+  isEvidenceLinkRelation,
+  isEvidenceProducer,
+  isEvidenceRetention,
+  type Evidence,
+  type EvidenceCuration,
+  type EvidenceCurationStatus,
+  type EvidenceFormat,
+  type EvidenceKind,
+  type EvidenceLink,
+  type EvidenceRef,
+  type EvidenceRetention,
   type JsonValue,
-  type Provenance,
+  type EvidenceProvenance,
 } from "./index.ts";
 import { registerProductArtifactTool } from "./product/extension.ts";
 
@@ -45,12 +45,12 @@ type EvidenceAction =
   | "promote"
   | "archive"
   | "supersede";
-type ArtifactListView = "ref-only" | "summary";
+type EvidenceListView = "ref-only" | "summary";
 
-const DEFAULT_ARTIFACT_READ_PREVIEW_CHARS = 800;
-const ARTIFACT_PRODUCER_DESCRIPTION =
+const DEFAULT_EVIDENCE_READ_PREVIEW_CHARS = 800;
+const EVIDENCE_PRODUCER_DESCRIPTION =
   "producer: spark | role | task | review | ask | cue | user. Prefer producer=task (+ runRef/taskRef) for execution notes; ask/review/cue when that capability owns the write.";
-const ARTIFACT_KIND_DESCRIPTION =
+const EVIDENCE_KIND_DESCRIPTION =
   "Internal ledger kinds only: record (default; one JSON fact/decision/result), trace (prunable raw output), knowledge (learning capability), document (rare long prose). Not user-facing; product ISSUE/PR/preview use artifact.";
 
 class ToolCallText implements ToolRenderComponent {
@@ -79,19 +79,14 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
       "Prefer format=json and kind=record with a compact body: { summary: string, data?: object }. Use kind=trace for raw/prunable tool dumps.",
       "Keep titles short; keep bodies small. Do not write long markdown essays into evidence.",
       "Use list/read to recover prior notes; use record to append. promote/archive/supersede only when curating durable ask/learning contracts.",
-      ARTIFACT_KIND_DESCRIPTION,
-      ARTIFACT_PRODUCER_DESCRIPTION,
+      EVIDENCE_KIND_DESCRIPTION,
+      EVIDENCE_PRODUCER_DESCRIPTION,
     ],
     parameters: Type.Object({
       action: Type.String({
         description: "record | list | read | link | compact | promote | archive | supersede",
       }),
-      artifactRef: Type.Optional(
-        Type.String({
-          description: "Evidence ref (evidence:… or legacy artifact:…) for read/link.",
-        }),
-      ),
-      evidenceRef: Type.Optional(Type.String({ description: "Alias of artifactRef." })),
+      evidenceRef: Type.Optional(Type.String({ description: "Evidence ref (evidence:…)." })),
       from: Type.Optional(Type.String({ description: "Source evidence ref for link." })),
       to: Type.Optional(Type.String({ description: "Target ref for link." })),
       relation: Type.Optional(
@@ -103,7 +98,7 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
         Type.String({
           description:
             "record | trace | knowledge | document. Default for new writes: record. " +
-            ARTIFACT_KIND_DESCRIPTION,
+            EVIDENCE_KIND_DESCRIPTION,
         }),
       ),
       title: Type.Optional(Type.String({ description: "Short title for action=record." })),
@@ -124,13 +119,13 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
         Type.Any({
           description:
             "Required for record. Must include provenance.producer. " +
-            ARTIFACT_PRODUCER_DESCRIPTION,
+            EVIDENCE_PRODUCER_DESCRIPTION,
         }),
       ),
       links: Type.Optional(Type.Array(Type.Any({ description: "Typed links for action=record." }))),
       producer: Type.Optional(
         Type.String({
-          description: "Filter for list. " + ARTIFACT_PRODUCER_DESCRIPTION,
+          description: "Filter for list. " + EVIDENCE_PRODUCER_DESCRIPTION,
         }),
       ),
       projectRef: Type.Optional(
@@ -190,14 +185,14 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = requireCwd(ctx, "evidence");
-      const store = defaultArtifactStore(cwd);
+      const store = defaultEvidenceStore(cwd);
       const action = normalizeAction(params.action);
 
       if (action === "list") {
         const limit = normalizeLimit(params.limit, 20, "limit");
-        const view = normalizeArtifactListView(params.view ?? "ref-only");
-        const artifacts = await store.list({
-          kind: normalizeOptionalArtifactKind(params.kind, "kind"),
+        const view = normalizeEvidenceListView(params.view ?? "ref-only");
+        const evidence = await store.list({
+          kind: normalizeOptionalEvidenceKind(params.kind, "kind"),
           producer: normalizeOptionalProducer(params.producer, "producer"),
           projectRef: normalizeOptionalRefOfKind(params.projectRef, "proj", "projectRef"),
           taskRef: normalizeOptionalRefOfKind(params.taskRef, "task", "taskRef"),
@@ -208,40 +203,37 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
           includeRaw: normalizeBoolean(params.includeRaw, false, "includeRaw"),
           includeArchived: normalizeBoolean(params.includeArchived, false, "includeArchived"),
         });
-        const newest = artifacts.slice().reverse();
+        const newest = evidence.slice().reverse();
         const visible = newest.slice(0, limit);
         const lines = [
-          `Evidence ledger: ${artifacts.length}${visible.length < artifacts.length ? ` (showing ${visible.length})` : ""}`,
-          ...visible.map((artifact) => renderArtifactListLine(artifact, view)),
+          `Evidence ledger: ${evidence.length}${visible.length < evidence.length ? ` (showing ${visible.length})` : ""}`,
+          ...visible.map((entry) => renderEvidenceListLine(entry, view)),
         ];
         if (visible.length === 0) lines.push("- (empty)");
-        if (visible.length < artifacts.length)
-          lines.push(`- … ${artifacts.length - visible.length} more`);
+        if (visible.length < evidence.length)
+          lines.push(`- … ${evidence.length - visible.length} more`);
         return toolResult("evidence", action, lines.join("\n"), {
-          count: artifacts.length,
+          count: evidence.length,
           shown: visible.length,
           view,
-          artifacts: visible.map((artifact) => compactArtifactSummaryDetail(artifact)),
+          evidence: visible.map((entry) => compactEvidenceSummaryDetail(entry)),
         });
       }
 
       if (action === "read") {
-        const artifactRef = normalizeArtifactRef(
-          params.evidenceRef ?? params.artifactRef,
-          "artifactRef",
-        );
-        const artifact = await store.get(artifactRef);
-        const body = await store.getBody(artifactRef);
+        const evidenceRef = normalizeEvidenceRef(params.evidenceRef, "evidenceRef");
+        const entry = await store.get(evidenceRef);
+        const body = await store.getBody(evidenceRef);
         const maxChars = normalizeLimit(
           params.maxChars,
-          DEFAULT_ARTIFACT_READ_PREVIEW_CHARS,
+          DEFAULT_EVIDENCE_READ_PREVIEW_CHARS,
           "maxChars",
         );
         const renderedBody = truncateBlock(body, maxChars);
         const truncated = renderedBody.length < body.length;
         const lines = [
-          `${artifact.ref} [${artifact.kind}] ${artifact.title}`,
-          `producer=${artifact.provenance.producer} updated=${artifact.updatedAt}`,
+          `${entry.ref} [${entry.kind}] ${entry.title}`,
+          `producer=${entry.provenance.producer} updated=${entry.updatedAt}`,
           "",
           renderedBody,
         ];
@@ -249,7 +241,7 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
           lines.push("", `… truncated ${body.length - renderedBody.length} char(s)`);
         }
         return toolResult("evidence", action, lines.join("\n"), {
-          artifact: compactArtifactDetail(artifact),
+          evidence: compactEvidenceDetail(entry),
           bodyChars: body.length,
           shownChars: renderedBody.length,
           truncated,
@@ -257,14 +249,14 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
       }
 
       if (action === "record") {
-        const kind = normalizeArtifactKind(params.kind ?? "record", "kind");
+        const kind = normalizeEvidenceKind(params.kind ?? "record", "kind");
         const title = normalizeRequiredString(params.title, "title");
-        const format = normalizeArtifactFormat(params.format ?? "json", "format");
-        const body = normalizeArtifactBody(params.body, format);
-        const provenance = normalizeRecordProvenance(params);
-        const links = normalizeArtifactLinks(params.links);
+        const format = normalizeEvidenceFormat(params.format ?? "json", "format");
+        const body = normalizeEvidenceBody(params.body, format);
+        const provenance = normalizeRecordEvidenceProvenance(params);
+        const links = normalizeEvidenceLinks(params.links);
         const curation = normalizeOptionalCuration(params.curation, "curation");
-        const artifact = await store.put({
+        const entry = await store.put({
           kind,
           title,
           format,
@@ -276,44 +268,38 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
         return toolResult(
           "evidence",
           action,
-          `Recorded ${artifact.ref} [${artifact.kind}] ${artifact.title}`,
+          `Recorded ${entry.ref} [${entry.kind}] ${entry.title}`,
           {
             changed: true,
-            refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
-            artifact: compactArtifactSummaryDetail(artifact),
+            refs: { evidenceRef: entry.ref },
+            evidence: compactEvidenceSummaryDetail(entry),
           },
         );
       }
 
       if (action === "link") {
-        const from = normalizeArtifactRef(
-          params.from ?? params.evidenceRef ?? params.artifactRef,
-          "from",
-        );
-        const to = normalizeRequiredRef(params.to, "to") as ArtifactLink["to"];
-        const relation = normalizeArtifactRelation(params.relation, "relation");
+        const from = normalizeEvidenceRef(params.from ?? params.evidenceRef, "from");
+        const to = normalizeRequiredRef(params.to, "to") as EvidenceLink["to"];
+        const relation = normalizeEvidenceRelation(params.relation, "relation");
         const existing = await store.get(from);
         const links = [...existing.links.map(({ from: _from, ...link }) => link), { to, relation }];
-        const artifact = await store.update(from, { links });
+        const entry = await store.update(from, { links });
         return toolResult("evidence", action, `Linked ${from} -> ${to} (${relation})`, {
           changed: true,
-          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref, targetRef: to },
-          artifact: compactArtifactDetail(artifact),
+          refs: { evidenceRef: entry.ref, targetRef: to },
+          evidence: compactEvidenceDetail(entry),
         });
       }
 
       if (action === "promote") {
-        const artifactRef = normalizeArtifactRef(
-          params.evidenceRef ?? params.artifactRef,
-          "artifactRef",
-        );
-        const existing = await store.get(artifactRef);
+        const evidenceRef = normalizeEvidenceRef(params.evidenceRef, "evidenceRef");
+        const existing = await store.get(evidenceRef);
         const status =
           normalizeOptionalCurationStatus(params.curationStatus, "curationStatus") ?? "curated";
         if (status !== "candidate" && status !== "curated") {
           throw new Error("promote curationStatus must be candidate or curated");
         }
-        const curation: ArtifactCuration = {
+        const curation: EvidenceCuration = {
           ...(existing.curation ?? {}),
           status,
           retention:
@@ -322,21 +308,18 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
             (status === "curated" ? "durable" : "project"),
           reason: normalizeRequiredString(params.reason, "reason"),
         };
-        const artifact = await store.update(artifactRef, { curation });
-        return toolResult("evidence", action, `Promoted ${artifact.ref} to ${status}`, {
+        const entry = await store.update(evidenceRef, { curation });
+        return toolResult("evidence", action, `Promoted ${entry.ref} to ${status}`, {
           changed: true,
-          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
-          artifact: compactArtifactDetail(artifact),
+          refs: { evidenceRef: entry.ref },
+          evidence: compactEvidenceDetail(entry),
         });
       }
 
       if (action === "archive") {
-        const artifactRef = normalizeArtifactRef(
-          params.evidenceRef ?? params.artifactRef,
-          "artifactRef",
-        );
-        const existing = await store.get(artifactRef);
-        const curation: ArtifactCuration = {
+        const evidenceRef = normalizeEvidenceRef(params.evidenceRef, "evidenceRef");
+        const existing = await store.get(evidenceRef);
+        const curation: EvidenceCuration = {
           ...(existing.curation ?? {}),
           status: "archived",
           retention:
@@ -345,39 +328,35 @@ export function registerEvidenceTool(pi: SparkArtifactsHostApi): void {
             "ephemeral",
           reason: normalizeRequiredString(params.reason, "reason"),
         };
-        const artifact = await store.update(artifactRef, { curation });
-        return toolResult("evidence", action, `Archived ${artifact.ref}`, {
+        const entry = await store.update(evidenceRef, { curation });
+        return toolResult("evidence", action, `Archived ${entry.ref}`, {
           changed: true,
-          refs: { artifactRef: artifact.ref, evidenceRef: artifact.ref },
-          artifact: compactArtifactDetail(artifact),
+          refs: { evidenceRef: entry.ref },
+          evidence: compactEvidenceDetail(entry),
         });
       }
 
       if (action === "supersede") {
-        const artifactRef = normalizeArtifactRef(
-          params.evidenceRef ?? params.artifactRef,
-          "artifactRef",
-        );
-        const replacementRef = normalizeArtifactRef(params.to, "to");
-        const existing = await store.get(artifactRef);
+        const evidenceRef = normalizeEvidenceRef(params.evidenceRef, "evidenceRef");
+        const replacementRef = normalizeEvidenceRef(params.to, "to");
+        const existing = await store.get(evidenceRef);
         const supersededBy = [...(existing.curation?.supersededBy ?? [])];
         if (!supersededBy.includes(replacementRef)) supersededBy.push(replacementRef);
-        const curation: ArtifactCuration = {
+        const curation: EvidenceCuration = {
           ...(existing.curation ?? {}),
           status: "superseded",
           retention: existing.curation?.retention ?? "task",
           reason: normalizeRequiredString(params.reason, "reason"),
           supersededBy,
         };
-        const artifact = await store.update(artifactRef, { curation });
-        return toolResult("evidence", action, `Superseded ${artifact.ref} by ${replacementRef}`, {
+        const entry = await store.update(evidenceRef, { curation });
+        return toolResult("evidence", action, `Superseded ${entry.ref} by ${replacementRef}`, {
           changed: true,
           refs: {
-            artifactRef: artifact.ref,
-            evidenceRef: artifact.ref,
+            evidenceRef: entry.ref,
             supersededBy: replacementRef,
           },
-          artifact: compactArtifactDetail(artifact),
+          evidence: compactEvidenceDetail(entry),
         });
       }
 
@@ -432,11 +411,9 @@ function renderEvidenceCall(
   const target =
     typeof args.evidenceRef === "string"
       ? args.evidenceRef
-      : typeof args.artifactRef === "string"
-        ? args.artifactRef
-        : typeof args.from === "string"
-          ? args.from
-          : undefined;
+      : typeof args.from === "string"
+        ? args.from
+        : undefined;
   const text = ["evidence", `action=${action}`, target].filter(Boolean).join(" ");
   return new ToolCallText(theme.bold ? theme.bold(text) : text);
 }
@@ -454,44 +431,44 @@ function toolResult(
 }
 
 /** Lean agent-ledger detail (no blob paths / hashes — those are store internals). */
-function compactArtifactDetail(artifact: Artifact): Record<string, unknown> {
+function compactEvidenceDetail(entry: Evidence): Record<string, unknown> {
   return {
-    ref: artifact.ref,
-    kind: artifact.kind,
-    title: artifact.title,
-    format: artifact.format,
-    producer: artifact.provenance.producer,
-    projectRef: artifact.provenance.projectRef,
-    taskRef: artifact.provenance.taskRef,
-    roleRef: artifact.provenance.roleRef,
-    runRef: artifact.provenance.runRef,
-    curation: artifact.curation?.status ?? "raw",
-    bodySize: artifact.bodySize,
-    updatedAt: artifact.updatedAt,
+    ref: entry.ref,
+    kind: entry.kind,
+    title: entry.title,
+    format: entry.format,
+    producer: entry.provenance.producer,
+    projectRef: entry.provenance.projectRef,
+    taskRef: entry.provenance.taskRef,
+    roleRef: entry.provenance.roleRef,
+    runRef: entry.provenance.runRef,
+    curation: entry.curation?.status ?? "raw",
+    bodySize: entry.bodySize,
+    updatedAt: entry.updatedAt,
   };
 }
 
-function compactArtifactSummaryDetail(artifact: Artifact): Record<string, unknown> {
+function compactEvidenceSummaryDetail(entry: Evidence): Record<string, unknown> {
   return {
-    ref: artifact.ref,
-    kind: artifact.kind,
-    title: artifact.title,
-    producer: artifact.provenance.producer,
-    projectRef: artifact.provenance.projectRef,
-    taskRef: artifact.provenance.taskRef,
-    curation: artifact.curation?.status ?? "raw",
-    updatedAt: artifact.updatedAt,
+    ref: entry.ref,
+    kind: entry.kind,
+    title: entry.title,
+    producer: entry.provenance.producer,
+    projectRef: entry.provenance.projectRef,
+    taskRef: entry.provenance.taskRef,
+    curation: entry.curation?.status ?? "raw",
+    updatedAt: entry.updatedAt,
   };
 }
 
-function renderArtifactListLine(artifact: Artifact, view: ArtifactListView): string {
-  if (view === "ref-only") return `- ${artifact.ref}`;
-  return `- [${artifact.kind}] ${artifact.ref}: ${artifact.title} curation=${renderCurationLabel(artifact)}`;
+function renderEvidenceListLine(entry: Evidence, view: EvidenceListView): string {
+  if (view === "ref-only") return `- ${entry.ref}`;
+  return `- [${entry.kind}] ${entry.ref}: ${entry.title} curation=${renderCurationLabel(entry)}`;
 }
 
-function renderCurationLabel(artifact: Artifact): string {
-  const status = artifact.curation?.status ?? "uncurated";
-  const retention = artifact.curation?.retention;
+function renderCurationLabel(entry: Evidence): string {
+  const status = entry.curation?.status ?? "uncurated";
+  const retention = entry.curation?.retention;
   return retention ? `${status}/${retention}` : status;
 }
 
@@ -526,16 +503,16 @@ function normalizeAction(value: unknown): EvidenceAction {
   );
 }
 
-function normalizeArtifactListView(value: unknown): ArtifactListView {
+function normalizeEvidenceListView(value: unknown): EvidenceListView {
   if (value === undefined || value === null) return "ref-only";
   if (value === "ref-only" || value === "summary") return value;
   throw new Error("view must be ref-only or summary");
 }
 
-function normalizeArtifactKind(value: unknown, field: string): ArtifactKind {
-  if (!isArtifactKind(value)) {
+function normalizeEvidenceKind(value: unknown, field: string): EvidenceKind {
+  if (!isEvidenceKind(value)) {
     throw new Error(
-      formatValidValuesError(field, value, "a valid artifact kind", ARTIFACT_KINDS, {
+      formatValidValuesError(field, value, "a valid evidence kind", EVIDENCE_KINDS, {
         research: "Use kind=document for analysis/research write-ups.",
         plan: "Use kind=document for plans and breakdowns.",
         "plan-draft": "Use kind=document for plan drafts and finalized plans.",
@@ -550,28 +527,28 @@ function normalizeArtifactKind(value: unknown, field: string): ArtifactKind {
   return value;
 }
 
-function normalizeOptionalArtifactKind(value: unknown, field: string): ArtifactKind | undefined {
+function normalizeOptionalEvidenceKind(value: unknown, field: string): EvidenceKind | undefined {
   if (value === undefined || value === null) return undefined;
-  return normalizeArtifactKind(value, field);
+  return normalizeEvidenceKind(value, field);
 }
 
-function normalizeArtifactFormat(value: unknown, field: string): ArtifactFormat {
-  if (!isArtifactFormat(value)) {
+function normalizeEvidenceFormat(value: unknown, field: string): EvidenceFormat {
+  if (!isEvidenceFormat(value)) {
     throw new Error(
-      formatValidValuesError(field, value, "a valid artifact format", ARTIFACT_FORMATS),
+      formatValidValuesError(field, value, "a valid evidence format", EVIDENCE_FORMATS),
     );
   }
   return value;
 }
 
-function normalizeArtifactRelation(value: unknown, field: string): ArtifactLink["relation"] {
-  if (!isArtifactLinkRelation(value)) {
+function normalizeEvidenceRelation(value: unknown, field: string): EvidenceLink["relation"] {
+  if (!isEvidenceLinkRelation(value)) {
     throw new Error(
       formatValidValuesError(
         field,
         value,
-        "a valid artifact link relation",
-        ARTIFACT_LINK_RELATIONS,
+        "a valid evidence link relation",
+        EVIDENCE_LINK_RELATIONS,
       ),
     );
   }
@@ -581,11 +558,11 @@ function normalizeArtifactRelation(value: unknown, field: string): ArtifactLink[
 function normalizeOptionalProducer(
   value: unknown,
   field: string,
-): Provenance["producer"] | undefined {
+): EvidenceProvenance["producer"] | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isArtifactProducer(value)) {
+  if (!isEvidenceProducer(value)) {
     throw new Error(
-      formatValidValuesError(field, value, "a valid artifact producer", ARTIFACT_PRODUCERS, {
+      formatValidValuesError(field, value, "a valid evidence producer", EVIDENCE_PRODUCERS, {
         agent:
           "Use producer=task for execution evidence, with runRef/taskRef when available, or producer=user for user-provided material.",
         assistant:
@@ -599,48 +576,48 @@ function normalizeOptionalProducer(
 function normalizeOptionalCurationStatus(
   value: unknown,
   field: string,
-): ArtifactCurationStatus | undefined {
+): EvidenceCurationStatus | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isArtifactCurationStatus(value)) {
+  if (!isEvidenceCurationStatus(value)) {
     throw new Error(
       formatValidValuesError(
         field,
         value,
-        "a valid artifact curation status",
-        ARTIFACT_CURATION_STATUSES,
+        "a valid evidence curation status",
+        EVIDENCE_CURATION_STATUSES,
       ),
     );
   }
   return value;
 }
 
-function normalizeOptionalRetention(value: unknown, field: string): ArtifactRetention | undefined {
+function normalizeOptionalRetention(value: unknown, field: string): EvidenceRetention | undefined {
   if (value === undefined || value === null) return undefined;
-  if (!isArtifactRetention(value)) {
+  if (!isEvidenceRetention(value)) {
     throw new Error(
-      formatValidValuesError(field, value, "a valid artifact retention", ARTIFACT_RETENTIONS),
+      formatValidValuesError(field, value, "a valid evidence retention", EVIDENCE_RETENTIONS),
     );
   }
   return value;
 }
 
-function normalizeOptionalCuration(value: unknown, field: string): ArtifactCuration | undefined {
+function normalizeOptionalCuration(value: unknown, field: string): EvidenceCuration | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
   const status = normalizeOptionalCurationStatus(value.status, `${field}.status`);
   if (!status) throw new Error(`${field}.status is required`);
-  const curation: ArtifactCuration = { status };
+  const curation: EvidenceCuration = { status };
   const retention = normalizeOptionalRetention(value.retention, `${field}.retention`);
   const reason = normalizeOptionalString(value.reason, `${field}.reason`);
-  const promotedFrom = normalizeOptionalArtifactRefArray(
+  const promotedFrom = normalizeOptionalEvidenceRefArray(
     value.promotedFrom,
     `${field}.promotedFrom`,
   );
-  const supersededBy = normalizeOptionalArtifactRefArray(
+  const supersededBy = normalizeOptionalEvidenceRefArray(
     value.supersededBy,
     `${field}.supersededBy`,
   );
-  const compactedInto = normalizeOptionalArtifactRef(value.compactedInto, `${field}.compactedInto`);
+  const compactedInto = normalizeOptionalEvidenceRef(value.compactedInto, `${field}.compactedInto`);
   const expiresAt = normalizeOptionalString(value.expiresAt, `${field}.expiresAt`);
   if (retention) curation.retention = retention;
   if (reason) curation.reason = reason;
@@ -651,17 +628,17 @@ function normalizeOptionalCuration(value: unknown, field: string): ArtifactCurat
   return curation;
 }
 
-function normalizeArtifactBody(value: unknown, format: ArtifactFormat): JsonValue | string {
+function normalizeEvidenceBody(value: unknown, format: EvidenceFormat): JsonValue | string {
   if (format === "markdown" || format === "text") {
-    if (typeof value !== "string") throw new Error(`body must be a string for ${format} artifacts`);
+    if (typeof value !== "string") throw new Error(`body must be a string for ${format} evidence`);
     return value;
   }
-  if (!isJsonValue(value)) throw new Error("body must be a JSON value for json artifacts");
+  if (!isJsonValue(value)) throw new Error("body must be a JSON value for json evidence");
   return value;
 }
 
-function normalizeRecordProvenance(params: Record<string, unknown>): Provenance {
-  const provenance = normalizeProvenance(params.provenance);
+function normalizeRecordEvidenceProvenance(params: Record<string, unknown>): EvidenceProvenance {
+  const provenance = normalizeEvidenceProvenance(params.provenance);
   const projectRef = normalizeOptionalRefOfKind(params.projectRef, "proj", "projectRef");
   const taskRef = normalizeOptionalRefOfKind(params.taskRef, "task", "taskRef");
   const roleRef = normalizeOptionalRefOfKind(params.roleRef, "role", "roleRef");
@@ -669,94 +646,96 @@ function normalizeRecordProvenance(params: Record<string, unknown>): Provenance 
     ...provenance,
     ...(projectRef
       ? {
-          projectRef: mergeProvenanceRef(
+          projectRef: mergeEvidenceProvenanceRef(
             provenance.projectRef,
             projectRef,
             "projectRef",
-          ) as Provenance["projectRef"],
+          ) as EvidenceProvenance["projectRef"],
         }
       : {}),
     ...(taskRef
       ? {
-          taskRef: mergeProvenanceRef(
+          taskRef: mergeEvidenceProvenanceRef(
             provenance.taskRef,
             taskRef,
             "taskRef",
-          ) as Provenance["taskRef"],
+          ) as EvidenceProvenance["taskRef"],
         }
       : {}),
     ...(roleRef
       ? {
-          roleRef: mergeProvenanceRef(
+          roleRef: mergeEvidenceProvenanceRef(
             provenance.roleRef,
             roleRef,
             "roleRef",
-          ) as Provenance["roleRef"],
+          ) as EvidenceProvenance["roleRef"],
         }
       : {}),
   };
 }
 
-function mergeProvenanceRef(existing: string | undefined, shortcut: string, field: string): string {
+function mergeEvidenceProvenanceRef(
+  existing: string | undefined,
+  shortcut: string,
+  field: string,
+): string {
   if (!existing || existing === shortcut) return shortcut;
   throw new Error(`${field} conflicts with provenance.${field}`);
 }
 
-function normalizeProvenance(value: unknown): Provenance {
+function normalizeEvidenceProvenance(value: unknown): EvidenceProvenance {
   if (!isRecord(value)) throw new Error("provenance must be an object");
   const producer = normalizeOptionalProducer(value.producer, "provenance.producer");
   if (!producer) throw new Error("provenance.producer is required");
-  const provenance: Provenance = { producer };
+  const provenance: EvidenceProvenance = { producer };
   const runRef = normalizeOptionalRefOfKind(value.runRef, "run", "provenance.runRef");
   const projectRef = normalizeOptionalRefOfKind(value.projectRef, "proj", "provenance.projectRef");
   const taskRef = normalizeOptionalRefOfKind(value.taskRef, "task", "provenance.taskRef");
   const roleRef = normalizeOptionalRefOfKind(value.roleRef, "role", "provenance.roleRef");
   const note = normalizeOptionalString(value.note, "provenance.note");
-  const parentArtifactRefs = normalizeOptionalStringArray(
-    value.parentArtifactRefs,
-    "provenance.parentArtifactRefs",
-  ) as ArtifactRef[] | undefined;
-  if (runRef) provenance.runRef = runRef as Provenance["runRef"];
-  if (projectRef) provenance.projectRef = projectRef as Provenance["projectRef"];
-  if (taskRef) provenance.taskRef = taskRef as Provenance["taskRef"];
-  if (roleRef) provenance.roleRef = roleRef as Provenance["roleRef"];
+  const parentEvidenceRefs = normalizeOptionalStringArray(
+    value.parentEvidenceRefs,
+    "provenance.parentEvidenceRefs",
+  ) as EvidenceRef[] | undefined;
+  if (runRef) provenance.runRef = runRef as EvidenceProvenance["runRef"];
+  if (projectRef) provenance.projectRef = projectRef as EvidenceProvenance["projectRef"];
+  if (taskRef) provenance.taskRef = taskRef as EvidenceProvenance["taskRef"];
+  if (roleRef) provenance.roleRef = roleRef as EvidenceProvenance["roleRef"];
   if (note) provenance.note = note;
-  if (parentArtifactRefs) provenance.parentArtifactRefs = parentArtifactRefs;
+  if (parentEvidenceRefs) provenance.parentEvidenceRefs = parentEvidenceRefs;
   return provenance;
 }
 
-function normalizeArtifactLinks(value: unknown): Omit<ArtifactLink, "from">[] | undefined {
+function normalizeEvidenceLinks(value: unknown): Omit<EvidenceLink, "from">[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) throw new Error("links must be an array");
   return value.map((entry, index) => {
     if (!isRecord(entry)) throw new Error(`links[${index}] must be an object`);
     return {
-      to: normalizeRequiredRef(entry.to, `links[${index}].to`) as ArtifactLink["to"],
-      relation: normalizeArtifactRelation(entry.relation, `links[${index}].relation`),
+      to: normalizeRequiredRef(entry.to, `links[${index}].to`) as EvidenceLink["to"],
+      relation: normalizeEvidenceRelation(entry.relation, `links[${index}].relation`),
     };
   });
 }
 
-function normalizeArtifactRef(value: unknown, field: string): ArtifactRef {
+function normalizeEvidenceRef(value: unknown, field: string): EvidenceRef {
   const ref = normalizeRequiredRef(value, field);
-  if (!ref.startsWith("artifact:") && !ref.startsWith("evidence:")) {
-    throw new Error(`${field} must be an evidence: or artifact: ref`);
-  }
-  return ref as ArtifactRef;
+  if (!ref.startsWith("evidence:")) throw new Error(`${field} must be an evidence: ref`);
+  return ref as EvidenceRef;
 }
 
-function normalizeOptionalArtifactRef(value: unknown, field: string): ArtifactRef | undefined {
+function normalizeOptionalEvidenceRef(value: unknown, field: string): EvidenceRef | undefined {
   if (value === undefined || value === null) return undefined;
-  return normalizeArtifactRef(value, field);
+  return normalizeEvidenceRef(value, field);
 }
 
-function normalizeOptionalArtifactRefArray(
+function normalizeOptionalEvidenceRefArray(
   value: unknown,
   field: string,
-): ArtifactRef[] | undefined {
+): EvidenceRef[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
-  return value.map((entry, index) => normalizeArtifactRef(entry, `${field}[${index}]`));
+  return value.map((entry, index) => normalizeEvidenceRef(entry, `${field}[${index}]`));
 }
 
 function normalizeRequiredRef(value: unknown, field: string): string {

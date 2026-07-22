@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import type {
   SparkHostContext,
   JsonValue,
@@ -8,9 +8,9 @@ import type {
   ToolRenderTheme,
 } from "@zendev-lab/spark-core";
 import {
-  isUserAnsweredAskEvidenceArtifactBody,
+  isUserAnsweredAskEvidenceBody,
   recordCanonicalAskEvidenceReceipt,
-  type SparkAskEvidenceArtifactBody,
+  type SparkAskEvidenceBody,
 } from "./evidence.ts";
 
 export type SparkAskAction = "ask" | "flow";
@@ -141,8 +141,7 @@ export function registerSparkAskActionTool(
       ),
       recordAsEvidence: Type.Optional(
         Type.Boolean({
-          description:
-            "Persist the ask result as an artifact for a later evidence-backed decision gate.",
+          description: "Persist the ask result as canonical evidence for a later decision gate.",
         }),
       ),
       title: Type.Optional(Type.String()),
@@ -353,30 +352,30 @@ async function maybeRecordAskEvidence(
   if (params.recordAsEvidence !== true) return result;
   const cwd = typeof ctx.cwd === "string" ? ctx.cwd : undefined;
   if (!cwd) throw new Error("ask recordAsEvidence requires a workspace cwd");
-  const body: SparkAskEvidenceArtifactBody = {
+  const body: SparkAskEvidenceBody = {
     schema: "spark.ask.evidence/v1",
     request: decodeAutoAnswerRequest(params),
     result: isRecord(result.details) ? (result.details.result ?? null) : null,
     autoAnswered: false,
     recordedAt: new Date().toISOString(),
   };
-  if (!isUserAnsweredAskEvidenceArtifactBody(body)) {
+  if (!isUserAnsweredAskEvidenceBody(body)) {
     if (didHumanAskTimeOut(result)) return result;
     throw new Error("ask.recordAsEvidence requires a completed user-answered result");
   }
-  const artifact = await defaultArtifactStore(cwd).put({
+  const evidence = await defaultEvidenceStore(cwd).put({
     kind: "record",
     title: `Ask evidence: ${optionalString(params.title)?.trim() || "user decision"}`,
     format: "json",
     body: JSON.parse(JSON.stringify(body)) as JsonValue,
     provenance: { producer: "ask" },
   });
-  await recordCanonicalAskEvidenceReceipt(cwd, artifact);
+  await recordCanonicalAskEvidenceReceipt(cwd, evidence);
   return {
     ...result,
     details: {
       ...(isRecord(result.details) ? result.details : {}),
-      askEvidenceRef: artifact.ref,
+      askEvidenceRef: evidence.ref,
     },
   };
 }

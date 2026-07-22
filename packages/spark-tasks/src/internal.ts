@@ -747,7 +747,7 @@ export function taskCompletionReadiness(
       kind: "missing_completion_evidence",
       severity: "blocking",
       evidenceRequired,
-      message: `Task completion needs evidence artifacts: ${evidenceRequired.join("; ")}`,
+      message: `Task completion needs evidence: ${evidenceRequired.join("; ")}`,
     });
   }
   const openItems = (task.plan?.items ?? []).filter(

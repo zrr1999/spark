@@ -668,11 +668,14 @@ export type {
   SparkAskAutoAnswerResolver,
 } from "./action-tool.ts";
 export {
+  isUserAnsweredAskEvidenceBody,
+  verifyCanonicalAskEvidence,
   isUserAnsweredAskEvidenceArtifactBody,
   verifyCanonicalAskEvidenceArtifact,
 } from "./evidence.ts";
 export type {
   CanonicalAskEvidenceAnswer,
+  SparkAskEvidenceBody,
   SparkAskEvidenceArtifactBody,
   VerifiedCanonicalAskEvidence,
 } from "./evidence.ts";

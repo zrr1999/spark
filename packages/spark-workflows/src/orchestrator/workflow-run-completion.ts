@@ -75,7 +75,7 @@ function formatWorkflowRunCompletionDigest(summaries: TaskRunCompletionSummary[]
   const visible = summaries.slice(0, 3).map((summary) => {
     const role = summary.roleRef ? ` role=${summary.roleRef.replace(/^role:/u, "")}` : "";
     const artifacts =
-      summary.artifactRefs.length > 0 ? ` artifacts=${summary.artifactRefs.join(",")}` : "";
+      summary.artifactRefs.length > 0 ? ` evidence=${summary.artifactRefs.join(",")}` : "";
     return `task=${summary.taskRef} run=${summary.runRef} status=${summary.status}${role}: ${summary.summary}${artifacts}`;
   });
   const hidden = summaries.length - visible.length;

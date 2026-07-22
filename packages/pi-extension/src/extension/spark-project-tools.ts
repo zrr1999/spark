@@ -1,5 +1,5 @@
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
-import type { ArtifactRef, JsonValue, ProjectRef } from "@zendev-lab/spark-core";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
+import type { EvidenceRef, JsonValue, ProjectRef } from "@zendev-lab/spark-core";
 import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { clarifyProjectPurposeIfNeeded } from "../flows/project-purpose-flow.ts";
 import { normalizeProjectKindId, renderSparkProjectKindDisplay } from "./project-kind-registry.ts";
@@ -266,21 +266,21 @@ export async function saveProjectPurposeTrace(
   projectRef: ProjectRef,
   clarification: Awaited<ReturnType<typeof clarifyProjectPurposeIfNeeded>>,
 ): Promise<void> {
-  if (!clarification.asked || !clarification.artifactRef) return;
-  await defaultArtifactStore(cwd).put({
+  if (!clarification.asked || !clarification.evidenceRef) return;
+  await defaultEvidenceStore(cwd).put({
     kind: "trace",
     title: "Project purpose clarification",
     format: "json",
     body: {
       projectRef,
-      askArtifactRef: clarification.artifactRef,
+      askEvidenceRef: clarification.evidenceRef,
       summary: clarification.summary,
       blocked: clarification.blocked,
     } as unknown as JsonValue,
     provenance: {
       producer: "task",
       projectRef,
-      parentArtifactRefs: [clarification.artifactRef as ArtifactRef],
+      parentEvidenceRefs: [clarification.evidenceRef as EvidenceRef],
     },
   });
 }

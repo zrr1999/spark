@@ -1,14 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import { detectCopyLanguage } from "@zendev-lab/spark-core";
 import type { CopyLanguage } from "@zendev-lab/spark-core";
 import { builtinRoleRef } from "@zendev-lab/spark-roles";
 import {
   newRef,
   nowIso,
-  type ArtifactRef,
+  type EvidenceRef,
   type AskRef,
   type JsonValue,
   type SparkRunTrace,
@@ -30,7 +30,7 @@ export interface SparkInitOptions {
   outputLanguage?: CopyLanguage;
   clarification?: SparkInitClarificationData;
   sparkMd?: string;
-  askArtifactRefs?: ArtifactRef[];
+  askEvidenceRefs?: EvidenceRef[];
   askRefs?: AskRef[];
   materializeSparkMd?: boolean;
 }
@@ -62,7 +62,7 @@ export async function initializeSparkIdea(
 
   createInitialSparkTasks(graph, project.ref, idea, options.clarification);
 
-  const store = defaultArtifactStore(cwd);
+  const store = defaultEvidenceStore(cwd);
   const sparkMd =
     options.sparkMd ??
     renderSparkMd({ idea, workingTitle: projectTitle, clarification: options.clarification });
@@ -87,7 +87,7 @@ export async function initializeSparkIdea(
     provenance: {
       producer: "task",
       projectRef: project.ref,
-      parentArtifactRefs: [sparkMdArtifact.ref],
+      parentEvidenceRefs: [sparkMdArtifact.ref],
     },
   });
 
@@ -95,7 +95,7 @@ export async function initializeSparkIdea(
     ref: newRef("spark"),
     idea,
     projectRef: project.ref,
-    sparkMdArtifactRef: sparkMdArtifact.ref,
+    sparkMdEvidenceRef: sparkMdArtifact.ref,
     taskRefs: graph.tasks(project.ref).map((task) => task.ref),
     reviewRefs: [],
     askRefs: options.askRefs ?? [],
@@ -111,7 +111,7 @@ export async function initializeSparkIdea(
     provenance: {
       producer: "task",
       projectRef: project.ref,
-      parentArtifactRefs: [sparkMdArtifact.ref, rolePlanArtifact.ref],
+      parentEvidenceRefs: [sparkMdArtifact.ref, rolePlanArtifact.ref],
     },
   });
   await saveSparkGraphAndTodos(cwd, graph, undefined, defaultTaskGraphStore(cwd));
@@ -129,10 +129,10 @@ export async function initializeSparkIdea(
     currentTaskTitle: currentTask?.title,
     todoSummary: compactTodoSummary(todoSummary),
     sparkMdPath,
-    sparkMdArtifactRef: sparkMdArtifact.ref,
-    rolePlanArtifactRef: rolePlanArtifact.ref,
+    sparkMdEvidenceRef: sparkMdArtifact.ref,
+    rolePlanEvidenceRef: rolePlanArtifact.ref,
     traceRef: trace.ref,
-    askArtifactRefs: options.askArtifactRefs ?? [],
+    askEvidenceRefs: options.askEvidenceRefs ?? [],
   };
 }
 
@@ -236,10 +236,10 @@ async function sparkInitResultFromExisting(
     currentTaskTitle: currentTask?.title,
     todoSummary: compactTodoSummary(todoSummary),
     sparkMdPath,
-    sparkMdArtifactRef: "artifact:existing" as ArtifactRef,
-    rolePlanArtifactRef: "artifact:existing" as ArtifactRef,
+    sparkMdEvidenceRef: "evidence:existing" as EvidenceRef,
+    rolePlanEvidenceRef: "evidence:existing" as EvidenceRef,
     traceRef: "spark:existing",
-    askArtifactRefs: options.askArtifactRefs ?? [],
+    askEvidenceRefs: options.askEvidenceRefs ?? [],
   };
 }
 

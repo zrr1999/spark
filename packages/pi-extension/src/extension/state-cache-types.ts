@@ -11,7 +11,8 @@ export type SparkStateCacheKind =
   | "legacy-task-todos";
 
 export type SparkProtectedStoreReason =
-  | "artifact-history"
+  | "evidence-history"
+  | "product-artifacts"
   | "task-graph"
   | "todo-records"
   | "session-state"

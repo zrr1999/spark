@@ -219,6 +219,78 @@ describe("runtime WebSocket handling", () => {
     db.close();
   });
 
+  it("projects product artifact tool updates into Cockpit Markdown previews", () => {
+    const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
+    const workspace = createWorkspace(db, workspaceBindingId, now);
+
+    ws.emitMessage({
+      protocolVersion: runtimeProtocolVersion,
+      messageId: createId("msg"),
+      type: "daemon.event",
+      sentAt: now,
+      runtimeId,
+      workspaceBindingId,
+      workspaceId: workspace.id,
+      payload: {
+        type: "daemon.view_event",
+        source: "daemon",
+        sessionId: "session-repro",
+        view: {
+          type: "artifact.update",
+          artifact: {
+            ref: "artifact:repro-progress",
+            title: "Repro progress",
+            kind: "preview",
+            format: "mdx",
+            updatedAt: now,
+            preview: "# Repro progress\n\n- probe passed\n",
+            contentRef: {
+              sparkArtifactRef: "artifact:repro-progress",
+              inlineMarkdown: "# Repro progress\n\n- probe passed\n",
+            },
+          },
+        },
+      },
+    });
+
+    const artifact = db
+      .prepare(
+        `SELECT id, kind, format, size_bytes AS sizeBytes, content_ref_json AS contentRefJson
+         FROM artifacts
+         WHERE id = ?`,
+      )
+      .get("repro-progress") as {
+      id: string;
+      kind: string;
+      format: string;
+      sizeBytes: number;
+      contentRefJson: string;
+    };
+    expect(artifact).toMatchObject({
+      id: "repro-progress",
+      kind: "preview",
+      format: "markdown",
+      sizeBytes: Buffer.byteLength("# Repro progress\n\n- probe passed\n", "utf8"),
+    });
+    expect(JSON.parse(artifact.contentRefJson)).toMatchObject({
+      sparkArtifactRef: "artifact:repro-progress",
+      inlineMarkdown: "# Repro progress\n\n- probe passed\n",
+    });
+    const link = db
+      .prepare(
+        `SELECT target_kind AS targetKind, target_id AS targetId, relation
+         FROM artifact_links
+         WHERE artifact_id = ?`,
+      )
+      .get("repro-progress");
+    expect(link).toEqual({
+      targetKind: "session",
+      targetId: "session-repro",
+      relation: "produced-in",
+    });
+    db.close();
+  });
+
   it("rejects stale runtime routes after their Cockpit owner binding is ended", () => {
     const { db, ws, now, runtimeId, workspaceBindingId } = setupRuntime();
     const workspace = createWorkspace(db, workspaceBindingId, now);

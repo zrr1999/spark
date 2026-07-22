@@ -62,6 +62,7 @@ export interface SessionWorkbenchRun {
   runtimeStatus: string | null;
   latestOutput: string | null;
   artifactRefs: string[];
+  evidenceRefs: string[];
 }
 
 export interface SessionWorkbenchTask {
@@ -78,6 +79,7 @@ export interface SessionWorkbenchTask {
   todos: SessionWorkbenchTodo[];
   runRefs: string[];
   artifactRefs: string[];
+  evidenceRefs: string[];
 }
 
 export interface SessionWorkbenchTodo {
@@ -241,18 +243,18 @@ export function buildSessionWorkbenchView(input: {
     ...input.session.artifacts.map(sessionArtifact),
     ...reports.filter(isArtifactReport).map(activityArtifact),
   ]);
-  const evidence = deduplicateArtifacts([
+  const projectedEvidence = deduplicateArtifacts([
     ...(input.session.evidence ?? []).map(sessionEvidence),
-    ...artifacts.filter(
-      (artifact) => !SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind) && !artifact.canonicalChange,
-    ),
     ...reports.filter(isEvidenceReport).map(activityEvidence),
   ]);
 
   const productArtifacts = artifacts.filter((artifact) =>
     SESSION_PRODUCT_ARTIFACT_KINDS.has(artifact.kind),
   );
-  const changeArtifacts = artifacts.filter((artifact) => artifact.canonicalChange);
+  const changeArtifacts = deduplicateArtifacts([...artifacts, ...projectedEvidence]).filter(
+    (artifact) => artifact.canonicalChange,
+  );
+  const evidence = projectedEvidence.filter((entry) => !entry.canonicalChange);
 
   return {
     runs: sortByRecency(runs),
@@ -337,6 +339,7 @@ function sessionRun(run: SparkSessionView["runs"][number]): SessionWorkbenchRun 
     runtimeStatus: null,
     latestOutput: null,
     artifactRefs: [...run.artifactRefs],
+    evidenceRefs: [...run.evidenceRefs],
   };
 }
 
@@ -378,6 +381,7 @@ function mergeActivityCommands(
       runtimeStatus: command.runtimeStatus,
       latestOutput: boundedText(command.latestLog, MAX_OUTPUT_CHARS),
       artifactRefs: [],
+      evidenceRefs: [],
     });
   }
 }
@@ -426,6 +430,7 @@ function appendRunReports(
       runtimeStatus: null,
       latestOutput: null,
       artifactRefs: [],
+      evidenceRefs: [],
     });
   }
 }
@@ -446,6 +451,7 @@ function sessionTask(task: SparkSessionView["tasks"][number]): SessionWorkbenchT
     todos: task.todos.map((todo) => ({ ...todo, notes: [...todo.notes] })),
     runRefs: [...task.runRefs],
     artifactRefs: [...task.artifactRefs],
+    evidenceRefs: [...task.evidenceRefs],
   };
 }
 
@@ -464,6 +470,7 @@ function activityTask(report: SessionWorkbenchActivityReport): SessionWorkbenchT
     todos: [],
     runRefs: [],
     artifactRefs: [],
+    evidenceRefs: [],
   };
 }
 
@@ -501,7 +508,7 @@ function sessionEvidence(
     createdAt: evidence.createdAt ?? null,
     updatedAt: evidence.updatedAt ?? null,
     preview: boundedText(evidence.preview, MAX_PREVIEW_CHARS),
-    canonicalChange: false,
+    canonicalChange: hasCanonicalDiffMarker(evidence.metadata),
   };
 }
 

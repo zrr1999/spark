@@ -247,7 +247,7 @@ async function resolveValidEvidenceRefs(
     try {
       if (await store.tryGet(ref as ArtifactRef | EvidenceRef)) valid.push(ref);
     } catch {
-      // A malformed or unreadable evidence artifact fails closed for this candidate.
+      // A malformed or unreadable evidence entry fails closed for this candidate.
     }
   }
   return valid;

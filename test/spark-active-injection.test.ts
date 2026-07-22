@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 import {
   handleSparkInput,
@@ -84,7 +84,7 @@ test("handleSparkInput lets an ordinary investigation request continue in plan",
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
+      assert.equal((await defaultEvidenceStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
@@ -103,7 +103,7 @@ test("handleSparkInput does not turn until-done input into a template ask", asyn
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
+      assert.equal((await defaultEvidenceStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
@@ -128,7 +128,7 @@ test("handleSparkInput lets active goal input bypass phase route ask", async () 
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
+      assert.equal((await defaultEvidenceStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );
@@ -218,7 +218,7 @@ test("handleSparkInput lets slash commands bypass default plan routing", async (
       assert.equal(ctx.selectCalls.length, 0);
       assert.equal(customMessages.length, 0);
       assert.equal(queuedInstructions.length, 0);
-      assert.equal((await defaultArtifactStore(dir).list({ producer: "ask" })).length, 0);
+      assert.equal((await defaultEvidenceStore(dir).list({ producer: "ask" })).length, 0);
       assert.equal((await loadSparkMode(dir, ctx)).mode, "plan");
     },
   );

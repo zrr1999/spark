@@ -1,5 +1,5 @@
 import type { CopyLanguage } from "@zendev-lab/spark-core";
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 
 export interface SparkInitResult {
   cwd: string;
@@ -21,10 +21,10 @@ export interface SparkInitResult {
     cancelled: number;
   };
   sparkMdPath?: string;
-  sparkMdArtifactRef: string;
-  rolePlanArtifactRef: string;
+  sparkMdEvidenceRef: EvidenceRef;
+  rolePlanEvidenceRef: EvidenceRef;
   traceRef: string;
-  askArtifactRefs: ArtifactRef[];
+  askEvidenceRefs: EvidenceRef[];
 }
 
 export function renderSparkInitFollowUp(result: SparkInitResult): string {
@@ -58,11 +58,12 @@ export function renderSparkInitSummary(result: SparkInitResult): string {
         ? `- 当前 task：${result.currentTaskTitle} (${result.currentTaskRef})`
         : "- 当前 task：无",
       `- 当前 TODO：${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
-      `- Intent record：${result.sparkMdArtifactRef}`,
-      `- Plan record：${result.rolePlanArtifactRef}`,
+      `- Intent evidence：${result.sparkMdEvidenceRef}`,
+      `- Plan evidence：${result.rolePlanEvidenceRef}`,
       `- Trace：${result.traceRef}`,
     ];
-    for (const askRef of result.askArtifactRefs) lines.push(`- Clarification ask：${askRef}`);
+    for (const askRef of result.askEvidenceRefs)
+      lines.push(`- Clarification ask evidence：${askRef}`);
     return lines.join("\n");
   }
 
@@ -79,11 +80,12 @@ export function renderSparkInitSummary(result: SparkInitResult): string {
       ? `- Current task: ${result.currentTaskTitle} (${result.currentTaskRef})`
       : "- Current task: none",
     `- Current TODOs: ${result.todoSummary.total} total / ${result.todoSummary.inProgress} in_progress / ${result.todoSummary.pending} pending / ${result.todoSummary.done} done`,
-    `- Intent record: ${result.sparkMdArtifactRef}`,
-    `- Plan record: ${result.rolePlanArtifactRef}`,
+    `- Intent evidence: ${result.sparkMdEvidenceRef}`,
+    `- Plan evidence: ${result.rolePlanEvidenceRef}`,
     `- Trace: ${result.traceRef}`,
   ];
-  for (const askRef of result.askArtifactRefs) lines.push(`- Clarification ask: ${askRef}`);
+  for (const askRef of result.askEvidenceRefs)
+    lines.push(`- Clarification ask evidence: ${askRef}`);
   return lines.join("\n");
 }
 

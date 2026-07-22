@@ -13,7 +13,7 @@ import {
 import {
   newRef,
   nowIso,
-  type ArtifactRef,
+  type EvidenceRef,
   type ExtensionRoleRunner,
   type ProjectRef,
   type RoleRef,
@@ -33,14 +33,14 @@ export interface TaskReviewInput {
   task: Task;
   requestedStatus: "done" | "failed" | "cancelled";
   summary?: string;
-  evidenceRefs: ArtifactRef[];
+  evidenceRefs: EvidenceRef[];
   evidencePreviews?: GoalReviewEvidencePreview[];
   sessionKey?: string;
   forkFromSession?: string;
 }
 
 export interface GoalReviewEvidencePreview {
-  ref: ArtifactRef;
+  ref: EvidenceRef;
   title?: string;
   kind?: string;
   format?: string;
@@ -55,7 +55,7 @@ export interface GoalReviewRequirement {
   id: string;
   description: string;
   status: GoalReviewRequirementStatus;
-  evidenceRefs: ArtifactRef[];
+  evidenceRefs: EvidenceRef[];
   note?: string;
 }
 
@@ -98,7 +98,7 @@ export interface GoalReviewInput {
   requestedStatus: "paused" | "complete" | "edited";
   reason?: string;
   proposedObjective?: string;
-  evidenceRefs: ArtifactRef[];
+  evidenceRefs: EvidenceRef[];
   evidencePreviews?: GoalReviewEvidencePreview[];
   /** Machine-readable completion claims. Legacy callers derive one objective requirement. */
   requirements?: GoalReviewRequirement[];

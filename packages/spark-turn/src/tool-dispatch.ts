@@ -16,7 +16,7 @@ import type { SparkTurnRegisteredTool } from "./turn-types.ts";
 import type { SparkToolApprovalMethod, SparkToolApprovalRejectAction } from "./turn-types.ts";
 
 export type ToolResultRawRecoveryRecord = {
-  artifactRef: string;
+  evidenceRef: string;
   reason: SparkToolResultRawRecoveryDecision["reason"];
   omittedChars: number;
   bodyChars: number;
@@ -45,7 +45,7 @@ export function mergeToolResultDetails(
     ...(rawRecovery
       ? {
           toolResultRawRecovery: {
-            artifactRef: rawRecovery.artifactRef,
+            evidenceRef: rawRecovery.evidenceRef,
             reason: rawRecovery.reason,
             omittedChars: rawRecovery.omittedChars,
             bodyChars: rawRecovery.bodyChars,
@@ -57,12 +57,12 @@ export function mergeToolResultDetails(
   };
 }
 
-export function rawToolResultRecoveryPath(artifactRef: string): SparkToolResultRawRecoveryPath {
+export function rawToolResultRecoveryPath(evidenceRef: string): SparkToolResultRawRecoveryPath {
   return {
-    kind: "artifact",
-    artifactRef,
+    kind: "evidence",
+    evidenceRef,
     readTool: "evidence",
-    readArgs: { action: "read", artifactRef, maxChars: 20_000 },
+    readArgs: { action: "read", evidenceRef, maxChars: 20_000 },
   };
 }
 
@@ -80,7 +80,7 @@ export function appendRawRecoveryHint(
   );
 }
 
-export function rawToolResultArtifactBody(
+export function rawToolResultEvidenceBody(
   content: Array<{ type: string; text?: string; [key: string]: unknown }>,
 ): { format: "text" | "json"; body: string | Record<string, unknown>; bodyChars: number } {
   if (content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string") {
@@ -96,23 +96,23 @@ export function rawToolOutputProducer(toolName: string): "spark" | "cue" {
     : "spark";
 }
 
-export function artifactRefFromToolResult(result: {
+export function evidenceRefFromToolResult(result: {
   content?: unknown;
   details?: unknown;
 }): string | undefined {
   const details = isPlainRecord(result.details) ? result.details : undefined;
   const refs = isPlainRecord(details?.refs) ? details.refs : undefined;
-  const fromRefs = stringField(refs, "artifactRef");
-  if (fromRefs?.startsWith("artifact:")) return fromRefs;
-  const artifact = isPlainRecord(details?.artifact) ? details.artifact : undefined;
-  const fromArtifact = stringField(artifact, "ref");
-  if (fromArtifact?.startsWith("artifact:")) return fromArtifact;
+  const fromRefs = stringField(refs, "evidenceRef");
+  if (fromRefs?.startsWith("evidence:")) return fromRefs;
+  const evidence = isPlainRecord(details?.evidence) ? details.evidence : undefined;
+  const fromEvidence = stringField(evidence, "ref");
+  if (fromEvidence?.startsWith("evidence:")) return fromEvidence;
   const text = Array.isArray(result.content)
     ? result.content
         .map((part) => (isPlainRecord(part) && typeof part.text === "string" ? part.text : ""))
         .join("\n")
     : "";
-  return text.match(/artifact:[A-Za-z0-9._:-]+/u)?.[0];
+  return text.match(/evidence:[A-Za-z0-9._:-]+/u)?.[0];
 }
 
 export function jsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {

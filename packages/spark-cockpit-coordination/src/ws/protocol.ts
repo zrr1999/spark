@@ -19,6 +19,8 @@ import {
   runtimeReconcileReportEnvelopeSchema,
   parseSparkDaemonEvent,
   serializeServerCommandEnvelope,
+  type SparkArtifactView,
+  type SparkDaemonEvent,
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
@@ -434,6 +436,7 @@ export function handleMvpRuntimeMessage(
       return true;
     }
     const parsedDaemonEvent = parseSparkDaemonEvent(daemonEvent.data.payload);
+    projectProductArtifactView(context.db, routed, parsedDaemonEvent);
     appendEvent(context.db, {
       workspaceId: routed.workspaceId,
       projectId: routed.projectId ?? null,
@@ -490,6 +493,107 @@ export function handleMvpRuntimeMessage(
   }
 
   return false;
+}
+
+function projectProductArtifactView(
+  db: DatabaseSync,
+  route: {
+    workspaceBindingId: string;
+    workspaceId: string;
+    projectId?: string;
+    invocationId?: string;
+    humanRequestId: string;
+  },
+  event: SparkDaemonEvent,
+): void {
+  if (event.type !== "daemon.view_event" || event.view.type !== "artifact.update") return;
+  const artifact = event.view.artifact;
+  if (artifact.kind !== "issue" && artifact.kind !== "pr" && artifact.kind !== "preview") return;
+
+  const artifactId = artifact.ref.startsWith("artifact:")
+    ? artifact.ref.slice("artifact:".length)
+    : artifact.ref;
+  if (!artifactId) return;
+  const contentRef = productArtifactContentRef(artifact);
+  const format = productArtifactProjectionFormat(artifact);
+  const invocationId = event.invocationId ?? route.invocationId;
+  const sessionId = event.sessionId;
+  recordArtifactProjection(db, {
+    runtimeWorkspaceBindingId: route.workspaceBindingId,
+    workspaceId: route.workspaceId,
+    projectId: route.projectId ?? null,
+    invocationId: invocationId ?? null,
+    humanRequestId: route.humanRequestId || null,
+    createdAt: artifact.updatedAt ?? artifact.createdAt ?? event.emittedAt,
+    payload: {
+      artifactId,
+      scope: route.projectId ? "project" : "workspace",
+      kind: artifact.kind,
+      title: artifact.title,
+      format,
+      source: "runtime",
+      sizeBytes: inlineContentSize(contentRef),
+      mime:
+        format === "markdown"
+          ? "text/markdown; charset=utf-8"
+          : format === "json"
+            ? "application/json"
+            : "text/plain; charset=utf-8",
+      contentRef,
+      provenance: {
+        sparkArtifactRef: artifact.ref,
+        ...(sessionId ? { sessionId } : {}),
+        ...(invocationId ? { runtimeInvocationId: invocationId } : {}),
+        ...(artifact.producer ? { producer: artifact.producer } : {}),
+      },
+      links: [
+        ...(sessionId
+          ? [{ targetKind: "session", targetId: sessionId, relation: "produced-in" }]
+          : []),
+        ...(invocationId
+          ? [{ targetKind: "invocation", targetId: invocationId, relation: "produced-by" }]
+          : []),
+      ],
+    },
+  });
+}
+
+function productArtifactContentRef(artifact: SparkArtifactView): Record<string, unknown> {
+  const contentRef = artifact.contentRef ? { ...artifact.contentRef } : {};
+  contentRef.sparkArtifactRef = artifact.ref;
+  if (
+    artifact.preview &&
+    !("inlineMarkdown" in contentRef) &&
+    !("inlineText" in contentRef) &&
+    !("inlineJson" in contentRef)
+  ) {
+    if (artifact.format === "markdown" || artifact.format === "mdx") {
+      contentRef.inlineMarkdown = artifact.preview;
+    } else {
+      contentRef.inlineText = artifact.preview;
+    }
+  }
+  return contentRef;
+}
+
+function productArtifactProjectionFormat(
+  artifact: SparkArtifactView,
+): "markdown" | "json" | "text" | "blob" {
+  if (artifact.format === "markdown" || artifact.format === "mdx") return "markdown";
+  if (artifact.format === "json") return "json";
+  if (artifact.format === "text" || artifact.format === "html") return "text";
+  return "blob";
+}
+
+function inlineContentSize(contentRef: Record<string, unknown>): number | undefined {
+  for (const key of ["inlineMarkdown", "inlineText"]) {
+    const value = contentRef[key];
+    if (typeof value === "string") return Buffer.byteLength(value, "utf8");
+  }
+  if ("inlineJson" in contentRef) {
+    return Buffer.byteLength(JSON.stringify(contentRef.inlineJson), "utf8");
+  }
+  return undefined;
 }
 
 function validateRecordedHumanResponseRoute(

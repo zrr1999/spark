@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import { evaluateSparkBehavior } from "@zendev-lab/spark-turn/behavior-eval";
 import {
@@ -1202,14 +1202,32 @@ test("SparkAgentLoop dispatches tool calls and feeds tool results back into the 
             title: "Echo task",
             status: "running",
             projectRef: "proj:echo",
-            outputArtifacts: ["artifact:echo-1"],
+            outputArtifacts: ["evidence:echo-1"],
           },
-          artifact: {
-            ref: "artifact:echo-1",
-            title: "Echo artifact",
+          evidence: {
+            ref: "evidence:echo-1",
+            title: "Echo evidence",
             kind: "record",
             format: "json",
             producer: "task",
+          },
+          productArtifact: {
+            ref: "artifact:repro-progress",
+            title: "Repro progress",
+            kind: "preview",
+            format: "mdx",
+            body: {
+              kind: "preview",
+              format: "md",
+              content: "# Repro progress\n\n- focused probe passed\n",
+              version: 2,
+            },
+          },
+          productArtifactSummary: {
+            ref: "artifact:summary-only",
+            title: "Summary only",
+            kind: "preview",
+            updatedAt: "2026-07-22T00:00:00.000Z",
           },
         },
       };
@@ -1305,7 +1323,7 @@ test("SparkAgentLoop dispatches tool calls and feeds tool results back into the 
         event.type === "task.update" &&
         event.task.ref === "task:echo-1" &&
         event.task.status === "running" &&
-        event.task.artifactRefs.includes("artifact:echo-1") &&
+        event.task.evidenceRefs.includes("evidence:echo-1") &&
         event.task.metadata.sourceTool === "echo",
     ),
     true,
@@ -1314,11 +1332,31 @@ test("SparkAgentLoop dispatches tool calls and feeds tool results back into the 
     viewEvents.some(
       (event: any) =>
         event.type === "evidence.update" &&
-        event.evidence.ref === "artifact:echo-1" &&
+        event.evidence.ref === "evidence:echo-1" &&
         event.evidence.kind === "record" &&
         event.evidence.metadata.sourceTool === "echo",
     ),
     true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "artifact.update" &&
+        event.artifact.ref === "artifact:repro-progress" &&
+        event.artifact.kind === "preview" &&
+        event.artifact.preview === "# Repro progress\n\n- focused probe passed\n" &&
+        event.artifact.contentRef.inlineMarkdown ===
+          "# Repro progress\n\n- focused probe passed\n" &&
+        event.artifact.metadata.sourceTool === "echo",
+    ),
+    true,
+  );
+  assert.equal(
+    viewEvents.some(
+      (event: any) =>
+        event.type === "artifact.update" && event.artifact.ref === "artifact:summary-only",
+    ),
+    false,
   );
 });
 
@@ -1996,44 +2034,44 @@ test("SparkAgentLoop records raw trace artifact for large lossy compacted tool o
     const toolResult = loop.getMessages().find((message) => message.role === "toolResult");
     const text = (toolResult as { content: Array<{ text?: string }> }).content[0]?.text ?? "";
     assert.match(text, /\[4497 blank lines collapsed\]/);
-    assert.match(text, /\[recovery\] Full raw tool output saved as artifact:/);
+    assert.match(text, /\[recovery\] Full raw tool output saved as evidence:/);
     assert.match(
       text,
-      /evidence\(\{ action: "read", artifactRef: "artifact:[^"]+", maxChars: 20000 \}\)/,
+      /evidence\(\{ action: "read", evidenceRef: "evidence:[^"]+", maxChars: 20000 \}\)/,
     );
     assert.equal((toolResult as { toolCallId?: string }).toolCallId, toolCallEnvelope.id);
     assert.equal((toolResult as { toolName?: string }).toolName, toolCallEnvelope.name);
     assert.equal((toolResult as { isError?: boolean }).isError, false);
     const recovery = (toolResult as { details?: { toolResultRawRecovery?: any } }).details
       ?.toolResultRawRecovery;
-    assert.match(recovery.artifactRef, /^artifact:/);
+    assert.match(recovery.evidenceRef, /^evidence:/);
     assert.equal(recovery.reason, "lossy_compaction");
     assert.equal(recovery.bodyChars, noisyOutput.length);
     assert.deepEqual(recovery.recoveryPath, {
-      kind: "artifact",
-      artifactRef: recovery.artifactRef,
+      kind: "evidence",
+      evidenceRef: recovery.evidenceRef,
       readTool: "evidence",
-      readArgs: { action: "read", artifactRef: recovery.artifactRef, maxChars: 20_000 },
+      readArgs: { action: "read", evidenceRef: recovery.evidenceRef, maxChars: 20_000 },
     });
 
-    const store = defaultArtifactStore(dir);
-    const artifact = await store.get(recovery.artifactRef);
-    assert.equal(artifact.kind, "trace");
-    assert.equal(artifact.format, "text");
-    assert.equal(artifact.curation?.status, "raw");
-    assert.equal(artifact.curation?.retention, "ephemeral");
-    assert.equal(artifact.provenance.producer, "cue");
+    const store = defaultEvidenceStore(dir);
+    const evidence = await store.get(recovery.evidenceRef);
+    assert.equal(evidence.kind, "trace");
+    assert.equal(evidence.format, "text");
+    assert.equal(evidence.curation?.status, "raw");
+    assert.equal(evidence.curation?.retention, "ephemeral");
+    assert.equal(evidence.provenance.producer, "cue");
     assert.equal(
-      artifact.provenance.note,
+      evidence.provenance.note,
       "Raw recoverable tool result for cue_exec (lossy_compaction)",
     );
-    assert.equal(await store.getBody(recovery.artifactRef), noisyOutput);
+    assert.equal(await store.getBody(recovery.evidenceRef), noisyOutput);
 
     const artifactTool = host.getTool("evidence");
     assert.ok(artifactTool);
     const readResult = await artifactTool.config.execute(
       "read-raw-output",
-      { action: "read", artifactRef: recovery.artifactRef, maxChars: noisyOutput.length + 200 },
+      { action: "read", evidenceRef: recovery.evidenceRef, maxChars: noisyOutput.length + 200 },
       new AbortController().signal,
       () => undefined,
       host.makeContext(),
@@ -2043,7 +2081,7 @@ test("SparkAgentLoop records raw trace artifact for large lossy compacted tool o
       .join("\n");
     assert.match(
       readText,
-      new RegExp(`${recovery.artifactRef} \\[trace\\] Raw tool output for cue_exec`),
+      new RegExp(`${recovery.evidenceRef} \\[trace\\] Raw tool output for cue_exec`),
     );
     assert.match(readText, /alpha/);
     assert.match(readText, /omega/);
@@ -2058,7 +2096,7 @@ test("SparkAgentLoop records raw trace artifact for large lossy compacted tool o
     const defaultListText = defaultList.content
       .map((part: { text?: string }) => part.text ?? "")
       .join("\n");
-    assert.doesNotMatch(defaultListText, new RegExp(recovery.artifactRef));
+    assert.doesNotMatch(defaultListText, new RegExp(recovery.evidenceRef));
 
     const explicitRawList = await artifactTool.config.execute(
       "list-explicit-raw",
@@ -2070,7 +2108,7 @@ test("SparkAgentLoop records raw trace artifact for large lossy compacted tool o
     const explicitRawListText = explicitRawList.content
       .map((part: { text?: string }) => part.text ?? "")
       .join("\n");
-    assert.match(explicitRawListText, new RegExp(recovery.artifactRef));
+    assert.match(explicitRawListText, new RegExp(recovery.evidenceRef));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2129,9 +2167,9 @@ test("SparkAgentLoop offloads failed long output while preserving diagnostics an
     assert.match(text, /exit code: 7/u);
     assert.match(text, /evidence\(\{ action: "read"/u);
     assert.equal(result.details.toolResultRawRecovery.reason, "error_compaction");
-    const store = defaultArtifactStore(dir);
-    const artifact = await store.get(result.details.toolResultRawRecovery.artifactRef);
-    assert.equal(await store.getBody(artifact.ref), diagnostic);
+    const store = defaultEvidenceStore(dir);
+    const evidence = await store.get(result.details.toolResultRawRecovery.evidenceRef);
+    assert.equal(await store.getBody(evidence.ref), diagnostic);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

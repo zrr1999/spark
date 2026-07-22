@@ -18,7 +18,7 @@ test("learning store records active learnings and searches by content", async ()
   const dir = await mkdtemp(join(tmpdir(), "spark-memory-learning-"));
   try {
     const store = new LearningStore({ artifactStore: new ArtifactStore({ rootDir: dir }) });
-    const evidenceRef = newRef("artifact", "evidence-plan");
+    const evidenceRef = newRef("evidence", "plan");
     const recorded = await store.record({
       title: "Prefer explicit export for shared knowledge",
       statement:

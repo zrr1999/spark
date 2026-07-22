@@ -574,42 +574,10 @@ function applyDaemonEvent(
     return { changed: true, refreshActivity: false };
   }
   if (viewEvent.type === "artifact.update") {
-    const kind = viewEvent.artifact.kind;
-    if (kind === "issue" || kind === "pr" || kind === "preview") {
-      state.view = {
-        ...current,
-        artifacts: upsertByKey(current.artifacts, viewEvent.artifact, (artifact) => artifact.ref),
-        updatedAt: viewEvent.artifact.updatedAt ?? viewEvent.artifact.createdAt ?? event.createdAt,
-      };
-      return { changed: true, refreshActivity: false };
-    }
-    // Legacy artifact.update for evidence kinds — land in the evidence lane.
-    const evidence = {
-      version: viewEvent.artifact.version,
-      ref: viewEvent.artifact.ref,
-      title: viewEvent.artifact.title,
-      kind:
-        kind === "document" || kind === "record" || kind === "trace" || kind === "knowledge"
-          ? kind
-          : ("other" as const),
-      format:
-        viewEvent.artifact.format === "markdown" ||
-        viewEvent.artifact.format === "json" ||
-        viewEvent.artifact.format === "text" ||
-        viewEvent.artifact.format === "blob"
-          ? viewEvent.artifact.format
-          : ("other" as const),
-      ...(viewEvent.artifact.status ? { status: viewEvent.artifact.status } : {}),
-      ...(viewEvent.artifact.producer ? { producer: viewEvent.artifact.producer } : {}),
-      ...(viewEvent.artifact.createdAt ? { createdAt: viewEvent.artifact.createdAt } : {}),
-      ...(viewEvent.artifact.updatedAt ? { updatedAt: viewEvent.artifact.updatedAt } : {}),
-      ...(viewEvent.artifact.preview ? { preview: viewEvent.artifact.preview } : {}),
-      metadata: viewEvent.artifact.metadata,
-    };
     state.view = {
       ...current,
-      evidence: upsertByKey(current.evidence ?? [], evidence, (item) => item.ref),
-      updatedAt: evidence.updatedAt ?? evidence.createdAt ?? event.createdAt,
+      artifacts: upsertByKey(current.artifacts, viewEvent.artifact, (artifact) => artifact.ref),
+      updatedAt: viewEvent.artifact.updatedAt ?? viewEvent.artifact.createdAt ?? event.createdAt,
     };
     return { changed: true, refreshActivity: false };
   }

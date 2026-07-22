@@ -168,8 +168,8 @@ function formatRoleRunCompletionLine(summary: TaskRunCompletionSummary): string 
   const hiddenArtifactRefs = summary.artifactRefs.length - visibleArtifactRefs.length;
   const artifacts =
     summary.artifactRefs.length > 0
-      ? ` artifacts=${visibleArtifactRefs.join(",")}${hiddenArtifactRefs > 0 ? `,…+${hiddenArtifactRefs}` : ""}`
-      : " artifacts=none";
+      ? ` evidence=${visibleArtifactRefs.join(",")}${hiddenArtifactRefs > 0 ? `,…+${hiddenArtifactRefs}` : ""}`
+      : " evidence=none";
   return `- [${summary.status}] task=${summary.taskRef} run=${summary.runRef}${role}${runName} — ${truncateInline(summary.summary, 180)}${artifacts}`;
 }
 

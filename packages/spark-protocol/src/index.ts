@@ -63,6 +63,8 @@ export type SparkJsonObject = z.infer<typeof sparkJsonObjectSchema>;
 export const sparkProtocolVersionSchema = z.literal(SPARK_PROTOCOL_VERSION);
 export const sparkIsoDateTimeSchema = z.string().datetime({ offset: true });
 export const sparkRefSchema = z.string().min(1);
+export const sparkArtifactRefSchema = z.string().regex(/^artifact:[^:]+$/u);
+export const sparkEvidenceRefSchema = z.string().regex(/^evidence:[^:]+$/u);
 
 export const sparkViewModelStatusSchema = z.enum([
   "idle",
@@ -215,7 +217,8 @@ export const sparkRunViewSchema = z.object({
   summary: z.string().optional(),
   startedAt: sparkIsoDateTimeSchema.optional(),
   completedAt: sparkIsoDateTimeSchema.optional(),
-  artifactRefs: z.array(sparkRefSchema).default([]),
+  artifactRefs: z.array(sparkArtifactRefSchema).default([]),
+  evidenceRefs: z.array(sparkEvidenceRefSchema).default([]),
   metadata: sparkJsonObjectSchema.default({}),
 });
 
@@ -238,33 +241,32 @@ export const sparkTaskViewSchema = z.object({
   projectRef: sparkRefSchema.optional(),
   todos: z.array(sparkTaskTodoViewSchema).default([]),
   runRefs: z.array(sparkRefSchema).default([]),
-  artifactRefs: z.array(sparkRefSchema).default([]),
+  artifactRefs: z.array(sparkArtifactRefSchema).default([]),
+  evidenceRefs: z.array(sparkEvidenceRefSchema).default([]),
   metadata: sparkJsonObjectSchema.default({}),
 });
 
-/**
- * Product-facing deliverables (Cockpit 产物): issue / pr / preview.
- * Legacy snapshots may still carry evidence kinds here; new emits use
- * `evidence.update` + `sparkEvidenceViewSchema` instead.
- */
+/** Product-facing deliverables (Cockpit 产物): issue / pr / preview. */
 export const sparkArtifactViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
-  ref: sparkRefSchema,
+  ref: sparkArtifactRefSchema,
   title: z.string().min(1),
-  kind: z.enum(["document", "record", "trace", "knowledge", "issue", "pr", "preview", "other"]),
-  format: z.enum(["markdown", "json", "text", "mdx", "html", "blob", "other"]),
+  kind: z.enum(["issue", "pr", "preview"]),
+  format: z.enum(["markdown", "json", "text", "mdx", "html"]),
   status: z.string().optional(),
   producer: z.string().optional(),
   createdAt: sparkIsoDateTimeSchema.optional(),
   updatedAt: sparkIsoDateTimeSchema.optional(),
   preview: z.string().optional(),
+  /** Display-safe inline body or a resolvable product-artifact reference for Cockpit preview. */
+  contentRef: sparkJsonObjectSchema.optional(),
   metadata: sparkJsonObjectSchema.default({}),
 });
 
 /** Agent-internal ledger notes (not Cockpit 产物). Prefer `evidence:` refs. */
 export const sparkEvidenceViewSchema = z.object({
   version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
-  ref: sparkRefSchema,
+  ref: sparkEvidenceRefSchema,
   title: z.string().min(1),
   kind: z.enum(["document", "record", "trace", "knowledge", "other"]),
   format: z.enum(["markdown", "json", "text", "blob", "other"]),

@@ -85,6 +85,7 @@ describe("session status formatting", () => {
             kind: "session",
             status: "running",
             artifactRefs: [],
+            evidenceRefs: [],
             metadata: {
               usageTotals: {
                 inputTokens: 40,
