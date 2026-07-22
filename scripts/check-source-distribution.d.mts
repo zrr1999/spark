@@ -13,13 +13,21 @@ export interface SourceWorkspace {
   manifestPath: string;
 }
 
+export interface SourceDistributionValidationOptions {
+  requireBuiltBins?: boolean;
+}
+
 export function readSourceWorkspaces(root?: string): Promise<SourceWorkspace[]>;
 
 export function validateSourceDistribution(
   workspaces: SourceWorkspace[],
   rootManifest: SourceDistributionManifest,
+  options?: SourceDistributionValidationOptions,
 ): Promise<string[]>;
 
-export function checkSourceDistribution(root?: string): Promise<{
+export function checkSourceDistribution(
+  root?: string,
+  options?: SourceDistributionValidationOptions,
+): Promise<{
   workspaces: SourceWorkspace[];
 }>;

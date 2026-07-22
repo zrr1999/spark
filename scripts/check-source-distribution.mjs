@@ -22,7 +22,7 @@ export async function readSourceWorkspaces(root = process.cwd()) {
   return workspaces.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
 }
 
-export async function validateSourceDistribution(workspaces, rootManifest) {
+export async function validateSourceDistribution(workspaces, rootManifest, options = {}) {
   const failures = [];
   const names = new Set();
   for (const workspace of workspaces) {
@@ -52,7 +52,10 @@ export async function validateSourceDistribution(workspaces, rootManifest) {
       try {
         await access(resolve(dirname(workspace.manifestPath), target));
       } catch {
-        failures.push(`${manifest.name}: bin target does not exist: ${target}`);
+        const buildScript = manifest.scripts?.build;
+        if (options.requireBuiltBins || typeof buildScript !== "string" || !buildScript.trim()) {
+          failures.push(`${manifest.name}: bin target does not exist: ${target}`);
+        }
       }
     }
   }
@@ -73,10 +76,10 @@ export async function validateSourceDistribution(workspaces, rootManifest) {
   return failures;
 }
 
-export async function checkSourceDistribution(root = process.cwd()) {
+export async function checkSourceDistribution(root = process.cwd(), options = {}) {
   const workspaces = await readSourceWorkspaces(root);
   const rootManifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  const failures = await validateSourceDistribution(workspaces, rootManifest);
+  const failures = await validateSourceDistribution(workspaces, rootManifest, options);
   if (failures.length > 0) {
     throw new Error(`Invalid source distribution:\n- ${failures.join("\n- ")}`);
   }

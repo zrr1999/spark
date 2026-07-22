@@ -158,6 +158,7 @@ const temporaryRoot = await mkdtemp("/tmp/spk-src-");
 try {
   const { workspaces } = await checkSourceDistribution(root);
   await run("pnpm", ["run", "build"], { timeout: 300_000 });
+  await checkSourceDistribution(root, { requireBuiltBins: true });
   await run(resolve(root, "apps/spark-cli/bin/spark"), ["--help"]);
   await run(resolve(root, "apps/spark-tui/bin/spark-tui"), ["--help"]);
   await smokeBuiltDaemon(temporaryRoot);

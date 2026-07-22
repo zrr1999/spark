@@ -39,3 +39,18 @@ test("source distribution rejects accidental public packages and publish command
   assert.ok(failures.some((failure) => failure.includes("must not declare publishConfig")));
   assert.ok(failures.some((failure) => failure.includes("publish script must remain absent")));
 });
+
+test("source distribution defers declared build outputs but requires them after build", async () => {
+  const buildOutput = workspace({
+    name: "@zendev-lab/spark-daemon",
+    private: true,
+    bin: "./dist/cli.js",
+    scripts: { build: "node scripts/build-cli.mjs" },
+  });
+
+  assert.deepEqual(await validateSourceDistribution([buildOutput], rootManifest), []);
+  const failures = await validateSourceDistribution([buildOutput], rootManifest, {
+    requireBuiltBins: true,
+  });
+  assert.ok(failures.some((failure) => failure.includes("bin target does not exist")));
+});
