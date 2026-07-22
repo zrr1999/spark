@@ -6,10 +6,12 @@ import {
   parseSparkSessionRegistryRecord,
   type SparkSessionChannelBinding,
   type SparkSessionRegistryRecord,
+  type SparkSessionRelation,
   type SparkSessionScope,
   type SparkSessionStatus,
+  type SparkSideThreadMode,
 } from "@zendev-lab/spark-protocol/session-assignment";
-import type { SparkModelRef } from "@zendev-lab/spark-protocol/model-control";
+import type { SparkModelRef, SparkThinkingLevel } from "@zendev-lab/spark-protocol/model-control";
 
 const LEGACY_REGISTRY_VERSIONS = new Set([1, 2]);
 const REGISTRY_VERSION = 3 as const;
@@ -37,6 +39,27 @@ export interface CreateSparkSessionInput {
   cwd?: string;
   sessionPath?: string;
   status?: SparkSessionStatus;
+  now?: Date;
+}
+export interface EnsureSparkSideThreadInput {
+  parentSessionId: string;
+  mode: SparkSideThreadMode;
+  sessionId?: string;
+  sessionPath?: string;
+  now?: Date;
+}
+export interface ResetSparkSideThreadInput {
+  sessionId: string;
+  expectedGeneration: number;
+  sessionPath: string;
+  mode?: SparkSideThreadMode;
+  now?: Date;
+}
+export interface ConfigureSparkSideThreadInput {
+  sessionId: string;
+  expectedGeneration: number;
+  model?: SparkModelRef | null;
+  thinkingLevel?: SparkThinkingLevel | null;
   now?: Date;
 }
 
@@ -121,13 +144,129 @@ export class SparkSessionRegistry {
     return record;
   }
 
+  async ensureSideThread(input: EnsureSparkSideThreadInput): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const parent = requireParent(file.sessions, input.parentSessionId);
+    const existing = file.sessions.find(
+      (s) => s.relation?.kind === "side_thread" && s.relation.parentSessionId === parent.sessionId,
+    );
+    if (existing) return requireChild(existing);
+    const sessionId = input.sessionId?.trim() || createSessionId();
+    if (file.sessions.some((s) => s.sessionId === sessionId))
+      throw new SparkSessionRegistryError("session_exists", `session already exists: ${sessionId}`);
+    const path = input.sessionPath?.trim();
+    if (input.sessionPath !== undefined && !path)
+      throw new SparkSessionRegistryError(
+        "invalid_session_path",
+        "side-thread session path must not be blank",
+      );
+    const now = (input.now ?? new Date()).toISOString();
+    const ownership =
+      parent.scope.kind === "workspace"
+        ? { scope: parent.scope, workspaceId: parent.scope.workspaceId }
+        : { scope: parent.scope };
+    const record: SparkSessionRegistryRecord = {
+      sessionId,
+      ...ownership,
+      status: "ready",
+      bindings: [],
+      createdAt: now,
+      updatedAt: now,
+      ...(parent.cwd ? { cwd: parent.cwd } : {}),
+      ...(path ? { sessionPath: path } : {}),
+      relation: {
+        kind: "side_thread",
+        parentSessionId: parent.sessionId,
+        generation: 1,
+        mode: input.mode,
+      },
+    };
+    file.sessions.push(record);
+    await this.saveFile(file);
+    return record;
+  }
+
+  async resetSideThread(input: ResetSparkSideThreadInput): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((s) => s.sessionId === input.sessionId);
+    if (index < 0)
+      throw new SparkSessionRegistryError(
+        "session_not_found",
+        `unknown session: ${input.sessionId}`,
+      );
+    const current = requireChild(file.sessions[index]!);
+    assertGeneration(current, input.expectedGeneration);
+    requireParent(file.sessions, current.relation.parentSessionId);
+    const path = input.sessionPath.trim();
+    if (!path)
+      throw new SparkSessionRegistryError(
+        "invalid_session_path",
+        "side-thread session path must not be blank",
+      );
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      status: "ready",
+      sessionPath: path,
+      relation: {
+        ...current.relation,
+        generation: current.relation.generation + 1,
+        ...(input.mode ? { mode: input.mode } : {}),
+      },
+      updatedAt: (input.now ?? new Date()).toISOString(),
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
+  async configureSideThread(
+    input: ConfigureSparkSideThreadInput,
+  ): Promise<SparkSessionRegistryRecord> {
+    if (input.model === undefined && input.thinkingLevel === undefined)
+      throw new SparkSessionRegistryError(
+        "side_thread_config_empty",
+        "side-thread configuration requires an override",
+      );
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((s) => s.sessionId === input.sessionId);
+    if (index < 0)
+      throw new SparkSessionRegistryError(
+        "session_not_found",
+        `unknown session: ${input.sessionId}`,
+      );
+    const current = requireChild(file.sessions[index]!);
+    assertGeneration(current, input.expectedGeneration);
+    requireParent(file.sessions, current.relation.parentSessionId);
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      updatedAt: (input.now ?? new Date()).toISOString(),
+    };
+    if (input.model !== undefined) {
+      if (input.model === null) delete updated.model;
+      else updated.model = { ...input.model };
+    }
+    if (input.thinkingLevel !== undefined) {
+      if (input.thinkingLevel === null) delete updated.thinkingLevel;
+      else updated.thinkingLevel = input.thinkingLevel;
+    }
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
   async list(
-    options: { includeArchived?: boolean; scope?: SparkSessionScope; workspaceId?: string } = {},
+    options: {
+      includeArchived?: boolean;
+      includeSideThreads?: boolean;
+      scope?: SparkSessionScope;
+      workspaceId?: string;
+    } = {},
   ): Promise<SparkSessionRegistryRecord[]> {
     const file = await this.loadFile();
     return file.sessions
       .filter((session) => {
         if (!options.includeArchived && session.status === "archived") return false;
+        if (!options.includeSideThreads && session.relation?.kind === "side_thread") return false;
         const scope =
           options.scope ??
           (options.workspaceId
@@ -182,6 +321,12 @@ export class SparkSessionRegistry {
       );
     }
     const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `side thread ${input.sessionId} cannot own a channel binding`,
+      );
+    }
     if (current.status === "archived") {
       throw new SparkSessionRegistryError(
         "session_archived",
@@ -256,6 +401,12 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `side thread ${sessionId} cannot own a channel binding`,
+      );
+    }
     const normalizedAccountIdentity = adapterAccountIdentity?.trim() || undefined;
     const externalMatches = current.bindings.filter(
       (binding) => binding.externalKey === normalized,
@@ -299,6 +450,12 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `side thread ${sessionId} is archived only with its parent`,
+      );
+    }
     if (current.bindings.some((binding) => binding.kind === "channel")) {
       throw new SparkSessionRegistryError(
         "session_channel_bound",
@@ -311,6 +468,21 @@ export class SparkSessionRegistry {
       updatedAt: now.toISOString(),
     };
     file.sessions[index] = updated;
+    if (!current.relation) {
+      for (let childIndex = 0; childIndex < file.sessions.length; childIndex += 1) {
+        const child = file.sessions[childIndex]!;
+        if (
+          child.relation?.kind === "side_thread" &&
+          child.relation.parentSessionId === current.sessionId &&
+          child.status !== "archived"
+        )
+          file.sessions[childIndex] = {
+            ...child,
+            status: "archived",
+            updatedAt: now.toISOString(),
+          };
+      }
+    }
     await this.saveFile(file);
     return updated;
   }
@@ -337,6 +509,7 @@ export class SparkSessionRegistry {
     if (
       current.role?.trim() ||
       current.title?.trim() ||
+      current.relation?.kind === "side_thread" ||
       current.bindings.some((binding) => binding.kind === "channel") ||
       current.status === "archived"
     ) {
@@ -381,6 +554,12 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `configure side-thread model through the side-thread control surface: ${sessionId}`,
+      );
+    }
     if (current.status === "archived") {
       throw new SparkSessionRegistryError(
         "session_archived",
@@ -408,6 +587,12 @@ export class SparkSessionRegistry {
       throw new SparkSessionRegistryError("session_not_found", `unknown session: ${sessionId}`);
     }
     const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `configure side-thread thinking through the side-thread control surface: ${sessionId}`,
+      );
+    }
     if (current.status === "archived") {
       throw new SparkSessionRegistryError(
         "session_archived",
@@ -619,6 +804,58 @@ function createScope(input: CreateSparkSessionInput): SparkSessionScope {
     throw new SparkSessionRegistryError("invalid_scope", "session scope is required");
   }
   return { kind: "workspace", workspaceId };
+}
+
+function requireParent(
+  sessions: SparkSessionRegistryRecord[],
+  sessionId: string,
+): SparkSessionRegistryRecord {
+  const parent = sessions.find((s) => s.sessionId === sessionId);
+  if (!parent)
+    throw new SparkSessionRegistryError(
+      "side_thread_parent_not_found",
+      `unknown side-thread parent: ${sessionId}`,
+    );
+  if (parent.relation)
+    throw new SparkSessionRegistryError(
+      "side_thread_nesting_forbidden",
+      "a side thread cannot be parented by a side thread",
+    );
+  if (parent.status === "archived")
+    throw new SparkSessionRegistryError(
+      "side_thread_parent_archived",
+      `archived parent: ${sessionId}`,
+    );
+  return parent;
+}
+function requireChild(session: SparkSessionRegistryRecord): SparkSessionRegistryRecord & {
+  relation: Extract<SparkSessionRelation, { kind: "side_thread" }>;
+} {
+  if (session.relation?.kind !== "side_thread")
+    throw new SparkSessionRegistryError(
+      "side_thread_not_found",
+      `not a side thread: ${session.sessionId}`,
+    );
+  if (session.status === "archived")
+    throw new SparkSessionRegistryError(
+      "side_thread_archived",
+      `archived side thread: ${session.sessionId}`,
+    );
+  return session as SparkSessionRegistryRecord & {
+    relation: Extract<SparkSessionRelation, { kind: "side_thread" }>;
+  };
+}
+function assertGeneration(
+  session: SparkSessionRegistryRecord & {
+    relation: Extract<SparkSessionRelation, { kind: "side_thread" }>;
+  },
+  expected: number,
+): void {
+  if (session.relation.generation !== expected)
+    throw new SparkSessionRegistryError(
+      "side_thread_generation_conflict",
+      `expected generation ${expected}, found ${session.relation.generation}`,
+    );
 }
 
 function sameSessionScope(left: SparkSessionScope, right: SparkSessionScope): boolean {

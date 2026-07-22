@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import WebSocket, { type RawData } from "ws";
 import {
   createId,
   humanResponseDeliverEnvelopeSchema,
-  normalizeServerCommandForExecution,
   parseSparkDaemonEvent,
   runtimeCommandResultEnvelopeSchema,
   runtimeEphemeralSecretResultEnvelopeSchema,
@@ -18,51 +15,16 @@ import {
   serverHeartbeatAckEnvelopeSchema,
   serverHelloAckEnvelopeSchema,
   type SparkDaemonEvent,
-  type SparkCommand,
   type SparkJsonObject,
   type RuntimeFeature,
   type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
 import { SparkSessionMailStore } from "@zendev-lab/spark-session";
-import { resolveSparkUserPaths, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
-import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
-import {
-  getSparkDaemonServerProfile,
-  listSparkDaemonServerProfiles,
-  normalizeSparkDaemonServerUrl,
-  sparkDaemonConfigForServerProfile,
-  sparkDaemonServerProfileFromConfig,
-  type SparkDaemonServerProfile,
-} from "./server-profiles.js";
-import {
-  createDaemonChannelIngressRuntime,
-  type ChannelIngressHooks,
-  type DaemonChannelIngressRuntime,
-} from "./channels/ingress.ts";
-import {
-  findChannelInboundInvocation,
-  submitChannelInboundInvocation,
-} from "./channels/admission.ts";
-import {
-  projectChannelAsk,
-  settleChannelAskInteraction,
-  settleChannelAskTextReply,
-} from "./channels/human-interactions.ts";
-import { createDaemonChannelTransportFactory } from "./channels/transport-factory.ts";
-import {
-  completeInvocationWithChannelDelivery,
-  createDaemonChannelDeliveryOutbox,
-  reconcileDaemonChannelDeliveries,
-  type DaemonChannelDeliveryOutbox,
-} from "./channels/delivery-outbox.ts";
-import {
-  ChannelReplyDeliveryStore,
-  reconcileChannelReplyDeliveries,
-} from "./channels/reply-delivery.ts";
+import type { SparkPaths } from "@zendev-lab/spark-system";
+import { type SparkDaemonConfig } from "./config.js";
+import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import {
   SparkDaemonInvocationRegistry,
-  SparkDaemonHumanInteractionBroker,
-  legacySparkDaemonQueueRoot,
   type SparkDaemonDrainProgress,
   type SparkDaemonEventSink,
   type SparkDaemonHumanInteractionResponder,
@@ -75,36 +37,26 @@ import {
   type SparkDaemonHumanWaitRecord,
   type SparkDaemonHumanWaitRegistration,
 } from "./core/human-waits.ts";
-import { sparkCommandFromServerCommandEnvelope } from "./command-dispatcher.ts";
-import { decideCommandPolicy } from "./policy.js";
 import type { SparkDaemonModelControl } from "./model-control.ts";
-import {
-  executeSparkDaemonEphemeralSecretControl,
-  executeSparkDaemonModelChannelPublicControl,
-  isSparkDaemonModelChannelPublicKind,
-} from "./model-channel-control.ts";
+import { executeSparkDaemonEphemeralSecretControl } from "./model-channel-control.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
 import {
-  commandAck,
   commandReject,
   commandResult,
   invocationLogChunk,
   invocationUpdated,
   reconcileReport,
   runtimeEnvelope,
-  workspaceSnapshot,
   type RouteContext,
 } from "./protocol/outbound.js";
-import { SparkInvocationScheduler } from "./core/invocation-scheduler.ts";
 import {
   acknowledgeRuntimeCommandTerminalForRoute,
   claimRuntimeCommandReceipt,
   pendingRuntimeCommandTerminalsForRoute,
   recordRuntimeCommandAck,
   recordRuntimeCommandTerminal,
-  recoverInterruptedRuntimeCommandReceipts,
 } from "./runtime-command-receipts.ts";
-import { migrateLegacyQueueHistory } from "./store/legacy-queue-migration.ts";
+import { runtimeCommandFailure } from "./runtime-command-error.ts";
 import { SparkChannelDeliveryStore } from "./store/channel-deliveries.ts";
 import {
   SparkInvocationStore,
@@ -113,42 +65,17 @@ import {
 } from "./store/invocations.ts";
 import {
   applyCockpitWorkspaceBindingAssignments,
-  attachWorkspaceClient,
   getWorkspaceById,
-  heartbeatWorkspaceClient,
   isMutationBlockingBorrowedWorkspace,
-  isUserDetachedWorkspace,
   listWorkspaces,
-  listWorkspacesForServer,
-  markSparkDaemonServerConnected,
-  markSparkDaemonServerDisconnected,
   reconcileWorkspaces,
   reconcileWorkspacesForServer,
-  releaseWorkspaceClient,
-  resolveWorkspaceLocalPath,
   sparkDaemonServerStatusSummaries,
   workspaceBindingBelongsToServer,
-  workspaceSummaries,
 } from "./store/workspaces.js";
-import {
-  commandRejectForUnknownInvocation,
-  runSparkCommandBridge,
-  cancelSparkBridgeInvocation,
-  type RunSparkCommandFn,
-  type CancelSparkInvocationFn,
-} from "./spark/bridge.js";
-import { createChannelAwareTaskExecutor, sessionSourceForTask } from "./spark/session-run.js";
-import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
-import { notifySessionRequestCompletion } from "./session-request-completion-notify.ts";
-import { executeSparkDaemonSessionControl } from "./session-control.ts";
+import type { RunSparkCommandFn, CancelSparkInvocationFn } from "./spark/bridge.js";
 import { executeClaimedCommand } from "./claimed-command.ts";
 export { startSparkDaemon } from "./daemon-start.ts";
-import {
-  nextSparkDaemonTokenRefreshDelayMs,
-  refreshSparkDaemonCredentials,
-  shouldRefreshSparkDaemonToken,
-  tokenRefreshRetryDelayMs,
-} from "./token-refresh.js";
 
 export const sparkDaemonVersion = "0.1.0";
 
@@ -641,13 +568,11 @@ export async function handleCommand(
   try {
     await executeClaimedCommand(durableSocket, command, context);
   } catch (error) {
+    const failure = runtimeCommandFailure(error);
     const failed = commandResult(
       {
         status: "failed",
-        result: {
-          reasonCode: "COMMAND_EXECUTION_FAILED",
-          message: error instanceof Error ? error.message : String(error),
-        },
+        result: failure,
         completedAt: new Date().toISOString(),
       },
       commandRoute(context.runtimeId, command),

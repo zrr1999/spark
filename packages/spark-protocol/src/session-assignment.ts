@@ -144,8 +144,6 @@ export const sparkSessionCreateRequestSchema = z.preprocess(
 
 const sparkSessionListRequestBaseSchema = z.object({
   includeArchived: z.boolean().optional(),
-  /** Diagnostic escape hatch; product session lists keep related sessions nested. */
-  includeSideThreads: z.boolean().optional(),
   cursor: z.string().trim().min(1).optional(),
   limit: z.number().int().min(1).max(100).optional(),
 });
@@ -268,7 +266,6 @@ export type SparkSessionListRequest =
       scope?: undefined;
       workspaceId?: string;
       includeArchived?: boolean;
-      includeSideThreads?: boolean;
       cursor?: string;
       limit?: number;
     };

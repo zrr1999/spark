@@ -11,6 +11,17 @@ import { oc } from "@orpc/contract";
 import { z } from "zod";
 import { sparkModelControlSnapshotSchema } from "./model-control.ts";
 import { isoDateTimeSchema } from "./refs.ts";
+import {
+  sparkSideThreadConfigureRequestSchema,
+  sparkSideThreadEnsureRequestSchema,
+  sparkSideThreadHandoffRequestSchema,
+  sparkSideThreadHandoffResultSchema,
+  sparkSideThreadResetRequestSchema,
+  sparkSideThreadSnapshotRequestSchema,
+  sparkSideThreadSnapshotSchema,
+  sparkSideThreadSubmitRequestSchema,
+  sparkSideThreadSubmitResultSchema,
+} from "./side-thread.ts";
 
 const emptyInputSchema = z.object({}).default({});
 const unknownResultSchema = z.unknown();
@@ -230,6 +241,44 @@ export const sparkLocalRpcOrpcContract = {
       ),
     },
   },
+  sideThread: {
+    ensure: procedure(
+      "POST",
+      "/side-thread/ensure",
+      sparkSideThreadEnsureRequestSchema,
+      sparkSideThreadSnapshotSchema,
+    ),
+    snapshot: procedure(
+      "GET",
+      "/side-thread/snapshot",
+      sparkSideThreadSnapshotRequestSchema,
+      sparkSideThreadSnapshotSchema,
+    ),
+    submit: procedure(
+      "POST",
+      "/side-thread/submit",
+      sparkSideThreadSubmitRequestSchema,
+      sparkSideThreadSubmitResultSchema,
+    ),
+    reset: procedure(
+      "POST",
+      "/side-thread/reset",
+      sparkSideThreadResetRequestSchema,
+      sparkSideThreadSnapshotSchema,
+    ),
+    configure: procedure(
+      "POST",
+      "/side-thread/configure",
+      sparkSideThreadConfigureRequestSchema,
+      sparkSideThreadSnapshotSchema,
+    ),
+    handoff: procedure(
+      "POST",
+      "/side-thread/handoff",
+      sparkSideThreadHandoffRequestSchema,
+      sparkSideThreadHandoffResultSchema,
+    ),
+  },
   model: {
     catalog: procedure(
       "GET",
@@ -322,6 +371,12 @@ export const sparkLocalRpcOrpcMethodPaths = {
   "session.notification.deliver": ["session", "notification", "deliver"],
   "session.model.set": ["session", "model", "set"],
   "session.thinking.set": ["session", "thinking", "set"],
+  "side-thread.ensure": ["sideThread", "ensure"],
+  "side-thread.snapshot": ["sideThread", "snapshot"],
+  "side-thread.submit": ["sideThread", "submit"],
+  "side-thread.reset": ["sideThread", "reset"],
+  "side-thread.configure": ["sideThread", "configure"],
+  "side-thread.handoff": ["sideThread", "handoff"],
   "model.catalog": ["model", "catalog"],
   "model.default.set": ["model", "default", "set"],
   "provider.auth.api-key.set": ["provider", "auth", "apiKey", "set"],

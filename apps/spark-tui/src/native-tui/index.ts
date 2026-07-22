@@ -34,6 +34,11 @@ export {
   createSparkNativeLocalControlSlashCommands,
   createSparkNativeRuntimeSlashCommands,
 } from "./slash-commands.ts";
+export {
+  createSparkNativeSideThreadSlashCommands,
+  formatSideThread,
+  type SparkNativeSideThreadClient,
+} from "./side-thread-command.ts";
 export { prepareSparkNativeEditorInput } from "./editor-input.ts";
 export { SparkNativeTuiApp } from "./app.ts";
 export { createSparkNativeUiTransport } from "./ui-transport.ts";

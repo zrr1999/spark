@@ -210,6 +210,25 @@ test("SparkHostRuntime intersects name and fail-closed effect allowlists", () =>
   }
 });
 
+test("SparkHostRuntime suppresses unclassified lifecycle hooks under an effect allowlist", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-lifecycle-policy-test",
+    allowedToolEffects: ["read"],
+  });
+  let compactHooks = 0;
+  host.on("session_before_compact", () => {
+    compactHooks += 1;
+    return { unsafeCheckpoint: true };
+  });
+  host.on("session_compact", () => {
+    compactHooks += 1;
+  });
+
+  assert.deepEqual(await host.emit("session_before_compact", {}), []);
+  assert.deepEqual(await host.emit("session_compact", {}), []);
+  assert.equal(compactHooks, 0);
+});
+
 test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;

@@ -47,6 +47,14 @@ hooks = [{ id = "zendev-commit-msg", stages = ["commit-msg"] }]
 repo = "local"
 hooks = [
   {
+    id = "architecture-ratchet-check",
+    name = "architecture growth ratchets",
+    entry = "pnpm run check:architecture",
+    language = "system",
+    pass_filenames = false,
+    stages = ["pre-commit"]
+  },
+  {
     id = "pi-boundary-check",
     name = "package boundary check (dependency-cruiser)",
     entry = "pnpm run check:boundaries",

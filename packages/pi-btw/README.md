@@ -1,6 +1,10 @@
-# pi-btw
+# pi-btw (Pi product compatibility)
 
-A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/btw` side conversation channel.
+> **Frozen compatibility adapter.** This package is maintained for the Pi product host. It may receive security, correctness, and compatibility fixes, but new Spark Side Thread capabilities target the Spark-native daemon/TUI/Cockpit path.
+
+This README documents Pi-product behavior only. Spark-native `/btw` is a separate daemon-owned implementation described in [`docs/specs/tools.md`](../../docs/specs/tools.md#native-btw); it does not load this package, Pi extension discovery, or `pi-coding-agent`. Their Side Thread lifecycle semantics meet at the host-neutral state/handoff primitives from `@zendev-lab/spark-turn/side-thread`.
+
+This package is a [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/btw` side conversation channel to the compatibility host.
 
 `/btw` opens a real pi sub-session with coding-tool access, and it runs immediately even while the main agent is still busy.
 
@@ -19,7 +23,7 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 - lets you inject the full thread, or a summary of it, back into the main agent
 - optionally saves an individual BTW exchange as a visible session note with `--save`
 
-## Install
+## Install in the Pi product
 
 ### From npm (after publish)
 

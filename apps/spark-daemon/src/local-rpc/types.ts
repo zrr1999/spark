@@ -2,6 +2,12 @@ import {
   parseSparkDefaultModelSetRequest,
   parseSparkSessionSetModelRequest,
   parseSparkSessionSetThinkingRequest,
+  sparkSideThreadConfigureRequestSchema,
+  sparkSideThreadEnsureRequestSchema,
+  sparkSideThreadHandoffRequestSchema,
+  sparkSideThreadResetRequestSchema,
+  sparkSideThreadSnapshotRequestSchema,
+  sparkSideThreadSubmitRequestSchema,
   sparkInvocationListRequestSchema,
   sparkInvocationRetentionPreviewRequestSchema,
   sparkInvocationRetryRequestSchema,
@@ -406,6 +412,42 @@ export type LocalRpcRequest =
       id: string;
       method: "session.thinking.set";
       params: ReturnType<typeof parseSparkSessionSetThinkingRequest>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.ensure";
+      params: ReturnType<typeof sparkSideThreadEnsureRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.snapshot";
+      params: ReturnType<typeof sparkSideThreadSnapshotRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.submit";
+      params: ReturnType<typeof sparkSideThreadSubmitRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.reset";
+      params: ReturnType<typeof sparkSideThreadResetRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.configure";
+      params: ReturnType<typeof sparkSideThreadConfigureRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "side-thread.handoff";
+      params: ReturnType<typeof sparkSideThreadHandoffRequestSchema.parse>;
       sparkCommand: SparkCommand;
     }
   | {

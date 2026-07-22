@@ -6,6 +6,7 @@ import {
   bindManagedSessionForCockpit,
   createManagedSessionForCockpit,
   getManagedSessionForCockpit,
+  getManagedSideThreadSnapshotForCockpit,
   getManagedSessionSnapshotForCockpit,
   listManagedSessionsForCockpit,
   type CockpitManagedSessionsClient,
@@ -89,6 +90,41 @@ describe("managed sessions for cockpit", () => {
     expect(client.snapshot).toHaveBeenCalledWith("sess_a", {});
   });
 
+  it("reads an existing Side Thread without materializing one", async () => {
+    const client = daemonClient();
+    const sideThread = {
+      parentSessionId: session.sessionId,
+      sessionId: "sess_a_btw",
+      generation: 1,
+      mode: "contextual" as const,
+      status: "idle" as const,
+      pendingTurns: [],
+      exchanges: [],
+      hasMore: false,
+    };
+    client.sideThreadSnapshot.mockResolvedValue(sideThread);
+
+    await expect(
+      getManagedSideThreadSnapshotForCockpit(session.sessionId, {}, client),
+    ).resolves.toEqual(sideThread);
+    expect(client.sideThreadSnapshot).toHaveBeenCalledWith(session.sessionId, {});
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the live parent workspace before reading Side Thread content", async () => {
+    const client = daemonClient();
+
+    await expect(
+      getManagedSideThreadSnapshotForCockpit(
+        session.sessionId,
+        { workspaceId: "ws_foreign" },
+        client,
+      ),
+    ).resolves.toBeNull();
+    expect(client.get).toHaveBeenCalledWith(session.sessionId);
+    expect(client.sideThreadSnapshot).not.toHaveBeenCalled();
+  });
+
   it("keeps daemon-scoped sessions outside every Cockpit read surface", async () => {
     const client = daemonClient();
     client.list.mockResolvedValueOnce([session, daemonSession]);
@@ -109,6 +145,27 @@ describe("managed sessions for cockpit", () => {
 
     expect(client.list).toHaveBeenCalledTimes(1);
     expect(client.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps daemon-owned Side Thread children out of the ordinary session rail", async () => {
+    const client = daemonClient();
+    client.list.mockResolvedValueOnce([
+      session,
+      {
+        ...session,
+        sessionId: "sess_a_btw",
+        relation: {
+          kind: "side_thread",
+          parentSessionId: session.sessionId,
+          generation: 1,
+          mode: "contextual",
+        },
+      },
+    ]);
+
+    await expect(listManagedSessionsForCockpit({}, client)).resolves.toMatchObject({
+      sessions: [session],
+    });
   });
 
   it("returns an empty read model when the daemon is unavailable or stale", async () => {
@@ -296,6 +353,7 @@ function daemonClient(
     list: vi.fn(async () => [session]),
     get: vi.fn(async () => session),
     snapshot: vi.fn(async () => snapshotWindow),
+    sideThreadSnapshot: vi.fn(),
     create: vi.fn(async () => session),
     bind: vi.fn(async () => options.bindResult ?? session),
     unbind: vi.fn(async () => options.bindResult ?? session),

@@ -3,6 +3,7 @@
   import Icon from "$lib/Icon.svelte";
   import { visibleSessionStatus } from "$lib/conversation-status";
   import type { SessionInspectorLabels, SessionWorkbenchView } from "$lib/session-workbench";
+  import type { SparkSideThreadSnapshot } from "@zendev-lab/spark-protocol";
   import type { SessionRecord, SessionsMessages } from "./types";
 
   type Props = {
@@ -36,6 +37,32 @@
   }: Props = $props();
 
   let displayedSessionStatus = $derived(visibleSessionStatus(selected.status));
+  let sideThread = $state<SparkSideThreadSnapshot | null>(null);
+  let sideThreadState = $state<"idle" | "loading" | "missing" | "error">("idle");
+
+  async function loadSideThread(event: Event): Promise<void> {
+    const panel = event.currentTarget as HTMLDetailsElement;
+    if (!panel.open || sideThreadState === "loading") return;
+    const parentSessionId = selected.sessionId;
+    sideThreadState = "loading";
+    try {
+      const response = await fetch(
+        `/api/v1/sessions/${encodeURIComponent(parentSessionId)}/side-thread`,
+        { headers: { accept: "application/json" } },
+      );
+      if (selected.sessionId !== parentSessionId) return;
+      if (response.status === 404) {
+        sideThread = null;
+        sideThreadState = "missing";
+        return;
+      }
+      if (!response.ok) throw new Error(`side thread request failed: ${response.status}`);
+      sideThread = (await response.json()) as SparkSideThreadSnapshot;
+      sideThreadState = "idle";
+    } catch {
+      sideThreadState = "error";
+    }
+  }
 </script>
 
 <div
@@ -101,6 +128,48 @@
   {#if workbenchView}
     <SessionInspector view={workbenchView} labels={inspectorLabels} {instanceId} {statusLabel} />
   {/if}
+
+  <details class="side-thread-panel" ontoggle={loadSideThread}>
+    <summary>
+      <span>{messages.sideThread.title}</span>
+      <span class="readonly-badge">{messages.sideThread.readOnlyBadge}</span>
+    </summary>
+    <p class="side-thread-description">{messages.sideThread.description}</p>
+    {#if sideThreadState === "loading"}
+      <p class="muted">{messages.sideThread.loading}</p>
+    {:else if sideThreadState === "missing"}
+      <p class="muted">{messages.sideThread.missing}</p>
+    {:else if sideThreadState === "error"}
+      <p class="muted">{messages.sideThread.unavailable}</p>
+    {:else if sideThread}
+      <dl class="side-thread-grid">
+        <div><dt>{messages.sideThread.modeLabel}</dt><dd>{sideThread.mode}</dd></div>
+        <div><dt>{messages.sideThread.generationLabel}</dt><dd>{sideThread.generation}</dd></div>
+        <div><dt>{messages.sideThread.statusLabel}</dt><dd>{statusLabel(sideThread.status)}</dd></div>
+        <div><dt>{messages.sideThread.modelLabel}</dt><dd>{sideThread.effectiveModel ? `${sideThread.effectiveModel.providerName}/${sideThread.effectiveModel.modelId}` : messages.sideThread.inherited}</dd></div>
+        <div><dt>{messages.sideThread.thinkingLabel}</dt><dd>{sideThread.effectiveThinkingLevel ?? messages.sideThread.inherited}</dd></div>
+        <div><dt>{messages.sideThread.pendingLabel}</dt><dd>{sideThread.pendingTurns.length}</dd></div>
+      </dl>
+      {#if sideThread.exchanges.length > 0}
+        <ol class="side-thread-exchanges">
+          {#each sideThread.exchanges as exchange (exchange.id)}
+            <li>
+              <p><strong>{messages.sideThread.questionLabel}</strong> {exchange.user}</p>
+              <p><strong>{messages.sideThread.findingLabel}</strong> {exchange.assistant}</p>
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        <p class="muted">{messages.sideThread.noExchanges}</p>
+      {/if}
+      {#if sideThread.hasMore}
+        <p class="muted">{messages.sideThread.earlierNotLoaded}</p>
+      {/if}
+      {#if sideThread.projectionTruncated}
+        <p class="muted">{messages.sideThread.projectionTruncated}</p>
+      {/if}
+    {/if}
+  </details>
 </div>
 
 <style>
@@ -113,6 +182,93 @@
     display: grid;
     gap: 14px;
     margin: 0;
+  }
+
+  .side-thread-panel {
+    border-top: 1px solid var(--color-border, var(--color-surface-soft));
+    display: grid;
+    gap: 12px;
+    padding-top: 16px;
+  }
+
+  .side-thread-panel summary {
+    align-items: center;
+    color: var(--color-ink);
+    cursor: pointer;
+    display: flex;
+    font-size: 13px;
+    font-weight: 700;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .readonly-badge {
+    background: var(--color-surface-soft);
+    border-radius: 999px;
+    color: var(--color-ink-subtle);
+    font-size: 10px;
+    font-weight: 650;
+    padding: 3px 7px;
+    text-transform: uppercase;
+  }
+
+  .side-thread-description {
+    color: var(--color-ink-subtle);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .side-thread-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  .side-thread-grid div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .side-thread-grid dt {
+    color: var(--color-ink-subtle);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .side-thread-grid dd {
+    color: var(--color-ink-muted);
+    font-size: 12px;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .side-thread-exchanges {
+    display: grid;
+    gap: 10px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .side-thread-exchanges li {
+    background: var(--color-surface-soft);
+    border-radius: var(--rounded-md, 8px);
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .side-thread-exchanges p {
+    color: var(--color-ink-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .details-grid div {

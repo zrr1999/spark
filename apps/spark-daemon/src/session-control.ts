@@ -74,6 +74,8 @@ export interface SparkDaemonSessionControlRequest {
   workspaceBindingId?: string;
   sessionId?: string;
   idempotencyKey?: string;
+  /** Internal capability used only by the daemon-owned Side Thread control path. */
+  allowSideThread?: boolean;
 }
 
 export interface SparkDaemonSessionControlResult {
@@ -111,6 +113,7 @@ export async function executeSparkDaemonSessionControl(
         sessionId: request.sessionId ?? request.payload.sessionId,
       });
       const owned = await requireSession(options, parsed.sessionId, request);
+      assertOrdinarySessionVisible(owned);
       const session =
         projectSessionInvocationActivity(new SparkInvocationStore(options.db), [owned])[0] ?? owned;
       const data = publicObject({ session });
@@ -122,6 +125,7 @@ export async function executeSparkDaemonSessionControl(
         sessionId: request.sessionId ?? request.payload.sessionId,
       });
       const session = await requireSession(options, parsed.sessionId, request);
+      assertOrdinarySessionVisible(session);
       if (!options.paths.piAgentDir) {
         throw new Error("Spark daemon native session storage is not available.");
       }
@@ -211,6 +215,12 @@ export async function executeSparkDaemonSessionControl(
       const session = options.sessionRegistry
         ? await requireSession(options, parsed.sessionId, request)
         : undefined;
+      if (session?.relation?.kind === "side_thread" && request.allowSideThread !== true) {
+        throw new SparkSessionRegistryError(
+          "side_thread_direct_submit_forbidden",
+          `side thread ${parsed.sessionId} only accepts turns through side-thread.submit`,
+        );
+      }
       if (!session && request.scope !== "any") {
         throw new Error("Spark daemon session registry is not available.");
       }
@@ -303,7 +313,9 @@ export async function executeSparkDaemonSessionControl(
         new SparkInvocationStore(options.db),
         parsed.invocationId,
       );
-      await assertInvocationScope(options, status.sessionId, request);
+      assertOrdinarySessionVisible(
+        await requireInvocationSession(options, status.sessionId, request),
+      );
       const data = publicObject(status);
       return {
         result: data,
@@ -315,7 +327,9 @@ export async function executeSparkDaemonSessionControl(
       const parsed = sparkTurnStreamRequestSchema.parse(request.payload);
       const store = new SparkInvocationStore(options.db);
       const invocation = store.require(parsed.invocationId);
-      await assertInvocationScope(options, invocation.sessionId, request);
+      assertOrdinarySessionVisible(
+        await requireInvocationSession(options, invocation.sessionId, request),
+      );
       const page = boundedTurnStreamPage(store, parsed.invocationId, parsed.after, parsed.limit);
       const data = publicObject(page);
       return {
@@ -328,7 +342,10 @@ export async function executeSparkDaemonSessionControl(
       const parsed = sparkTurnCancelRequestSchema.parse(request.payload);
       const store = new SparkInvocationStore(options.db);
       const invocation = store.require(parsed.invocationId);
-      await assertInvocationScope(options, invocation.sessionId, request);
+      assertOrdinarySessionVisible(
+        await requireInvocationSession(options, invocation.sessionId, request),
+        true,
+      );
       const reason = parsed.reason ?? "Spark runtime turn cancellation requested.";
       const outcome = store.requestCancellation(parsed.invocationId, reason);
       if (outcome === "cancelled" && invocation.sessionId) {
@@ -512,14 +529,27 @@ function requestWorkspaceAliases(
   return aliases;
 }
 
-async function assertInvocationScope(
+async function requireInvocationSession(
   options: SparkDaemonSessionControlOptions,
   sessionId: string | undefined,
   request: Pick<SparkDaemonSessionControlRequest, "scope" | "workspaceId">,
-): Promise<void> {
-  if (request.scope === "any" && !options.sessionRegistry) return;
+): Promise<SparkSessionRegistryRecord | undefined> {
+  if (request.scope === "any" && !options.sessionRegistry) return undefined;
   if (!sessionId) throw new Error("Invocation has no daemon-owned session route.");
-  await requireSession(options, sessionId, request);
+  return await requireSession(options, sessionId, request);
+}
+
+function assertOrdinarySessionVisible(
+  session: SparkSessionRegistryRecord | undefined,
+  mutation = false,
+): void {
+  if (session?.relation?.kind !== "side_thread") return;
+  throw new SparkSessionRegistryError(
+    mutation ? "side_thread_mutation_forbidden" : "side_thread_not_found",
+    mutation
+      ? `side thread ${session.sessionId} is mutated only through its dedicated controller`
+      : `unknown session: ${session.sessionId}`,
+  );
 }
 
 function parseTurnSubmitPayload(payload: Record<string, unknown>, sessionId?: string) {
@@ -541,7 +571,12 @@ async function effectiveTurnModel(
   sessionId: string,
 ): Promise<string | undefined> {
   if (!options.modelControl) return undefined;
-  const model = await options.modelControl.effectiveModel(sessionId);
+  const effectiveSessionId = await inheritedSideThreadSettingOwner(
+    options.sessionRegistry,
+    sessionId,
+    "model",
+  );
+  const model = await options.modelControl.effectiveModel(effectiveSessionId);
   await options.modelControl.prepareModel(model);
   return `${model.providerName}/${model.modelId}`;
 }
@@ -550,7 +585,23 @@ async function effectiveTurnThinkingLevel(
   options: SparkDaemonSessionControlOptions,
   sessionId: string,
 ): Promise<string | undefined> {
-  return options.modelControl?.effectiveThinkingLevel(sessionId);
+  if (!options.modelControl) return undefined;
+  const effectiveSessionId = await inheritedSideThreadSettingOwner(
+    options.sessionRegistry,
+    sessionId,
+    "thinkingLevel",
+  );
+  return options.modelControl.effectiveThinkingLevel(effectiveSessionId);
+}
+
+async function inheritedSideThreadSettingOwner(
+  registry: DaemonSessionRegistry | undefined,
+  sessionId: string,
+  setting: "model" | "thinkingLevel",
+): Promise<string> {
+  const session = await registry?.get(sessionId);
+  if (session?.relation?.kind !== "side_thread" || session[setting] !== undefined) return sessionId;
+  return session.relation.parentSessionId;
 }
 
 function sessionTurnRoute(

@@ -155,6 +155,26 @@ export function createLocalRpcOrpcRouter(input: CreateLocalRpcOrpcRouterOptions)
         ),
       },
     },
+    sideThread: {
+      ensure: os.sideThread.ensure.handler(async ({ input: params }) =>
+        invoke("side-thread.ensure", params),
+      ),
+      snapshot: os.sideThread.snapshot.handler(async ({ input: params }) =>
+        invoke("side-thread.snapshot", params),
+      ),
+      submit: os.sideThread.submit.handler(async ({ input: params }) =>
+        invoke("side-thread.submit", params),
+      ),
+      reset: os.sideThread.reset.handler(async ({ input: params }) =>
+        invoke("side-thread.reset", params),
+      ),
+      configure: os.sideThread.configure.handler(async ({ input: params }) =>
+        invoke("side-thread.configure", params),
+      ),
+      handoff: os.sideThread.handoff.handler(async ({ input: params }) =>
+        invoke("side-thread.handoff", params),
+      ),
+    },
     model: {
       catalog: os.model.catalog.handler(async ({ input: params }) =>
         invoke("model.catalog", params),

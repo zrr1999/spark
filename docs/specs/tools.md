@@ -9,8 +9,26 @@ This file names stable agent-facing capabilities. Schemas and result types live 
 - `/loop` runs recurring ticks and must schedule each next tick; it has no completion gate.
 - `/goal` uses reviewer-backed decisions and reviewer-gated completion.
 - `/workflow` executes a selected saved workflow; `/ultracode` explicitly opts into approval-gated fan-out.
+- `/btw` opens and controls the daemon-owned, read-only Side Thread associated with the current parent session.
 
 Session operating phases are only `plan` and `implement`. `plan` covers investigation, explanation, review, and durable planning without requiring durable writes for ordinary answers. Research remains a task kind and workflow capability, not a separate session phase. Repro setup uses one research-first `plan` phase with typed, artifact-backed requirements: freeze the reproduction contract, verify whether a runnable competitor/reference baseline already exists (typically Megatron), ask the user how to construct or obtain it when missing, inspect reusable implementation and extension boundaries, compare real-module and eager alignment paths, record the implementation and alignment decisions through user-answered canonical asks, and pass a minimum baseline probe against an available or user-approved constructed baseline. Readiness and gates are derived from that evidence; no caller can force-pass them with a bare boolean. Goal and repro prefer the main session for scheduling and execution, and must call `ask` when blocked by a missing user decision or another problem the user can unblock rather than guessing or defaulting to role/session/workflow fan-out. Goal mode also adopts the conservative research-first policy: inspect discoverable facts and run focused probes before sending a still-material decision to reviewer auto-answer.
+
+### Native `/btw`
+
+Spark-native TUI registers one `/btw` command, not a family of colon-suffixed slash commands:
+
+```text
+/btw [show]
+/btw ask <question>
+/btw reset <contextual|tangent>
+/btw handoff <full|summary> [instructions]
+/btw model <inherit|provider/model>
+/btw thinking <inherit|off|minimal|low|medium|high|xhigh>
+```
+
+`show` creates or reuses the parent's child through the daemon and displays its mode, generation, status, effective model/thinking settings, pending count, and recent visible exchanges. `ask` submits to that child; `reset` starts a new generation; model/thinking commands set or clear child-only overrides; handoff admits the pinned current head to the parent and resets the child after acceptance. Generation, head, idempotency, isolation, and read-only enforcement are daemon contracts, not TUI state.
+
+The current native presentation is command/status output. It does not yet provide the focused Pi-product modal overlay documented by `packages/pi-btw`. Cockpit is a nested read-only projection and intentionally exposes no Side Thread command surface. Full lifecycle and safety semantics are in [`sessions-and-channels.md`](./sessions-and-channels.md#side-threads).
 
 ## State and execution
 

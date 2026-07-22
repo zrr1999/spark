@@ -105,6 +105,9 @@ export interface SparkHostRuntimeOptions {
    * When present, this host instance must never advertise or dispatch a tool
    * whose declared effect is outside this allowlist. An unknown declaration is
    * deliberately denied: callers opt into capability classes, never names.
+   * Extension lifecycle listeners do not yet declare effects, so any explicit
+   * effect allowlist also suppresses their dispatch rather than treating an
+   * unclassified hook as read-only.
    */
   allowedToolEffects?: readonly ToolEffect[];
   hasUI?: boolean;
@@ -384,6 +387,10 @@ export class SparkHostRuntime implements SparkHostAPI {
     event: E,
     payload?: E extends SparkHostBuiltinEventName ? BuiltinEventPayloadMap[E] : unknown,
   ): Promise<unknown[]> {
+    // Extension lifecycle hooks can perform arbitrary persistence or external
+    // work and currently carry no effect declaration. Restricted hosts fail
+    // closed here; host-owned session compaction itself continues to run.
+    if (this.allowedToolEffects) return [];
     const listeners = this.listeners.get(event as EventName);
     if (!listeners?.length) return [];
     const ctx = this.makeContext();

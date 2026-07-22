@@ -25,6 +25,7 @@ describe("side-thread protocol", () => {
       pendingTurns: [],
       exchanges: [],
       hasMore: false,
+      projectionTruncated: false,
     });
   });
 

@@ -80,6 +80,8 @@ export interface SparkHeadlessRoleInstructionResult {
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
+  /** Daemon-authoritative native transcript path for this session generation. */
+  sessionPath?: string;
   prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;
@@ -214,6 +216,7 @@ export async function runSparkHeadlessSession(
     const result = await runWithHeadlessTimeout(
       session.run({
         sessionId: input.sessionId,
+        ...(input.sessionPath ? { sessionPath: input.sessionPath } : {}),
         prompt: input.prompt,
         reset: input.reset,
         ...(input.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),

@@ -140,9 +140,9 @@ describe("session ownership protocol", () => {
       }),
     ).not.toHaveProperty("relation");
 
-    expect(sparkSessionListRequestSchema.parse({ includeSideThreads: true })).toMatchObject({
-      includeSideThreads: true,
-    });
+    expect(sparkSessionListRequestSchema.parse({ includeSideThreads: true })).not.toHaveProperty(
+      "includeSideThreads",
+    );
   });
 
   it("rejects mismatched workspace ids and normalizes list legacy workspaceId", () => {

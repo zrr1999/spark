@@ -18,6 +18,8 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionListRequestSchema,
   sparkSessionSnapshotRequestSchema,
+  sparkSideThreadSnapshotRequestSchema,
+  sparkSideThreadSnapshotSchema,
   sparkProtocolJsonObjectSchema,
   sparkTurnCancelResultSchema,
   sparkTurnStatusResultSchema,
@@ -29,6 +31,7 @@ import {
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
   type SparkSessionSnapshotRequest,
+  type SparkSideThreadSnapshot,
   type SparkTurnCancelResult,
   type SparkTurnStatusResult,
   type SparkTurnStreamPage,
@@ -76,6 +79,14 @@ export interface CockpitRuntimeSessionClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  /**
+   * Read-only Side Thread projection. Unlike ensure, this never creates a
+   * child session; the Cockpit only asks after its nested panel is opened.
+   */
+  sideThreadSnapshot(
+    parentSessionId: string,
+    options?: { beforeExchangeId?: string; limit?: number },
+  ): Promise<SparkSideThreadSnapshot>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -128,6 +139,8 @@ export function createCockpitRuntimeSessionClient(
     get: async (sessionId) => await getSession(database(), sessionId),
     snapshot: async (sessionId, options) =>
       await getSessionSnapshot(database(), sessionId, options),
+    sideThreadSnapshot: async (parentSessionId, options) =>
+      await getSideThreadSnapshot(database(), parentSessionId, options),
     create: async (input) => await createSession(database(), input),
     bind: async (input) => await bindSession(database(), input),
     unbind: async (input) => await unbindSession(database(), input),
@@ -312,6 +325,27 @@ async function getSessionSnapshot(
   // counts and cursors live in the exact command result and must not be rebuilt
   // from an already bounded view.
   return parseSessionSnapshotWindow(result);
+}
+
+async function getSideThreadSnapshot(
+  db: DatabaseSync,
+  parentSessionId: string,
+  options: { beforeExchangeId?: string; limit?: number } = {},
+): Promise<SparkSideThreadSnapshot> {
+  const request = sparkSideThreadSnapshotRequestSchema.parse({
+    parentSessionId,
+    ...options,
+  });
+  const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, request.parentSessionId));
+  const result = await runRuntimeSessionControlCommand(db, {
+    route,
+    sessionId: request.parentSessionId,
+    payload: {
+      kind: "side-thread.snapshot.request",
+      payload: publicJsonObject(request),
+    },
+  });
+  return sparkSideThreadSnapshotSchema.parse(result);
 }
 
 async function createSession(

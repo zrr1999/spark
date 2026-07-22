@@ -48,6 +48,10 @@ import { assignCompletedSessionRole } from "./session-title.ts";
 export const CHANNEL_REPLY_EMPTY_ERROR_CODE = "CHANNEL_REPLY_EMPTY";
 export const CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE = "CHANNEL_REPLY_TERMINAL_PRESENTED";
 
+const SPARK_SIDE_THREAD_EXECUTION_PROMPT = `You are running inside a Spark Side Thread: an isolated, daemon-owned child conversation used to investigate a question without mutating the parent workspace.
+
+This surface is always read-only. Inspect, search, reason, and report findings, but do not modify files, repository state, processes, services, credentials, remote systems, or other sessions. Tool permissions enforce this boundary independently of these instructions.`;
+
 export class ChannelReplyContentError extends Error {
   readonly code = CHANNEL_REPLY_EMPTY_ERROR_CODE;
 
@@ -651,12 +655,14 @@ export async function executeSparkDaemonSessionRunTask(
     options,
     sessionContext.surface,
     sessionContext.role,
+    sessionContext.sideThread,
   );
   const messageMetadata = sessionRunMessageMetadata(task, context.invocationId);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
     sessionId: task.sessionId,
+    ...(sessionContext.sessionPath ? { sessionPath: sessionContext.sessionPath } : {}),
     prompt: sessionRunPrompt(task),
     ...(task.model ? { model: task.model } : {}),
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
@@ -696,6 +702,7 @@ export async function executeSparkDaemonSessionRunTask(
           approvalMethod: "auto" as const,
         }
       : {}),
+    ...(sessionContext.sideThread ? { allowedToolEffects: ["read"] as const } : {}),
     ...(options.interact
       ? {
           interaction: (request) => {
@@ -820,14 +827,27 @@ export function sessionSourceForTask(
 async function sessionContextForTask(
   task: SparkDaemonSessionRunTask,
   registry: SparkDaemonTaskExecutorOptions["sessionRegistry"],
-): Promise<{ surface?: "local" | "channel"; role?: string }> {
+): Promise<{
+  surface?: "local" | "channel";
+  role?: string;
+  sideThread?: boolean;
+  sessionPath?: string;
+}> {
   const session = await registry?.get?.(task.sessionId);
   const role = session?.role?.trim();
-  if (task.channelReply) return { surface: "channel", ...(role ? { role } : {}) };
+  if (task.channelReply) {
+    return {
+      surface: "channel",
+      ...(role ? { role } : {}),
+      ...(session?.sessionPath ? { sessionPath: session.sessionPath } : {}),
+    };
+  }
   if (!session) return {};
   return {
     surface: session.bindings.length > 0 ? "channel" : "local",
     ...(role ? { role } : {}),
+    ...(session.relation?.kind === "side_thread" ? { sideThread: true } : {}),
+    ...(session.sessionPath ? { sessionPath: session.sessionPath } : {}),
   };
 }
 
@@ -902,11 +922,15 @@ async function systemPromptForSession(
   options: SparkDaemonTaskExecutorOptions,
   sessionSurface: "local" | "channel" | undefined,
   role: string | undefined,
+  sideThread = false,
 ): Promise<string | undefined> {
   const channelPrompt = await systemPromptForChannelSession(task, options, sessionSurface);
   const rolePrompt = role ? renderPersistentSessionRolePrompt(role) : undefined;
-  if (channelPrompt) return composeAgentSystemPrompt([channelPrompt, rolePrompt]);
-  if (rolePrompt) return composeAgentSystemPrompt([DEFAULT_SPARK_IDENTITY_PROMPT, rolePrompt]);
+  const sideThreadPrompt = sideThread ? SPARK_SIDE_THREAD_EXECUTION_PROMPT : undefined;
+  if (channelPrompt) return composeAgentSystemPrompt([channelPrompt, rolePrompt, sideThreadPrompt]);
+  if (rolePrompt || sideThreadPrompt) {
+    return composeAgentSystemPrompt([DEFAULT_SPARK_IDENTITY_PROMPT, rolePrompt, sideThreadPrompt]);
+  }
   return undefined;
 }
 
@@ -1062,6 +1086,8 @@ async function assignRoleAfterCompletedSessionRun(
   const setRoleIfMissing = options.sessionRegistry?.setRoleIfMissing;
   if (!task.model || !generateSessionRole || !get || !setRoleIfMissing) return;
   try {
+    const current = await get(task.sessionId);
+    if (current?.relation?.kind === "side_thread") return;
     const session = await assignCompletedSessionRole(
       {
         sessionId: task.sessionId,

@@ -1,5 +1,7 @@
 /** Persisted Spark agent session facade shared by TUI/daemon-style callers. */
 
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
 import {
   classifyProviderFailure,
   type AssistantMessage,
@@ -46,6 +48,8 @@ import type {
 
 export interface SparkAgentSessionRunOptions {
   sessionId: string;
+  /** Daemon-authoritative transcript path; avoids guessing between generations. */
+  sessionPath?: string;
   prompt: UserMessage["content"];
   reset?: boolean;
   forkFromSession?: string;
@@ -226,6 +230,28 @@ export class SparkAgentSession {
       return this.services.sessionStore.forkSession(parent, { id: options.sessionId });
     }
     if (options.reset) return this.services.sessionStore.createSession({ id: options.sessionId });
+    if (options.sessionPath) {
+      const path = resolve(options.sessionPath);
+      const fromSessionDir = relative(this.services.sessionStore.sessionDir, path);
+      if (
+        !fromSessionDir ||
+        fromSessionDir === ".." ||
+        fromSessionDir.startsWith(`..${sep}`) ||
+        isAbsolute(fromSessionDir)
+      ) {
+        throw new Error(`Spark session path is outside the active workspace store: ${path}`);
+      }
+      const record = await this.services.sessionStore.load(path);
+      if (record.header.id !== options.sessionId) {
+        throw new Error(
+          `Spark session path belongs to ${record.header.id}, not ${options.sessionId}`,
+        );
+      }
+      if (resolve(record.header.cwd) !== this.services.sessionStore.cwd) {
+        throw new Error(`Spark session path belongs to a different workspace: ${path}`);
+      }
+      return record;
+    }
     const existing = await this.services.sessionStore.findById(options.sessionId);
     return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
   }

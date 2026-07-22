@@ -22,6 +22,13 @@ describe("turn command transport contract", () => {
     expect(
       sparkCommandFromLocalRpcRequest({ id: "local_restart", method: "daemon.restart" }).kind,
     ).toBe("daemon.restart.request");
+    expect(
+      sparkCommandFromLocalRpcRequest({
+        id: "local_side_thread",
+        method: "side-thread.ensure",
+        params: { parentSessionId: "session-a" },
+      }),
+    ).toMatchObject({ kind: "side-thread.ensure.request", route: { sessionId: "session-a" } });
 
     expect(
       sparkCommandFromLocalRpcRequest({

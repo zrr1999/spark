@@ -491,6 +491,28 @@ const messages = {
       "This conversation is bound to a messaging platform. Open message platform settings to manage bindings and credentials for this workspace.",
     openChannelSettings: "Message platform settings",
     configureChannels: "Message platforms",
+    sideThread: {
+      title: "Side Thread",
+      readOnlyBadge: "Read-only",
+      description:
+        "A daemon-owned, isolated investigation attached to this conversation. Cockpit never creates, sends to, resets, or hands off Side Threads.",
+      loading: "Loading Side Thread…",
+      missing: "No Side Thread has been opened for this conversation.",
+      unavailable: "The Side Thread is currently unavailable.",
+      modeLabel: "Mode",
+      generationLabel: "Generation",
+      statusLabel: "Status",
+      modelLabel: "Model",
+      thinkingLabel: "Thinking",
+      pendingLabel: "Pending",
+      inherited: "Inherited",
+      questionLabel: "Question",
+      findingLabel: "Finding",
+      noExchanges: "No completed exchanges in this generation.",
+      earlierNotLoaded: "Earlier exchanges are not loaded in this read-only preview.",
+      projectionTruncated:
+        "Some text was shortened to fit the control transport; the native transcript is intact.",
+    },
     managementTitle: "Conversation management",
     archiveBody:
       "Archived conversations leave the list while existing messages and reports stay in the record.",

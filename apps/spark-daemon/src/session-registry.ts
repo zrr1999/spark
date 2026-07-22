@@ -12,7 +12,10 @@ import {
   defaultSparkSessionRegistryRoot,
   SparkSessionRegistry,
   SparkSessionRegistryError,
+  type ConfigureSparkSideThreadInput,
   type CreateSparkSessionInput,
+  type EnsureSparkSideThreadInput,
+  type ResetSparkSideThreadInput,
   type ResolveBindingInput,
 } from "@zendev-lab/spark-session";
 
@@ -23,7 +26,7 @@ import {
  */
 export interface DaemonSessionRegistry {
   create(input: SparkSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
-  list(options?: SparkSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
+  list(options?: DaemonSessionListRequest): Promise<SparkSessionRegistryRecord[]>;
   get(sessionId: string): Promise<SparkSessionRegistryRecord | undefined>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(
@@ -47,8 +50,16 @@ export interface DaemonSessionRegistry {
     sessionPath: string;
     now?: Date;
   }): Promise<SparkSessionRegistryRecord>;
+  ensureSideThread(input: EnsureSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
+  resetSideThread(input: ResetSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
+  configureSideThread(input: ConfigureSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
   resolveBinding(input: ResolveBindingInput): Promise<SparkSessionRegistryRecord>;
 }
+
+/** Diagnostic child visibility is daemon-internal and absent from the wire schema. */
+export type DaemonSessionListRequest = SparkSessionListRequest & {
+  includeSideThreads?: boolean;
+};
 
 export interface CreateDaemonSessionRegistryOptions {
   /** Stable daemon installation identity. Never accepted from a create client. */
@@ -106,6 +117,9 @@ export function createSerializedDaemonSessionRegistry(
     recordTurnQueued: (sessionId, now) => mutate(() => registry.recordTurnQueued(sessionId, now)),
     recordTurnSettled: (sessionId, now) => mutate(() => registry.recordTurnSettled(sessionId, now)),
     recordRun: (input) => mutate(() => registry.recordRun(input)),
+    ensureSideThread: (input) => mutate(() => registry.ensureSideThread(input)),
+    resetSideThread: (input) => mutate(() => registry.resetSideThread(input)),
+    configureSideThread: (input) => mutate(() => registry.configureSideThread(input)),
     resolveBinding: (input) => mutate(() => registry.resolveBinding(input)),
   };
 }
@@ -134,6 +148,9 @@ export function createDaemonSessionRegistry(
     recordTurnQueued: async (sessionId, now) => await registry.recordTurnQueued(sessionId, now),
     recordTurnSettled: async (sessionId, now) => await registry.recordTurnSettled(sessionId, now),
     recordRun: async (input) => await registry.recordRun(input),
+    ensureSideThread: async (input) => await registry.ensureSideThread(input),
+    resetSideThread: async (input) => await registry.resetSideThread(input),
+    configureSideThread: async (input) => await registry.configureSideThread(input),
     resolveBinding: async (input) =>
       await registry.resolveBinding({
         ...input,
@@ -232,13 +249,21 @@ function resolveRegistryCreateInput(
 }
 
 function resolveListRequest(
-  input: SparkSessionListRequest,
+  input: DaemonSessionListRequest,
   options: CreateDaemonSessionRegistryOptions,
-): { includeArchived?: boolean; scope?: SparkSessionScope; workspaceId?: string } {
+): {
+  includeArchived?: boolean;
+  includeSideThreads?: boolean;
+  scope?: SparkSessionScope;
+  workspaceId?: string;
+} {
   if (!input.scope) return input;
   if (input.scope.kind === "workspace") {
     return {
       ...(input.includeArchived !== undefined ? { includeArchived: input.includeArchived } : {}),
+      ...(input.includeSideThreads !== undefined
+        ? { includeSideThreads: input.includeSideThreads }
+        : {}),
       scope: input.scope,
     };
   }
@@ -251,6 +276,9 @@ function resolveListRequest(
   }
   return {
     ...(input.includeArchived !== undefined ? { includeArchived: input.includeArchived } : {}),
+    ...(input.includeSideThreads !== undefined
+      ? { includeSideThreads: input.includeSideThreads }
+      : {}),
     scope: { kind: "daemon", daemonId },
   };
 }

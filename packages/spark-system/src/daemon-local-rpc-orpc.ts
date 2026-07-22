@@ -98,7 +98,10 @@ export async function invokeSparkDaemonOrpcLiveMethod(
   const path = sparkLocalRpcOrpcMethodPaths[method];
   let current: unknown = client;
   for (const segment of path) {
-    if (!current || typeof current !== "object" || !(segment in current)) {
+    // oRPC exposes nested procedures through a dynamic Proxy whose `has` trap
+    // does not advertise paths. Let property-access failures propagate: once
+    // connected, callers must treat them as invoke failures and not retry.
+    if (current === null || (typeof current !== "object" && typeof current !== "function")) {
       throw new Error(`oRPC client missing path segment "${segment}" for ${method}`);
     }
     current = (current as Record<string, unknown>)[segment];

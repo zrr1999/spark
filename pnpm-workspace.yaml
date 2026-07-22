@@ -39,6 +39,9 @@ overrides:
   "@connectrpc/connect-node>undici": "6.27.0"
   "@cursor/sdk>zod": "3.25.76"
   "@earendil-works/pi-coding-agent>undici": "8.7.0"
+  # MCP SDK 1.29 still declares Hono Node Server 1.x; keep the secure v2
+  # compatibility override scoped to that parent until upstream widens it.
+  "@modelcontextprotocol/sdk>@hono/node-server": "2.0.11"
   "@sveltejs/kit>cookie": "0.7.2"
   "ajv>fast-uri": "3.1.4"
   "minimatch>brace-expansion": "5.0.7"

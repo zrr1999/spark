@@ -21,6 +21,8 @@ export type SparkHeadlessUserContent =
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
+  /** Daemon-authoritative native transcript path for this session generation. */
+  sessionPath?: string;
   prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;

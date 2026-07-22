@@ -18,6 +18,15 @@ export const sparkSideThreadExchangeSchema = z.object({
   user: z.string(),
   assistant: z.string(),
   createdAt: isoDateTimeSchema,
+  userTruncated: z.boolean().optional(),
+  userOriginalBytes: z.number().int().nonnegative().optional(),
+  assistantTruncated: z.boolean().optional(),
+  assistantOriginalBytes: z.number().int().nonnegative().optional(),
+});
+
+const sparkSideThreadPendingTurnSchema = sparkSessionPendingTurnSchema.extend({
+  promptTruncated: z.boolean().optional(),
+  promptOriginalBytes: z.number().int().nonnegative().optional(),
 });
 
 /** Display-safe, daemon-owned projection of the active side-thread generation. */
@@ -27,10 +36,12 @@ export const sparkSideThreadSnapshotSchema = z.object({
   generation: z.number().int().positive(),
   mode: sparkSideThreadModeSchema,
   status: sparkSideThreadStatusSchema,
-  pendingTurns: z.array(sparkSessionPendingTurnSchema).default([]),
+  pendingTurns: z.array(sparkSideThreadPendingTurnSchema).default([]),
   exchanges: z.array(sparkSideThreadExchangeSchema).default([]),
   headExchangeId: z.string().min(1).optional(),
   hasMore: z.boolean().default(false),
+  /** True when display strings or exchange count were reduced to fit transport bounds. */
+  projectionTruncated: z.boolean().default(false),
   nextBeforeExchangeId: z.string().min(1).optional(),
   modelOverride: sparkModelRefSchema.optional(),
   thinkingOverride: sparkThinkingLevelSchema.optional(),
@@ -105,8 +116,13 @@ export const sparkSideThreadErrorCodeOptions = [
   "side_thread_parent_archived",
   "side_thread_nesting_forbidden",
   "side_thread_scope_mismatch",
+  "side_thread_not_found",
+  "side_thread_archived",
   "side_thread_generation_conflict",
   "side_thread_head_conflict",
+  "side_thread_idempotency_conflict",
+  "side_thread_direct_submit_forbidden",
+  "side_thread_mutation_forbidden",
   "side_thread_busy",
   "side_thread_drain_timeout",
   "side_thread_transcript_invalid",

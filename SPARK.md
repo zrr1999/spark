@@ -18,7 +18,7 @@ inspired_by:
 
 ## 起源
 
-`spark` 最初作为面向 Pi 产品的工作流套件起步，通过意图明确的用户命令与规范化工具，将项目意图、任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。仓库落地后，执行与会话中枢已迁移到 Spark daemon，产品面扩展为原生 TUI、Cockpit Web 与消息通道；**Pi SDK**（`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 及与之对齐的流式/会话形状）仍是模型与终端呈现内核，**Pi 产品宿主**（`pi-coding-agent` 扩展加载路径）则降为待冻结的兼容面。
+`spark` 最初作为面向 Pi 产品的工作流套件起步，通过意图明确的用户命令与规范化工具，将项目意图、任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。仓库落地后，执行与会话中枢已迁移到 Spark daemon，产品面扩展为原生 TUI、Cockpit Web 与消息通道；**Pi SDK**（`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 及与之对齐的流式/会话形状）仍是模型与终端呈现内核，**Pi 产品宿主**（`pi-coding-agent` 扩展加载路径）则已冻结为兼容面。
 
 ## 当前工作标题
 
@@ -65,7 +65,7 @@ inspired_by:
 - Slash / action catalog 继续以协议为源；Cockpit 与 TUI 只做 i18n 与执行。
 - 新功能默认可在 TUI 或 Cockpit 验证，消息通道按 channel policy 收窄；无需先在 Pi 产品里跑通。
 - Pi 产品加载路径可冻结：无新 `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与产品兼容。宿主契约公开名为 `SparkHostAPI`（`spark-core`）；ask/tasks/context 注册入口为 `registerSpark*`。
-- Spark 原生 TUI 可运行并行 side thread、恢复隔离历史并将全文或摘要显式 handoff 回主会话，过程中不加载 `pi-coding-agent`；Pi 兼容适配器通过同一纯状态契约保持行为一致。
+- Spark 原生 TUI 通过单一 `/btw` 命令运行由 daemon 持有的只读 side thread、恢复隔离历史并将全文或紧凑摘要显式 handoff 回主会话，过程中不加载 `pi-coding-agent`；Cockpit 只提供父会话内的嵌套只读投影。当前原生呈现是命令/状态输出，不宣称已经具备 Pi 兼容层的 modal overlay。
 - CI failure、review comment 与 merge conflict 能以幂等反馈事件回到创建该 change/PR 的原 session，并带可审查 evidence，而不是要求用户手工复制终端输出。
 - Project-bound 命令、任务图、ask、roles、cue 的既有成功信号仍成立，并通过测试与 `vp check` / `prek` 守门。
 
@@ -73,14 +73,17 @@ inspired_by:
 
 - 完成证据门禁应严格到什么程度：对人工任务、审查/设计任务和角色执行/工作流任务是否采用不同要求。
 - 历史任务中被完成摘要覆盖的原始意图是否需要进一步从聊天记录、每日记忆或 Git 历史中恢复。
-- `pi-btw` 的 Pi 产品兼容安装面应保留到哪个版本，以及原生 side-thread adapter 达到哪些真实 TUI 验收条件后可以移除根 manifest 暴露。
+- `pi-btw` 的 Pi 产品兼容安装面应保留到哪个版本；移除根 manifest 暴露前至少要通过真实 TUI/Zellij 的提交、繁忙并行、重启恢复、配置与两种 handoff 验收，并明确 modal overlay 是否属于退场门禁。
+- Cockpit 应保持私有/源码分发、发布完整私有依赖闭包，还是产出自包含 bundle；当前 public app + private `workspace:*` 依赖不是可验证的 registry 安装闭包。
 
 ## 近期收尾任务
 
 - 继续对齐跨表面 ask / gate / submit 语义；Cockpit 已改用协议 option `value` 与 `parseSparkAskChoice`。
 - 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
 - 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
-- 以 `spark-turn/side-thread` 的纯状态契约为起点，实现 Spark 原生 store/runner/overlay adapter；`pi-btw` 在原生验收前继续作为冻结兼容实现。
+- Spark 原生 side-thread 的 daemon store/runner/controller、TUI 单一 `/btw` 命令和 Cockpit 嵌套只读投影已实现；下一步用真实 TUI/Zellij 验证并决定是否另做 modal overlay。`pi-btw` 在退场门禁满足前继续作为冻结兼容实现。
+- 以 `check:architecture` 守住工作区数量、生产文件体量和冻结 Pi manifest；先分类 Knip/jscpd/complexity 的动态入口误报，再把稳定基线升级为非增长门禁。
+- 明确 Cockpit 发布模型并增加 clean-pack/install/start 验证，避免仅凭 monorepo build 判断可发布。
 - 将现有 PR/CI 读取能力收敛成 change delivery feedback 事件，先完成“失败反馈回原 session”，再考虑 GitHub Checks 回写。
 - 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
 - `memory` owns durable scoped memory, recall candidates (`recall` tool), the `LearningStore` / `learning` tool, and reflection pipelines (`.spark/memory/reflections/`).
@@ -98,3 +101,4 @@ inspired_by:
 - 2026-07-21：`spark-extension-api` 硬切重命名为 `@zendev-lab/spark-core`（宿主契约 + 轻量 primitives；非复活旧能力袋）。
 - 2026-07-21：清除 `ExtensionAPI` / 目标 `registerPi*` 技术债；宿主契约公开名为 `SparkHostAPI`，ask/tasks/context 注册入口为 `registerSpark*`。
 - 2026-07-22：吸收本地 agent control-plane 竞品的交付闭环，决定将 `pi-btw` 拆为共享 side-thread 契约、Spark 原生 adapter 与冻结 Pi 兼容层；外部 durable engine 不替换 daemon 真相。
+- 2026-07-22：完成 Spark 原生 Side Thread 的 daemon 真相源、TUI 命令与 Cockpit 只读投影首个切片，并将架构增长、开源依赖采纳和发布闭包风险写入正式契约。

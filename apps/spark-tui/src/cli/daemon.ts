@@ -2251,29 +2251,24 @@ export async function requestSparkDaemonControl<T>(
   await clientEnsureRunning(client);
   if (client.controlRequest) return (await client.controlRequest(method, params)) as T;
   if (isSparkDaemonOrpcLiveMethod(method)) {
+    let handle: Awaited<ReturnType<typeof createSparkDaemonOrpcClient>> | undefined;
     try {
-      return await requestSparkDaemonControlViaOrpc<T>(method, params, paths);
+      handle = await createSparkDaemonOrpcClient({ paths });
     } catch {
-      // Fall back to the legacy line-delimited socket when oRPC is unavailable.
+      // The parallel socket is optional during migration. Falling back is safe
+      // only before a request crosses that transport boundary.
+    }
+    if (handle) {
+      try {
+        return (await invokeSparkDaemonOrpcLiveMethod(handle.client, method, params ?? {})) as T;
+      } finally {
+        // Once connected, fail closed on any call error. Retrying an unknown
+        // mutation outcome over legacy NDJSON could execute it twice.
+        handle.close();
+      }
     }
   }
   return await localRpcRequest<T>(paths, localRpcWireRequest(method, params));
-}
-
-async function requestSparkDaemonControlViaOrpc<T>(
-  method: string,
-  params: unknown,
-  paths: Pick<ReturnType<typeof resolveSparkPaths>, "runtimeDir">,
-): Promise<T> {
-  if (!isSparkDaemonOrpcLiveMethod(method)) {
-    throw new Error(`oRPC live method not wired in TUI client: ${method}`);
-  }
-  const handle = await createSparkDaemonOrpcClient({ paths });
-  try {
-    return (await invokeSparkDaemonOrpcLiveMethod(handle.client, method, params ?? {})) as T;
-  } finally {
-    handle.close();
-  }
 }
 
 export interface SparkDaemonHumanInteractionRespondInput {

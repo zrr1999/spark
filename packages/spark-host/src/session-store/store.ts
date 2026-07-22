@@ -43,6 +43,8 @@ export class SparkSessionStore {
       timestamp,
       cwd: this.cwd,
       ...(options.parentSession ? { parentSession: options.parentSession } : {}),
+      ...(options.visibility ? { visibility: options.visibility } : {}),
+      ...(options.purpose ? { purpose: options.purpose } : {}),
     };
     return {
       path: join(this.sessionDir, `${fileTimestamp(timestamp)}_${id}.jsonl`),
@@ -105,6 +107,7 @@ export class SparkSessionStore {
       const path = join(sessionDir, name);
       try {
         const record = await this.load(path);
+        if (record.header.visibility === "internal") continue;
         infos.push(toSessionInfo(record, (await stat(path)).mtime));
       } catch {
         // Match Pi list behavior: ignore invalid/corrupt session files.
@@ -130,7 +133,8 @@ export class SparkSessionStore {
     if (!trimmed) throw new Error("Spark session ref is required");
     if (looksLikeSessionPath(trimmed)) {
       try {
-        return await this.load(resolve(trimmed));
+        const record = await this.load(resolve(trimmed));
+        if (record.header.visibility !== "internal") return record;
       } catch {
         // Fall through to id lookup so callers can pass a basename-like id.
       }

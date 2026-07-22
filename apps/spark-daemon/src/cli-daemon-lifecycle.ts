@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
 import { createId } from "@zendev-lab/spark-protocol";
@@ -12,13 +12,8 @@ import {
   readSparkDaemonConfig,
   writeSparkDaemonConfig,
 } from "./config.js";
-import { createSparkDaemonUplinkControl, sparkDaemonVersion, startSparkDaemon } from "./daemon.js";
-import {
-  getSparkDaemonServerProfile,
-  listSparkDaemonServerProfiles,
-  sparkDaemonConfigForServerProfile,
-  type SparkDaemonServerProfile,
-} from "./server-profiles.js";
+import { createSparkDaemonUplinkControl, startSparkDaemon } from "./daemon.js";
+import { getSparkDaemonServerProfile } from "./server-profiles.js";
 import { createSparkDaemonModelControl } from "./model-control.ts";
 import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
@@ -45,7 +40,7 @@ import {
 } from "./local-rpc.js";
 import { migrateLegacyQueueHistory } from "./store/legacy-queue-migration.ts";
 import { openSparkDaemonDatabase } from "./store/schema.js";
-import { resolveWorkspaceLocalPath, type SparkDaemonWorkspace } from "./store/workspaces.js";
+import { resolveWorkspaceLocalPath } from "./store/workspaces.js";
 import {
   cancelSparkDaemonRestartSuccessor,
   clearSparkDaemonRestartFenceForExplicitStart,

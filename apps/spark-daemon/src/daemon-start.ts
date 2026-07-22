@@ -1,18 +1,13 @@
 import { existsSync, rmSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket, { type RawData } from "ws";
 import {
   createId,
   parseSparkDaemonEvent,
   runtimeProtocolVersion,
-  sparkProtocolJsonObjectSchema,
-  type SparkDaemonEvent,
-  type SparkJsonObject,
-  type RuntimeWorkspaceBindingSummary,
 } from "@zendev-lab/spark-protocol";
 import { SparkSessionMailStore } from "@zendev-lab/spark-session";
-import { resolveSparkUserPaths, writePrivateFile, type SparkPaths } from "@zendev-lab/spark-system";
+import { resolveSparkUserPaths, writePrivateFile } from "@zendev-lab/spark-system";
 import { readSparkDaemonConfig, type SparkDaemonConfig } from "./config.js";
 import {
   getSparkDaemonServerProfile,
@@ -52,37 +47,15 @@ import {
   SparkDaemonHumanInteractionBroker,
   legacySparkDaemonQueueRoot,
   type SparkDaemonDrainProgress,
-  type SparkDaemonEventSink,
-  type SparkDaemonHumanInteractionResponder,
-  type SparkDaemonTaskExecutor,
 } from "./core/index.ts";
-import {
-  SparkDaemonHumanWaitRegistry,
-  type SparkDaemonHumanWaitDeliveryResult,
-} from "./core/human-waits.ts";
-import type { SparkDaemonModelControl } from "./model-control.ts";
+import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
-import {
-  invocationUpdated,
-  reconcileReport,
-  runtimeEnvelope,
-  workspaceSnapshot,
-  type RouteContext,
-} from "./protocol/outbound.js";
 import { SparkInvocationScheduler } from "./core/invocation-scheduler.ts";
-import {
-  pendingRuntimeCommandTerminalsForRoute,
-  recoverInterruptedRuntimeCommandReceipts,
-} from "./runtime-command-receipts.ts";
+import { recoverInterruptedRuntimeCommandReceipts } from "./runtime-command-receipts.ts";
 import { migrateLegacyQueueHistory } from "./store/legacy-queue-migration.ts";
 import { SparkChannelDeliveryStore } from "./store/channel-deliveries.ts";
+import { SparkInvocationStore, type SparkInvocationEvent } from "./store/invocations.ts";
 import {
-  SparkInvocationStore,
-  type SparkInvocationEvent,
-  type SparkInvocationPendingDelivery,
-} from "./store/invocations.ts";
-import {
-  applyCockpitWorkspaceBindingAssignments,
   getWorkspaceById,
   isUserDetachedWorkspace,
   listWorkspaces,
@@ -92,16 +65,8 @@ import {
   reconcileWorkspaces,
   reconcileWorkspacesForServer,
   resolveWorkspaceLocalPath,
-  sparkDaemonServerStatusSummaries,
-  workspaceBindingBelongsToServer,
-  workspaceSummaries,
 } from "./store/workspaces.js";
-import {
-  runSparkCommandBridge,
-  cancelSparkBridgeInvocation,
-  type RunSparkCommandFn,
-  type CancelSparkInvocationFn,
-} from "./spark/bridge.js";
+import { runSparkCommandBridge, cancelSparkBridgeInvocation } from "./spark/bridge.js";
 import { createChannelAwareTaskExecutor, sessionSourceForTask } from "./spark/session-run.js";
 import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
 import { notifySessionRequestCompletion } from "./session-request-completion-notify.ts";
@@ -112,8 +77,6 @@ import {
   tokenRefreshRetryDelayMs,
 } from "./token-refresh.js";
 import {
-  buildReconcileReport,
-  createDaemonHumanWait,
   flushPendingHumanRequests,
   flushPendingRuntimeCommandTerminals,
   handleServerMessage,
@@ -127,12 +90,8 @@ import {
   serverUrlForConfig,
   sparkDaemonSupportedFeatures,
   sparkDaemonVersion,
-  toWebSocketUrl,
   workspaceSummary,
-  type MessageContext,
-  type ServerSocket,
   type StartSparkDaemonOptions,
-  type SparkDaemonUplinkControl,
 } from "./daemon.ts";
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {

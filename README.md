@@ -32,7 +32,7 @@ spark daemon invocation cancel <invocation-id> --reason <text> --json
 spark cockpit
 ```
 
-Inside an agent host, ordinary input is lightweight by default. `/plan` creates or refines durable tasks, `/implement` executes ready work, `/loop` schedules recurring work, `/goal` runs reviewer-gated autonomous work, and `/workflow` runs a selected saved workflow.
+Inside an agent host, ordinary input is lightweight by default. `/plan` creates or refines durable tasks, `/implement` executes ready work, `/loop` schedules recurring work, `/goal` runs reviewer-gated autonomous work, and `/workflow` runs a selected saved workflow. In Spark-native TUI, `/btw` controls a daemon-owned read-only Side Thread using command/status output; its lifecycle and subcommands are specified in [`docs/specs/tools.md`](./docs/specs/tools.md#native-btw).
 
 ## Development
 

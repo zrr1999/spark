@@ -28,6 +28,7 @@ import {
   invocationUpdated,
   workspaceSnapshot,
 } from "./protocol/outbound.js";
+import { executeSparkDaemonSideThreadControl } from "./side-thread-control.ts";
 import { executeSparkDaemonSessionControl } from "./session-control.ts";
 import { commandRejectForUnknownInvocation } from "./spark/bridge.js";
 import {
@@ -255,6 +256,53 @@ export async function executeClaimedCommand(
           status: "succeeded",
           result: executed.result,
           ...(executed.projection ? { projection: executed.projection } : {}),
+          completedAt: new Date().toISOString(),
+        },
+        resultRoute,
+      ),
+    );
+    return;
+  }
+
+  if (isRuntimeSideThreadControlKind(sparkCommand.kind)) {
+    const scope = command.workspaceBindingId ? "workspace" : "daemon";
+    const executed = await executeSparkDaemonSideThreadControl(
+      {
+        paths: context.paths,
+        db: context.db,
+        sessionRegistry: context.sessionRegistry,
+        modelControl: context.modelControl,
+        actor: "spark-daemon-runtime-ws",
+      },
+      {
+        kind: sparkCommand.kind,
+        scope,
+        workspaceId: command.workspaceId,
+        workspaceBindingId: command.workspaceBindingId,
+        payload: sparkCommand.payload,
+      },
+    );
+    const resultRoute = {
+      ...route,
+      ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+      ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
+    };
+    sendJson(
+      ws,
+      commandAck(
+        {
+          accepted: true,
+          ...(executed.invocationId ? { invocationId: executed.invocationId } : {}),
+        },
+        resultRoute,
+      ),
+    );
+    sendJson(
+      ws,
+      commandResult(
+        {
+          status: "succeeded",
+          result: executed.result,
           completedAt: new Date().toISOString(),
         },
         resultRoute,
@@ -518,6 +566,19 @@ function isRuntimeSessionControlKind(
     kind === "turn.cancel.request" ||
     kind === "turn.status.request" ||
     kind === "turn.stream.subscribe"
+  );
+}
+
+function isRuntimeSideThreadControlKind(
+  kind: SparkCommand["kind"],
+): kind is Parameters<typeof executeSparkDaemonSideThreadControl>[1]["kind"] {
+  return (
+    kind === "side-thread.ensure.request" ||
+    kind === "side-thread.snapshot.request" ||
+    kind === "side-thread.submit.request" ||
+    kind === "side-thread.reset.request" ||
+    kind === "side-thread.configure.request" ||
+    kind === "side-thread.handoff.request"
   );
 }
 

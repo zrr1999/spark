@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   SparkSessionBindRequest,
   SparkSessionRegistryRecord,
+  SparkSideThreadSnapshot,
 } from "@zendev-lab/spark-protocol";
 import {
   getRuntimeSessionProjection,
@@ -33,6 +34,10 @@ export interface CockpitManagedSessionsClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  sideThreadSnapshot?(
+    parentSessionId: string,
+    options?: { beforeExchangeId?: string; limit?: number },
+  ): Promise<SparkSideThreadSnapshot>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -197,6 +202,40 @@ export async function getManagedSessionSnapshotForCockpit(
   }
 }
 
+/**
+ * Load an already-created Side Thread for a workspace session. This is
+ * deliberately read-only: the Cockpit must never materialize a child merely
+ * because somebody visited a parent session page.
+ */
+export async function getManagedSideThreadSnapshotForCockpit(
+  parentSessionId: string,
+  options: { workspaceId?: string; beforeExchangeId?: string; limit?: number } = {},
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<SparkSideThreadSnapshot | null> {
+  try {
+    if (!client.sideThreadSnapshot) return null;
+    const session = await client.get(parentSessionId);
+    if (!isCockpitWorkspaceSession(session)) return null;
+    if (options.workspaceId && session.scope.workspaceId !== options.workspaceId) return null;
+    return await client.sideThreadSnapshot(parentSessionId, {
+      ...(options.beforeExchangeId ? { beforeExchangeId: options.beforeExchangeId } : {}),
+      ...(options.limit ? { limit: options.limit } : {}),
+    });
+  } catch (error) {
+    if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
+    if (
+      error instanceof RuntimeControlCommandError &&
+      (error.reasonCode === "COMMAND_RESULT_TIMEOUT" ||
+        error.reasonCode === "side_thread_not_found" ||
+        error.reasonCode === "SIDE_THREAD_NOT_FOUND")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function createManagedSessionForCockpit(
   input: CockpitRuntimeSessionCreateRequest,
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
@@ -231,5 +270,9 @@ export async function archiveManagedSessionForCockpit(
 function isCockpitWorkspaceSession(
   session: SparkSessionRegistryRecord,
 ): session is SparkSessionRegistryRecord & { scope: { kind: "workspace"; workspaceId: string } } {
-  return session.scope.kind === "workspace";
+  // The daemon normally omits these from `session.list`, but keep the Cockpit
+  // rail defensive when a stale projection or a diagnostic list response
+  // contains a related child. Children are visible only through the parent
+  // detail's nested Side Thread panel.
+  return session.scope.kind === "workspace" && session.relation?.kind !== "side_thread";
 }
