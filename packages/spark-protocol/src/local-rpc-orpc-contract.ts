@@ -336,25 +336,15 @@ export const sparkLocalRpcOrpcMethodPaths = {
 export type SparkLocalRpcOrpcMethod = keyof typeof sparkLocalRpcOrpcMethodPaths;
 
 /**
- * Methods with live oRPC handlers (half-migration allowlist). Remaining methods
- * keep contract shapes only and continue on the legacy line-delimited dispatch.
+ * Methods with live oRPC handlers. The daemon router bridges every contracted
+ * method onto legacy local-rpc dispatch; clients may still fall back to
+ * daemon.sock when the oRPC socket is unavailable.
  */
-export const sparkLocalRpcOrpcLiveMethods = [
-  "daemon.status",
-  "daemon.stop",
-  "workspace.list",
-  "uplink.status",
-  "model.catalog",
-  "turn.status",
-  "turn.result",
-  "invocation.list",
-  "session.list",
-  "channel.status",
-  "workspace.ensure-local",
-  "daemon.restart",
-] as const satisfies readonly SparkLocalRpcOrpcMethod[];
+export const sparkLocalRpcOrpcLiveMethods = Object.keys(
+  sparkLocalRpcOrpcMethodPaths,
+) as SparkLocalRpcOrpcMethod[];
 
-export type SparkLocalRpcOrpcLiveMethod = (typeof sparkLocalRpcOrpcLiveMethods)[number];
+export type SparkLocalRpcOrpcLiveMethod = SparkLocalRpcOrpcMethod;
 
 /** @deprecated Use SparkLocalRpcOrpcMethod — spike alias retained for callers. */
 export type SparkLocalRpcOrpcSpikeMethod = SparkLocalRpcOrpcMethod;

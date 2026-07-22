@@ -44,6 +44,7 @@ import {
 } from "@zendev-lab/spark-system/daemon-local-rpc";
 import {
   createSparkDaemonOrpcClient,
+  invokeSparkDaemonOrpcLiveMethod,
   isSparkDaemonOrpcLiveMethod,
 } from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
 import { SparkSessionStore, type SparkSessionInfo } from "@zendev-lab/spark-host/session-store";
@@ -2264,42 +2265,12 @@ async function requestSparkDaemonControlViaOrpc<T>(
   params: unknown,
   paths: Pick<ReturnType<typeof resolveSparkPaths>, "runtimeDir">,
 ): Promise<T> {
+  if (!isSparkDaemonOrpcLiveMethod(method)) {
+    throw new Error(`oRPC live method not wired in TUI client: ${method}`);
+  }
   const handle = await createSparkDaemonOrpcClient({ paths });
   try {
-    const input = (params ?? {}) as Record<string, unknown>;
-    switch (method) {
-      case "daemon.status":
-        return (await handle.client.daemon.status({})) as T;
-      case "daemon.stop":
-        return (await handle.client.daemon.stop({})) as T;
-      case "daemon.restart":
-        return (await handle.client.daemon.restart({})) as T;
-      case "workspace.list":
-        return (await handle.client.workspace.list({})) as T;
-      case "workspace.ensure-local":
-        return (await handle.client.workspace.ensureLocal(
-          input as { localPath: string; displayName?: string; localWorkspaceKey?: string },
-        )) as T;
-      case "uplink.status":
-        return (await handle.client.uplink.status({})) as T;
-      case "model.catalog":
-        return (await handle.client.model.catalog(input as { sessionId?: string })) as T;
-      case "turn.status":
-        return (await handle.client.turn.status(input as { invocationId: string })) as T;
-      case "turn.result":
-        return (await handle.client.turn.result(input as { invocationId: string })) as T;
-      case "invocation.list":
-        return (await handle.client.invocation.list(input)) as T;
-      case "session.list":
-        return (await handle.client.session.list(input)) as T;
-      case "channel.status":
-        return (await handle.client.channel.status(input as { workspaceId: string })) as T;
-      default: {
-        const _exhaustive: never = method as never;
-        void _exhaustive;
-        throw new Error(`oRPC live method not wired in TUI client: ${method}`);
-      }
-    }
+    return (await invokeSparkDaemonOrpcLiveMethod(handle.client, method, params ?? {})) as T;
   } finally {
     handle.close();
   }

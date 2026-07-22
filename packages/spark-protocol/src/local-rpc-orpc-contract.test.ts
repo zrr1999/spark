@@ -29,8 +29,10 @@ describe("sparkLocalRpcOrpcContract (Phase 4)", () => {
     }
   });
 
-  it("keeps a live half-migration allowlist of at least ten methods", () => {
-    expect(sparkLocalRpcOrpcLiveMethods.length).toBeGreaterThanOrEqual(10);
+  it("marks every contracted method as live via the legacy dispatch bridge", () => {
+    expect(sparkLocalRpcOrpcLiveMethods.length).toEqual(
+      Object.keys(sparkLocalRpcOrpcMethodPaths).length,
+    );
     for (const method of sparkLocalRpcOrpcLiveMethods) {
       expect(sparkLocalRpcOrpcMethodPaths[method as SparkLocalRpcOrpcMethod]).toBeTruthy();
     }
