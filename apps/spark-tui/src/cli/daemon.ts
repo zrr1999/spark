@@ -46,6 +46,7 @@ import {
   createSparkDaemonOrpcClient,
   isSparkDaemonOrpcLiveMethod,
 } from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
+import { SparkSessionStore, type SparkSessionInfo } from "@zendev-lab/spark-host/session-store";
 
 import {
   exportSparkSessionRecord,
@@ -58,7 +59,6 @@ import {
   sessionMailStatus,
   type SparkSessionMailMessage,
 } from "../host/session-mail-store.ts";
-import { SparkSessionStore, type SparkSessionInfo } from "../host/session-store.ts";
 import {
   forkDaemonSession,
   listDaemonSessions,

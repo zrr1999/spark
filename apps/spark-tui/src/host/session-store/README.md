@@ -1,7 +1,9 @@
-# Native host session-store
+# Deprecated TUI session-store import paths
 
-Pi-compatible append-only JSONL session files under the Spark sessions root.
+The host-neutral Pi-compatible JSONL transcript store lives at
+`@zendev-lab/spark-host/session-store`. Files in this directory only preserve
+the historic TUI import paths while callers migrate.
 
-## Why this stays in `apps/spark-tui` (not sunk)
-
-`@zendev-lab/spark-session` is the daemon registry/mailbox package. This module is the local host transcript I/O used by TUI bootstrap, agent-session, and CLI parity commands. Sinking would either conflate those domains or force `spark-session` to own Pi JSONL write semantics that Cockpit/daemon already project differently via `snapshot.ts`.
+It remains distinct from `@zendev-lab/spark-session`, which owns daemon
+registry, mailbox, and `session({action})` state rather than local host
+transcript I/O.

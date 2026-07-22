@@ -39,7 +39,8 @@
   "dependencies": {
     "@earendil-works/pi-ai": "0.80.6",
     "@earendil-works/pi-coding-agent": "0.80.6",
-    "@zendev-lab/spark-tui": "workspace:^"
+    "@zendev-lab/spark-tui": "workspace:^",
+    "@zendev-lab/spark-turn": "workspace:^"
   },
   "pi": {
     "extensions": [

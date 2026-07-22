@@ -18,6 +18,12 @@ spark <plane> <resource> <verb> [args...]
 
 `spark cockpit` is both the coordination CLI and the web UI host; it is not a second daemon execution plane.
 
+## Boundary invariants
+
+- Every stateful domain has exactly one authoritative owner. `packages/spark-cockpit-coordination` owns server coordination plus Cockpit query/projection APIs, but its projections are never execution truth for tasks, runs, artifacts, asks, reviews, or invocations.
+- Transports and app adapters translate through owner APIs; they do not duplicate execution or policy, and they must not read or write another owner's store. Cockpit may cache or project Spark state, but it must not mutate local Spark stores directly.
+- Reusable capability and runtime behavior belongs in `packages/spark-*`; executable apps retain bootstrap, presentation, and compatibility glue. Boundary regressions are enforced by `pnpm run check:boundaries`.
+
 ## Canonical examples
 
 ```bash

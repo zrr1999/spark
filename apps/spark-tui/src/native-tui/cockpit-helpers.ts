@@ -1,13 +1,8 @@
 /** Cockpit panel helpers shared by the native TUI app. */
 
-import type {
-  SparkArtifactView,
-  SparkEvidenceView,
-  SparkRunView,
-  SparkTaskView,
-} from "@zendev-lab/spark-protocol";
+import type { SparkArtifactView, SparkRunView } from "@zendev-lab/spark-protocol";
 
-import { isRecord, stringFromRecord } from "./message-view.ts";
+import { stringFromRecord } from "./message-view.ts";
 import {
   SPARK_COCKPIT_PANELS,
   SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,

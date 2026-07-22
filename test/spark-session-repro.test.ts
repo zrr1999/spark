@@ -47,6 +47,8 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
       setup.acceptance.map(({ id, kind }) => [id, kind]),
       [
         ["repro-contract-frozen", "evidence"],
+        ["competitor-baseline-availability-researched", "evidence"],
+        ["baseline-construction-strategy-approved", "decision"],
         ["implementation-landscape-researched", "evidence"],
         ["alignment-paths-researched", "evidence"],
         ["implementation-strategy-approved", "decision"],
@@ -54,7 +56,7 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
         ["baseline-probe-passed", "validation"],
       ],
     );
-    assert.equal(currentPhaseAcceptance(repro).length, 6);
+    assert.equal(currentPhaseAcceptance(repro).length, 8);
     assert.equal(
       setup.acceptance.every((item) => !isReproRequirementSatisfied(item)),
       true,
@@ -73,6 +75,15 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
     repro = record(repro, "repro-contract-frozen", {
       kind: "evidence",
       evidenceRefs: [artifactRef("contract")],
+    });
+    repro = record(repro, "competitor-baseline-availability-researched", {
+      kind: "evidence",
+      evidenceRefs: [artifactRef("baseline-availability")],
+    });
+    repro = record(repro, "baseline-construction-strategy-approved", {
+      kind: "decision",
+      decisionRef: artifactRef("baseline-construction-ask"),
+      selectedValue: "reuse-existing",
     });
     repro = record(repro, "implementation-landscape-researched", {
       kind: "evidence",
@@ -218,7 +229,11 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
         evidenceRefs: [artifactRef("legacy-problem")],
       });
       assert.equal(
-        isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[3]!),
+        isReproRequirementSatisfied(
+          migrated!.stages[0]!.acceptance.find(
+            (requirement) => requirement.id === "implementation-strategy-approved",
+          )!,
+        ),
         false,
         "a legacy strategy boolean is not a recorded user decision",
       );
@@ -279,12 +294,20 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
         assert.equal(migrated?.currentStageIndex, 0);
         assert.equal(migrated?.currentPhase, "plan");
         assert.equal(
-          isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[3]!),
+          isReproRequirementSatisfied(
+            migrated!.stages[0]!.acceptance.find(
+              (requirement) => requirement.id === "baseline-construction-strategy-approved",
+            )!,
+          ),
           false,
           "legacy satisfied booleans and evidence refs cannot forge a v3 user decision",
         );
         assert.equal(
-          isReproRequirementSatisfied(migrated!.stages[0]!.acceptance[5]!),
+          isReproRequirementSatisfied(
+            migrated!.stages[0]!.acceptance.find(
+              (requirement) => requirement.id === "baseline-probe-passed",
+            )!,
+          ),
           false,
           "a legacy evidence ref cannot certify a v3 validation command and pass result",
         );

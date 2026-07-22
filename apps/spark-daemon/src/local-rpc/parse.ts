@@ -19,7 +19,6 @@ import {
   sparkSessionListRequestSchema,
   sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
-  type SparkAssignment,
   type SparkCommand,
 } from "@zendev-lab/spark-protocol";
 import {
@@ -28,7 +27,6 @@ import {
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
 import { sparkCommandFromLocalRpcRequest } from "../command-dispatcher.ts";
-import type { SparkDaemonRelocationRequest } from "../relocation.ts";
 import { isRecord } from "./is-record.ts";
 import { workspaceProfile } from "./results.ts";
 import type {

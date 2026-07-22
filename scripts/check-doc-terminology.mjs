@@ -97,7 +97,6 @@ function invocationQueueClassification(relativePath, lines, index) {
 function isInvocationAuditPath(relativePath) {
   return (
     relativePath === "README.md" ||
-    relativePath === "DESIGN.md" ||
     relativePath.startsWith("docs/") ||
     relativePath === "apps/spark-daemon/README.md" ||
     relativePath === "apps/spark-tui/README.md" ||

@@ -37,6 +37,7 @@ test("pi-btw package keeps upstream extension, skill, and host-specific dependen
   assert.match(piVersion ?? "", /^\d+\.\d+\.\d+$/u);
   assert.equal(pkg.dependencies?.["@earendil-works/pi-ai"], piVersion);
   assert.equal(pkg.dependencies?.["@zendev-lab/spark-tui"], "workspace:^");
+  assert.equal(pkg.dependencies?.["@zendev-lab/spark-turn"], "workspace:^");
   assert.equal(pkg.dependencies?.["@earendil-works/pi-tui"], undefined);
 });
 

@@ -10,7 +10,6 @@ import {
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
-  parseSparkInteractionRequest,
   parseSparkInteractionResponse,
   parseSparkViewModelEvent,
   sparkSlashActionBarForInput,
@@ -19,7 +18,6 @@ import {
   type SparkArtifactView,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
-  type SparkMessageView,
   type SparkRunView,
   type SparkSessionView,
   type SparkTaskView,
@@ -93,7 +91,6 @@ import {
 } from "./cockpit-helpers.ts";
 import {
   compactNativeQueuePreview,
-  displayNativeSubmittedInput,
   parseBangCommand,
   prepareSparkNativeEditorInput,
   runSparkNativeBangCommand,
@@ -105,9 +102,7 @@ import {
 } from "./slash-commands.ts";
 import {
   createNativeWidgetComponent,
-  nativeWidgetContentToLines,
   normalizeNativeWidgetLines,
-  normalizeNativeWidgetRenderedLines,
   renderNativeWidgetComponent,
 } from "./widgets.ts";
 import { nativeAskAnswers, nativeAskFlowRequest, nativeAskLanguage } from "./ask-helpers.ts";

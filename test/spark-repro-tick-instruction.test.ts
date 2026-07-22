@@ -25,4 +25,18 @@ test("repro ticks require a timely commit or visible work evidence", () => {
   );
   assert.match(instruction, /Ask exactly one material user decision at a time/);
   assert.match(instruction, /recordAsEvidence=true/);
+  assert.match(instruction, /runnable competitor\/reference baseline/);
+  assert.match(instruction, /typically a Megatron implementation/);
+  assert.match(instruction, /Do not invent a substitute baseline/);
+  assert.match(instruction, /Prefer the main session for scheduling/);
+  assert.match(instruction, /call ask immediately with a concrete question/);
+  assert.match(instruction, /Do not default to role/);
+});
+
+test("repro setup next step prioritizes competitor baseline availability research", () => {
+  const instruction = renderReproTickInstruction(createSparkSessionRepro("session:test"));
+
+  assert.match(instruction, /competitor-baseline-availability-researched/);
+  assert.match(instruction, /typically Megatron/);
+  assert.match(instruction, /failed-lookup evidence/);
 });

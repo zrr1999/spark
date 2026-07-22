@@ -315,7 +315,7 @@ function collapseBlankRuns(
   let collapsedBlankLines = 0;
   let collapsedBlankRuns = 0;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = 0; index < lines.length;) {
     const line = lines[index] ?? "";
     if (line.trim() !== "") {
       output.push(line);
@@ -366,7 +366,7 @@ function collapseRepeatedLines(text: string): {
   let collapsedRepeatedLines = 0;
   let collapsedRepeatedRuns = 0;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = 0; index < lines.length;) {
     const line = lines[index] ?? "";
     let end = index + 1;
     while (end < lines.length && lines[end] === line) end += 1;

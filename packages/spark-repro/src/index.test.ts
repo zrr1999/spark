@@ -18,6 +18,18 @@ describe("spark-repro", () => {
     const proofs: Array<[string, SparkReproRequirementProof]> = [
       ["repro-contract-frozen", { kind: "evidence", evidenceRefs: [ref("contract")] }],
       [
+        "competitor-baseline-availability-researched",
+        { kind: "evidence", evidenceRefs: [ref("baseline-availability")] },
+      ],
+      [
+        "baseline-construction-strategy-approved",
+        {
+          kind: "decision",
+          decisionRef: ref("baseline-construction-ask"),
+          selectedValue: "reuse-existing",
+        },
+      ],
+      [
         "implementation-landscape-researched",
         { kind: "evidence", evidenceRefs: [ref("implementation-research")] },
       ],

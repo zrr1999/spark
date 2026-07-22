@@ -18,6 +18,7 @@
     "./keybindings": "./src/keybindings.ts",
     "./system-prompt": "./src/system-prompt.ts",
     "./builtin-skills": "./src/builtin-skills.ts",
+    "./session-store": "./src/session-store/index.ts",
     "./spark-widget": "./src/spark-widget.ts",
     "./spark-widget-controller": "./src/spark-widget-controller.ts",
     "./types": "./src/types.ts"

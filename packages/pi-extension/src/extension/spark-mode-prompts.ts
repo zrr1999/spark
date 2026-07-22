@@ -3,8 +3,8 @@ import type { TaskGraph } from "@zendev-lab/spark-tasks";
 import type { SparkEntryPhase } from "./spark-entry.ts";
 import {
   ASK_BEFORE_GUESSING,
-  PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
-  WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
+  MAIN_SESSION_SCHEDULING_FIRST,
+  MUST_ASK_ON_PROBLEMS,
   renderModePrompt,
 } from "./mode/index.ts";
 import {
@@ -61,8 +61,10 @@ function renderGoalDriverGuidance(focus: string | undefined): string {
     "## Goal driver guidance",
     `- Active goal objective: ${goal}`,
     "- Work toward the objective using goal-driver task/project state and evidence boundaries. The main session requests completion, the reviewer audits, and Spark applies any approved state transition.",
+    `- ${MAIN_SESSION_SCHEDULING_FIRST}`,
+    `- ${MUST_ASK_ON_PROBLEMS}`,
     "- Goal turns do not need to classify the whole turn as plan or implement; choose concrete next actions from current task state, blockers, and validation needs.",
-    "- Before a goal turn uses canonical ask, inspect the workspace, dependencies, environment, and available evidence so the ask contains only a still-unresolved material decision, never a discoverable fact. Goal asks wait for the user first; only after that wait times out may the host reviewer take over. If the reviewer cannot answer, record or report the blocker and keep the objective unchanged.",
+    "- Before a goal turn uses canonical ask, inspect the workspace, dependencies, environment, and available evidence so the ask contains only a still-unresolved material decision, never a discoverable fact. Goal asks wait for the user first; only after that wait times out may the host reviewer take over. If the reviewer cannot answer, keep the objective unchanged and ask again or report the unresolved decision without inventing an answer.",
     '- Request goal({ action: "complete" }) only after evidence covers every requirement in the objective.',
   ].join("\n");
 }
@@ -75,14 +77,15 @@ export function renderSparkGoalModePrompt(
   const requirements = selectedProjectRef
     ? [
         renderGoalAction(Boolean(focus?.trim())),
-        WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
-        PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
-        "Goal driver decisions are research-first: inspect available evidence and run a focused probe before using canonical ask for a still-unresolved material decision. The user gets the first chance to answer; reviewer fallback begins only after the human wait times out. Never ask either side for a discoverable fact. If reviewer fallback is blocked, record or report the blocker and resolve it through concrete work or planning while keeping the goal objective unchanged.",
+        MAIN_SESSION_SCHEDULING_FIRST,
+        MUST_ASK_ON_PROBLEMS,
+        "Goal driver decisions are research-first: inspect available evidence and run a focused probe before using canonical ask for a still-unresolved material decision. The user gets the first chance to answer; reviewer fallback begins only after the human wait times out. Never ask either side for a discoverable fact. If reviewer fallback is blocked, call ask again when a user answer would unblock progress, or report the still-unresolved decision while keeping the goal objective unchanged.",
         SPARK_GOAL_DECISION_RULE,
       ]
     : [
-        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }), select a current project only when the inspected state identifies a single intended project, or stop and report when multiple projects or scopes could be the intended goal.',
+        'No current project is selected for goal driver execution. Inspect projects with task_read({ action: "workspace_status" }) or task_read({ action: "project_list" }), select a current project only when the inspected state identifies a single intended project, or stop and ask when multiple projects or scopes could be the intended goal.',
         "Do not claim project-bound work until a current project is selected.",
+        MUST_ASK_ON_PROBLEMS,
         ASK_BEFORE_GUESSING,
       ];
   return renderModePrompt(graph, selectedProjectRef, focus, "Goal driver", requirements);
@@ -91,7 +94,7 @@ export function renderSparkGoalModePrompt(
 const PLANNING_AFFECTING_CHOICES =
   "scope, dependencies, priorities, success criteria, evidence, architecture, dependency choices, or implementation order";
 
-const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise high-bar concrete tasks with task_write({ action: "plan" }) using objectively verifiable success criteria, concrete evidence, and checkable plan items; if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask only when reviewer fallback is available. The user owns the answer until the human wait times out; only then may reviewer fallback resolve the local decision. Request reviewer-gated goal completion separately after evidence covers the objective. Otherwise stop and report the blocker without pausing or weakening the goal.`;
+const SPARK_GOAL_DECISION_RULE = `Goal objectives should normally describe the selected project's substantive intended outcome from its purpose, description, title, task plans, evidence requirements, and blockers; do not reduce the goal to task counts or merely stopping at a plan unless the user explicitly says planning-only/readiness-only/仅规划. Autonomous goal edits require a strong reason and may only correct materially wrong description or direction; never lower difficulty, narrow required outcomes, or convert implementation work into planning-only/readiness-only work. If task decomposition is wrong, missing, or blocks the goal, create or revise high-bar concrete tasks with task_write({ action: "plan" }) using objectively verifiable success criteria, concrete evidence, and checkable plan items; if a missing user decision would change ${PLANNING_AFFECTING_CHOICES} and cannot be inferred from context, use canonical ask (user-first; reviewer fallback only after the human wait times out). Prefer the main session for that work. Request reviewer-gated goal completion separately after evidence covers the objective. Never invent the missing decision or work around it with role/session fan-out.`;
 
 function renderGoalAction(hasExplicitGoal: boolean): string {
   const goalSource = hasExplicitGoal

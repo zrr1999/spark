@@ -105,6 +105,8 @@ Explicit API path overrides remain available for embedded hosts and tests.
 
 Spark does **not** automatically move credentials, SQLite databases, sessions, or unrelated user-authored files. Stop Spark daemon and Cockpit before copying mutable databases or runtime state.
 
+Serialized marker names and paths under `.spark/` are public persistence contracts. Change them only through an explicit, idempotent migration with compatibility tests; a package or command rename alone must not rewrite persisted markers.
+
 Memory-related layout migration **is** automatic and idempotent via `migrateSparkMemoryLayout` (triggered on memory `session_start` and memory tool access):
 
 | Old path | New path |

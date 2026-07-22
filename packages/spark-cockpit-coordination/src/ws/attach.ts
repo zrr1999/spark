@@ -1,65 +1,19 @@
-import { createHash } from "node:crypto";
 import {
-  artifactProjectionEnvelopeSchema,
   createId,
-  createServerCommandEnvelope,
-  daemonEventEnvelopeSchema,
-  humanRequestCreatedEnvelopeSchema,
-  humanResponseAckEnvelopeSchema,
-  humanResponseRecordedEnvelopeSchema,
-  invocationLogChunkEnvelopeSchema,
-  invocationUpdateEnvelopeSchema,
-  optionalWireIdempotencyKey,
-  runtimeCommandAckEnvelopeSchema,
-  runtimeCommandRejectEnvelopeSchema,
-  runtimeCommandResultEnvelopeSchema,
   runtimeEphemeralSecretResultEnvelopeSchema,
   runtimeHeartbeatEnvelopeSchema,
   runtimeHelloEnvelopeSchema,
-  runtimeProtocolVersion,
-  runtimeReconcileReportEnvelopeSchema,
-  parseSparkDaemonEvent,
-  serializeServerCommandEnvelope,
-  taskGraphSnapshotEnvelopeSchema,
-  workspaceSnapshotEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
 import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
-import {
-  markRuntimeControlCommandDeliveryAttempt,
-  pendingRuntimeControlCommands,
-  recordRuntimeControlCommandAck,
-  recordRuntimeControlCommandReject,
-  recordRuntimeControlCommandResult,
-  recoverUnacknowledgedRuntimeControlCommands,
-  registerRuntimeControlDispatcher,
-  requireRuntimeControlCommand,
-} from "../runtime-control.ts";
+import { registerRuntimeControlDispatcher } from "../runtime-control.ts";
+import { RuntimeControlCommandError } from "../runtime-control.ts";
 import { hashSecret } from "../security.ts";
 import {
-  resolveWorkspaceDirectoryDisplayName,
-  syncWorkspaceIdentityFromLocalPath,
-} from "../workspace-identity.ts";
-import {
   recordRuntimeEphemeralSecretProjection,
-  recordRuntimeModelChannelProjection,
   registerRuntimeEphemeralSecretDispatcher,
 } from "../runtime-model-channel-control.ts";
-import { RuntimeControlCommandError } from "../runtime-control.ts";
-import { recordRuntimeSessionControlProjection } from "../runtime-session-control.ts";
-import {
-  appendEvent,
-  ingestTaskGraphSnapshot,
-  recordArtifactProjection,
-  recordCommandAck,
-  recordCommandReject,
-  recordHumanRequestFromRuntime,
-  recordHumanResponseFromRuntime,
-  recordHumanResponseAck,
-  recordInvocationLogChunk,
-  recordInvocationUpdate,
-} from "../projection-services.ts";
 import type { DatabaseSync } from "node:sqlite";
-import type { RawData, WebSocket } from "ws";
+import type { WebSocket } from "ws";
 
 import type { RuntimeWebSocketContext, RuntimeWebSocketConnection } from "./types.ts";
 import {

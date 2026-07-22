@@ -173,6 +173,43 @@ test("SparkHostRuntime permanently excludes tools outside the host allowlist", (
   assert.equal(host.makeContext().sessionSource, "channel");
 });
 
+test("SparkHostRuntime intersects name and fail-closed effect allowlists", () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-read-only-test",
+    allowedTools: ["read_allowed", "write_named", "unknown_named"],
+    allowedToolEffects: ["read"],
+  });
+  for (const [name, policy] of [
+    ["read_allowed", { effect: "read" as const }],
+    ["write_named", { effect: "local_write" as const }],
+    ["outside_name_allowlist", { effect: "read" as const }],
+    ["unknown_named", undefined],
+  ] as const) {
+    host.registerTool({
+      name,
+      description: name,
+      parameters: {},
+      ...(policy ? { policy } : {}),
+      async execute() {
+        return { content: [{ type: "text", text: name }] };
+      },
+    });
+  }
+
+  assert.deepEqual(host.getActiveTools(), ["read_allowed"]);
+  host.setActiveTools(["read_allowed", "write_named", "outside_name_allowlist", "unknown_named"]);
+  assert.deepEqual(host.getActiveTools(), ["read_allowed"]);
+  assert.equal(host.isToolDispatchAllowed("read_allowed", host.getTool("read_allowed")!), true);
+
+  // Simulate a stale/mutated active bit. Final dispatch admission must still
+  // deny tools whose effect or name is outside the request-scoped policy.
+  for (const name of ["write_named", "outside_name_allowlist", "unknown_named"]) {
+    const tool = host.getTool(name)!;
+    tool.active = true;
+    assert.equal(host.isToolDispatchAllowed(name, tool), false, name);
+  }
+});
+
 test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;

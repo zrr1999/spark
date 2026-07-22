@@ -54,6 +54,9 @@ export function registerSparkReproTool(
     promptGuidelines: [
       "Use repro action=status to inspect stable requirement ids, proof kinds, and blockers.",
       "Use repro action=start to begin the repro drive (clears goal/loop); pass objective for user-supplied reproduction focus.",
+      "In setup, first verify whether a runnable competitor/reference baseline exists (typically Megatron). If missing, ask how to construct it before any baseline probe; do not invent a substitute.",
+      "Prefer the main session for repro scheduling and execution; do not default to role/session/assign/workflow fan-out.",
+      "When blocked by a missing decision, ambiguity, or a problem the user can unblock, call ask immediately; do not guess or end with only a prose blocker.",
       "Use repro action=record with requirementId and a matching evidence, decision, or validation proof.",
       "Evidence and validation refs must name existing artifacts. Decision refs must name a user-answered canonical ask artifact created with recordAsEvidence=true.",
       "Use repro action=evaluate to derive the current stage gate from recorded proof; it cannot force-pass a gate.",
@@ -557,10 +560,12 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
     "",
     "Repro drive requirements:",
     `- Operate in the selected phase (${repro.currentPhase}); use its tool policy for plan or implement work.`,
+    '- Prefer the main session for scheduling and every concrete step. Do not default to role({ action: "call" }), session({ action: "call"|"send" }), assign, or workflow_run during repro ticks; use those only when the user explicitly requests multi-agent/workflow fan-out.',
+    "- When blocked by a missing user decision, ambiguous requirement, unclear baseline/source, conflicting evidence, failing validation whose next step is unclear, or any problem the user can unblock, call ask immediately with a concrete question. Do not guess, invent substitutes, or end the turn with only a prose blocker report when ask can resolve it.",
     "- Advance milestones with repro record/evaluate/advance. Never treat prose, an unverified ref, or a bare boolean as proof.",
     "- Before ending every repro turn, leave a verifiable checkpoint. If the turn produced a coherent set of repository changes and committing is authorized and safe, create a small git commit promptly. Never include unrelated pre-existing changes.",
-    "- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete artifact refs or file paths, summarize the relevant diff, report commands/tests and their results, or state the exact blocker. Do not end with only a progress claim.",
-    "- If blocked on a human decision or external dependency, report the blocker instead of lowering scope; use /repro stop to end the drive.",
+    "- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete artifact refs or file paths, summarize the relevant diff, report commands/tests and their results, or ask about the exact blocker. Do not end with only a progress claim.",
+    "- If blocked on an external dependency the user cannot resolve, report that blocker; otherwise prefer ask over /repro stop.",
     "- End the turn after one concrete step; the next repro tick is scheduled automatically.",
   );
 
@@ -570,17 +575,21 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
       "Plan-phase research-first guidance:",
       "- Classify each unknown as fact, reversible choice, material user decision, or validation uncertainty.",
       "- Research facts from the workspace, dependencies, environment, and primary upstream sources before asking the user.",
+      "- Prioritize whether a runnable competitor/reference baseline already exists (typically a Megatron implementation). Prove availability with concrete paths, entrypoints, or failed-lookup evidence; do not assume a paper or announcement means the baseline is runnable.",
+      "- If that baseline is missing (for example a model whose Megatron path is not landed yet), ask the user how to construct or obtain it before any baseline probe. Do not invent a substitute baseline.",
       "- For implementation strategy, find the owning module and compare reuse, adaptation, and new implementation with concrete code-path evidence.",
       "- For alignment strategy, inspect the real module path first and compare it with an eager probe. Treat eager as a focused diagnostic unless the evidence or user-approved target makes it the intended path.",
-      "- Run a focused probe for validation uncertainty; record the command and result artifact.",
+      "- Run a focused probe for validation uncertainty only after baseline availability or construction strategy is settled; record the command and result artifact.",
       "- Use a recommended default for reversible low-risk choices and record it in the research artifact.",
       "- Ask exactly one material user decision at a time with canonical ask and recordAsEvidence=true; do not use reviewer auto-answer for that decision.",
+      "- Keep research and decision-making in the main session; do not spawn anonymous role calls for ordinary setup research.",
     );
   } else {
     lines.push(
       "",
       "Implement-phase guidance:",
-      "- Execute the planned tasks: write code, run tests, and fix failures.",
+      "- Execute the planned tasks in the main session: write code, run tests, and fix failures.",
+      "- If a failure, missing credential, unclear expected behavior, or ambiguous fix path needs a user decision, call ask before inventing a workaround.",
       "- Record the matching artifact-backed requirement proof before advancing.",
     );
   }
@@ -588,6 +597,16 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
 }
 
 function renderRequirementNextStep(requirement: SparkReproRequirement): string {
+  switch (requirement.id) {
+    case "competitor-baseline-availability-researched":
+      return `Next: verify whether a runnable competitor/reference baseline already exists (typically Megatron). Record concrete entrypoints/paths if found, or explicit failed-lookup evidence if not (for example the model has no landed Megatron implementation yet). Store findings as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "evidence", evidenceRefs: ["artifact:..."] } }).`;
+    case "baseline-construction-strategy-approved":
+      return `Next: if a runnable baseline exists, ask the user to confirm reuse (or an alternate source); if it does not exist, ask how to construct or obtain it before probing. Use ask({ mode: "decision", delivery: "blocking", recordAsEvidence: true, questions: [...] }), then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "decision", decisionRef: "artifact:...", selectedValue: "..." } }).`;
+    case "baseline-probe-passed":
+      return `Next: only after baseline availability or construction strategy is settled, run the smallest real probe for "${requirement.description}", store its command output as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "validation", command: "...", resultRef: "artifact:...", passed: true } }).`;
+    default:
+      break;
+  }
   switch (requirement.kind) {
     case "evidence":
       return `Next: research "${requirement.description}", store the findings as an artifact, then call repro({ action: "record", requirementId: "${requirement.id}", proof: { kind: "evidence", evidenceRefs: ["artifact:..."] } }).`;

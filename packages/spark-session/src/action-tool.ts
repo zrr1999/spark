@@ -329,6 +329,9 @@ export async function executeSparkSessionAction(
               messageMetadata: sessionRequestMessageMetadata({
                 ctx,
                 message: sent.message,
+                // wait=accepted (default) auto-wakes the sender on terminal;
+                // wait=completed already returns the result inline.
+                notifyOnCompletion: wait === "accepted",
               }),
             },
             { signal },
@@ -909,6 +912,7 @@ function turnOriginBinding(
 function sessionRequestMessageMetadata(input: {
   ctx: SparkSessionToolContext;
   message: SparkSessionMailMessage;
+  notifyOnCompletion: boolean;
 }): Record<string, unknown> {
   return {
     ...sessionOriginMessageMetadata(input.ctx, input.message.fromSessionId),
@@ -919,6 +923,7 @@ function sessionRequestMessageMetadata(input: {
       correlationId: input.message.correlationId,
       fromSessionId: input.message.fromSessionId,
       toSessionId: input.message.toSessionId,
+      notifyOnCompletion: input.notifyOnCompletion,
       ...(input.ctx.invocationId ? { parentInvocationId: input.ctx.invocationId } : {}),
     },
   };

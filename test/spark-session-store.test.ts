@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { SparkSessionStore as CanonicalSparkSessionStore } from "@zendev-lab/spark-host/session-store";
 
 import {
   CURRENT_SPARK_SESSION_VERSION,
@@ -10,6 +11,10 @@ import {
   parseSparkSessionEntries,
   workspaceSessionHash,
 } from "../apps/spark-tui/src/host/index.ts";
+
+test("TUI session-store exports remain aliases of the canonical host store", () => {
+  assert.equal(SparkSessionStore, CanonicalSparkSessionStore);
+});
 
 test("SparkSessionStore uses ~/.spark-style sessions root and workspace hash, never ~/.pi", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-path-"));

@@ -2,9 +2,8 @@
 
 import type { SparkRunView } from "@zendev-lab/spark-protocol";
 
-import { isRecord, numberFromRecord, stringFromRecord } from "./message-view.ts";
+import { isRecord, numberFromRecord } from "./message-view.ts";
 import type { SparkNativeFooterMetrics } from "./types.ts";
-import { nativeTuiStrings } from "./strings.ts";
 
 export function runTimeMs(run: SparkRunView): number {
   const completedAt = run.completedAt ? Date.parse(run.completedAt) : NaN;

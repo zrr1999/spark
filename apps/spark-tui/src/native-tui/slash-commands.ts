@@ -1,7 +1,6 @@
 /** Slash-command factories for the native TUI. */
 
 import {
-  SPARK_COCKPIT_PANELS,
   SPARK_NATIVE_KERNEL_SLASH_COMMANDS,
   SPARK_NATIVE_LOCAL_CONTROL_EXTENSION_ID,
   type SparkNativeCockpitPanel,
@@ -10,7 +9,6 @@ import {
   type SparkNativeSlashCommand,
   type SparkNativeSlashCommandMap,
 } from "./types.ts";
-import { isSparkNativeCockpitPanel } from "./cockpit-helpers.ts";
 import { nativeTuiStrings } from "./strings.ts";
 
 function toIterable<T>(value: Iterable<T> | undefined): Iterable<T> {

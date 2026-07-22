@@ -1,7 +1,7 @@
 /** Spark TUI native host service construction. */
 
 import { basename, join, resolve } from "node:path";
-import { stableId, type SparkHostAPI } from "@zendev-lab/spark-core";
+import { stableId, type SparkHostAPI, type ToolEffect } from "@zendev-lab/spark-core";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
 import {
   createProviderRegistryLeafRunner,
@@ -102,6 +102,8 @@ export interface SparkCliHostServicesOptions {
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
+  /** Host-enforced effect allowlist; unknown tool effects are denied. */
+  allowedToolEffects?: readonly ToolEffect[];
   config?: SparkConfig;
   configPath?: string;
   keybindingsPath?: string;
@@ -167,6 +169,7 @@ export async function createSparkCliHostServices(
     invocationId: options.invocationId,
     sessionQuestionChain: options.sessionQuestionChain,
     allowedTools: options.allowedTools,
+    allowedToolEffects: options.allowedToolEffects,
     hasUI: options.hasUI ?? false,
     ui: options.ui,
     sessionManager: options.sessionManager,

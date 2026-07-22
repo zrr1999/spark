@@ -1060,6 +1060,37 @@ describe("daemon native session execution", () => {
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
   });
 
+  it("does not infer infoflow from channel context when the reply binding is missing", async () => {
+    const executeSession = vi.fn(
+      async (
+        _input: Parameters<typeof executeSparkDaemonSessionRunTask>[2] extends {
+          executeSession: infer T;
+        }
+          ? T extends (input: infer I) => unknown
+            ? I
+            : never
+          : never,
+      ) => ({ assistantText: "done" }),
+    );
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_legacy_context_only",
+      prompt: "legacy context",
+      channelContext: { externalKey: "qqbot:c2c:user-legacy" },
+    };
+
+    await executeSparkDaemonSessionRunTask(task, context(task), { paths, executeSession });
+
+    const input = executeSession.mock.calls[0]?.[0];
+    expect(input?.sessionSource).toBe("channel");
+    expect(input?.messageMetadata).toEqual({
+      invocationId: "invocation-1",
+      origin: { kind: "user", host: "channel", surface: "channel" },
+    });
+    expect(JSON.stringify(input)).not.toContain("infoflow");
+    expect(input).not.toHaveProperty("channelBinding");
+  });
+
   it("passes the exact originating channel binding to the headless session", async () => {
     const executeSession = vi.fn(async () => ({ assistantText: "done" }));
     const task: SparkDaemonSessionRunTask = {

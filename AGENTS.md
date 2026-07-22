@@ -34,6 +34,7 @@ Target package topology follows type-first names:
 | `pnpm run check:tsc`                     | Typecheck only (`vp check --no-fmt --no-lint`)                   |
 | `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
 | `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
+| `pnpm run check:security`                | Audit dependencies for high/critical advisories via npm registry |
 | `pnpm test`                              | Root Vitest suite (`test/**/*.test.ts`)                          |
 | `pnpm test:file -- <path>`               | Run one root Vitest file                                         |
 | `pnpm run test:mutation`                 | Leaf-package mutation CE (10 packages: L0 retry/protocol/cockpit-db/system + L1 channels/cockpit-coordination/session/artifacts/repro/i18n) |
@@ -55,6 +56,7 @@ Target package topology follows type-first names:
 
 - First-class surfaces are TUI, Cockpit, and messaging channels on the Spark daemon. `spark-core` exports the host-neutral `SparkHostAPI` contract plus lightweight primitives for Spark extension hosts (not a revival of the retired spark-core capability bag); retained Pi **product** adapters may still speak it until retired. Do not merge this contract into Cockpit/daemon app code.
 - `packages/pi-extension/src/extension/` remains loadable by the Pi product as a normal extension until that product path is retired; Spark-native hosts load `@zendev-lab/spark-extension` instead. Do not expand the Pi facade for new Spark features.
+- `packages/pi-btw` remains the Pi-product side-thread adapter. Host-neutral side-thread state and handoff semantics live in `packages/spark-turn`; the Spark-native store, runner, and overlay adapters belong in `apps/spark-tui` and must not import `pi-coding-agent`.
 - Spark extension/shared packages must not import concrete app host internals from `apps/spark-cli`, `apps/spark-tui`, `@zendev-lab/spark-tui-app`, or `@earendil-works/pi-coding-agent` runtime code.
 - Shared Spark host/turn code belongs in `packages/spark-host` and `packages/spark-turn`; executable apps keep only bootstrap, UI, daemon, and compatibility-adapter glue. `pi-tui` wrappers stay behind `packages/spark-tui`.
 - Prefer Spark-native host tests when changing extension behavior. Keep dual-host contract tests (`test/spark-ext-host-contract.test.ts`, `test/spark-host-runtime-cross.test.ts`) only while the Pi product path remains loadable; do not grow new Pi-product-only APIs.

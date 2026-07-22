@@ -441,6 +441,7 @@ test("session request queues the original message with hidden sender metadata", 
             correlationId: requestMail.correlationId,
             fromSessionId: "session:caller",
             toSessionId: "session:worker",
+            notifyOnCompletion: true,
           },
         });
         return { invocationId: "inv_requestturn", status: "queued", acceptedAt: NOW } as T;
@@ -651,6 +652,7 @@ test("session request blocks for success and preserves causal invocation metadat
               .correlationId,
             fromSessionId: "session:caller",
             toSessionId: "session:worker",
+            notifyOnCompletion: false,
             parentInvocationId: "inv_parent",
           },
         },

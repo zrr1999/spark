@@ -29,6 +29,13 @@ import {
   type OverlayHandle,
   type TUI,
 } from "@zendev-lab/spark-tui/pi-tui";
+import {
+  formatSparkSideThreadHandoff,
+  reduceSparkSideThreadEvents,
+  type SparkSideThreadEvent,
+  type SparkSideThreadHandoffExchange,
+  type SparkSideThreadMode,
+} from "@zendev-lab/spark-turn/side-thread";
 
 const BTW_MESSAGE_TYPE = "btw-note";
 const BTW_ENTRY_TYPE = "btw-thread-entry";
@@ -57,7 +64,7 @@ const BTW_CONTINUE_THREAD_USER_TEXT =
 const BTW_CONTINUE_THREAD_ASSISTANT_TEXT = "Understood, continuing our side conversation.";
 
 type SessionThinkingLevel = "off" | AiThinkingLevel;
-type BtwThreadMode = "contextual" | "tangent";
+type BtwThreadMode = SparkSideThreadMode;
 type BtwRenderableTui = Pick<TUI, "requestRender">;
 type BtwKeybindings = {
   matches(data: string, keybinding: "tui.select.cancel"): boolean;
@@ -1041,19 +1048,10 @@ function getLastAssistantMessage(session: AgentSession): AssistantMessage | null
   return null;
 }
 
-type BtwHandoffExchange = {
-  user: string;
-  assistant: string;
-};
+type BtwHandoffExchange = SparkSideThreadHandoffExchange;
 
 function buildBtwMessageContent(question: string, answer: string): string {
   return `Q: ${question}\n\nA: ${answer}`;
-}
-
-function formatThread(thread: BtwHandoffExchange[]): string {
-  return thread
-    .map((entry) => `User: ${entry.user.trim()}\nAssistant: ${entry.assistant.trim()}`)
-    .join("\n\n---\n\n");
 }
 
 function isThreadContinuationMarker(messages: Message[], index: number): boolean {
@@ -2005,8 +2003,8 @@ export default async function (pi: SparkHostAPI) {
         const { thread } = await getBtwHandoffThread(ctx);
         const instructions = trimmedArgs;
         const content = instructions
-          ? `Here is a side conversation I had. ${instructions}\n\n${formatThread(thread)}`
-          : `Here is a side conversation I had for additional context:\n\n${formatThread(thread)}`;
+          ? `Here is a side conversation I had. ${instructions}\n\n${formatSparkSideThreadHandoff(thread)}`
+          : `Here is a side conversation I had for additional context:\n\n${formatSparkSideThreadHandoff(thread)}`;
 
         sendThreadToMain(ctx, content);
         const count = thread.length;
@@ -2143,59 +2141,59 @@ export default async function (pi: SparkHostAPI) {
     lastUiContext = ctx;
     overlayStatus = null;
 
-    const branch = ctx.sessionManager.getBranch();
-    let lastResetIndex = -1;
+    const events: SparkSideThreadEvent<BtwDetails, BtwModelRef, SessionThinkingLevel>[] = [];
 
-    for (let i = 0; i < branch.length; i++) {
-      if (isCustomEntry(branch[i], BTW_MODEL_OVERRIDE_TYPE)) {
-        const details = (branch[i] as unknown as { data?: BtwModelOverrideDetails }).data;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (isCustomEntry(entry, BTW_MODEL_OVERRIDE_TYPE)) {
+        const details = (entry as unknown as { data?: BtwModelOverrideDetails }).data;
         if (details?.action === "set") {
-          const resolved = ctx.modelRegistry.find(details.provider, details.id);
-          if (resolved) {
-            btwModelOverride = resolved;
-          } else {
-            // Configured override is no longer in the registry; drop it on restore.
-            btwModelOverride = null;
-          }
+          events.push({
+            kind: "model_override",
+            value: { provider: details.provider, id: details.id, api: details.api },
+          });
         } else if (details?.action === "clear") {
-          btwModelOverride = null;
+          events.push({ kind: "model_override", value: null });
         }
       }
 
-      if (isCustomEntry(branch[i], BTW_THINKING_OVERRIDE_TYPE)) {
-        const details = (branch[i] as unknown as { data?: BtwThinkingOverrideDetails }).data;
-        btwThinkingOverride =
-          details?.action === "set"
-            ? details.thinkingLevel
-            : details?.action === "clear"
-              ? null
-              : btwThinkingOverride;
+      if (isCustomEntry(entry, BTW_THINKING_OVERRIDE_TYPE)) {
+        const details = (entry as unknown as { data?: BtwThinkingOverrideDetails }).data;
+        if (details?.action === "set") {
+          events.push({ kind: "thinking_override", value: details.thinkingLevel });
+        } else if (details?.action === "clear") {
+          events.push({ kind: "thinking_override", value: null });
+        }
       }
 
-      if (isCustomEntry(branch[i], BTW_RESET_TYPE)) {
-        lastResetIndex = i;
-        const details = (branch[i] as unknown as { data?: BtwResetDetails }).data;
-        pendingMode = details?.mode ?? "contextual";
+      if (isCustomEntry(entry, BTW_RESET_TYPE)) {
+        const details = (entry as unknown as { data?: BtwResetDetails }).data;
+        events.push(details?.mode ? { kind: "reset", mode: details.mode } : { kind: "reset" });
+      }
+
+      if (isCustomEntry(entry, BTW_ENTRY_TYPE)) {
+        const details = (entry as unknown as { data?: BtwDetails }).data;
+        if (details?.question && details.answer) {
+          events.push({
+            kind: "append",
+            exchange: {
+              ...details,
+              api: details.api || ctx.model?.api || "openai-responses",
+            },
+          });
+        }
       }
     }
 
-    for (const entry of branch.slice(lastResetIndex + 1)) {
-      if (!isCustomEntry(entry, BTW_ENTRY_TYPE)) {
-        continue;
-      }
+    const restored = reduceSparkSideThreadEvents(events);
+    pendingThread = restored.exchanges;
+    pendingMode = restored.mode;
+    btwThinkingOverride = restored.thinkingOverride;
+    btwModelOverride = restored.modelOverride
+      ? (ctx.modelRegistry.find(restored.modelOverride.provider, restored.modelOverride.id) ?? null)
+      : null;
 
-      const details = (entry as unknown as { data?: BtwDetails }).data;
-      if (!details?.question || !details.answer) {
-        continue;
-      }
-
-      const normalizedDetails: BtwDetails = {
-        ...details,
-        api: details.api || ctx.model?.api || "openai-responses",
-      };
-
-      pendingThread.push(normalizedDetails);
-      appendPersistedTranscriptTurn(transcriptState, normalizedDetails);
+    for (const details of pendingThread) {
+      appendPersistedTranscriptTurn(transcriptState, details);
     }
 
     syncUi(ctx);
@@ -2353,7 +2351,7 @@ export default async function (pi: SparkHostAPI) {
     });
 
     try {
-      await session.prompt(formatThread(thread), { source: "extension" });
+      await session.prompt(formatSparkSideThreadHandoff(thread), { source: "extension" });
 
       const response = getLastAssistantMessage(session);
       if (!response) {

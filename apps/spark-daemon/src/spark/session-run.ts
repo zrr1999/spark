@@ -736,20 +736,22 @@ function sessionRunMessageMetadata(
       surface: source === "channel" ? "channel" : "local",
     },
   };
-  const channel = task.channelContext;
+  const channel = task.channelReply ? task.channelContext : undefined;
   const channelMetadata = channel
     ? {
         origin: {
           kind: "user",
           host: "channel",
           surface: "channel",
-          adapter: task.channelReply?.adapterId ?? "infoflow",
+          adapter:
+            task.channelReply!.adapter ?? sessionChannelAdapter(task.channelReply!.adapterId),
           externalKey: channel.externalKey,
           ...(channel.senderId ? { senderId: channel.senderId } : {}),
           ...(channel.senderName ? { senderName: channel.senderName } : {}),
         },
         channel: {
-          adapter: task.channelReply?.adapterId ?? "infoflow",
+          adapter:
+            task.channelReply!.adapter ?? sessionChannelAdapter(task.channelReply!.adapterId),
           externalKey: channel.externalKey,
           ...(channel.senderId ? { senderId: channel.senderId } : {}),
           ...(channel.senderName ? { senderName: channel.senderName } : {}),

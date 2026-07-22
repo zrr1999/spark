@@ -1,20 +1,6 @@
-import {
-  SPARK_PROTOCOL_VERSION,
-  prefixedIdSchema,
-  sparkProtocolJsonObjectSchema,
-  sparkTurnCancelResultSchema,
-  sparkTurnResultSchema,
-  sparkTurnStatusResultSchema,
-  sparkTurnStreamPageSchema,
-  sparkTurnSubmitResultSchema,
-  type SparkAssignment,
-  type SparkCommand,
-} from "@zendev-lab/spark-protocol";
+import { SPARK_PROTOCOL_VERSION, sparkTurnSubmitResultSchema } from "@zendev-lab/spark-protocol";
 import type { DaemonChannelIngressStatus } from "../channels/ingress.ts";
-import type {
-  SparkDaemonLifecycleSnapshot,
-  SparkDaemonRestartRequestResult,
-} from "../core/index.ts";
+import type { SparkDaemonLifecycleSnapshot } from "../core/index.ts";
 import type { SparkChannelDeliverySummary } from "../store/channel-deliveries.ts";
 import { RegistrationGrantRefusedError } from "../registration.js";
 import {
@@ -27,10 +13,6 @@ import type {
   LocalDaemonRestartResult,
   LocalDaemonStatusResult,
   LocalDaemonStopResult,
-  LocalTurnCancelResult,
-  LocalTurnResult,
-  LocalTurnStatusResult,
-  LocalTurnStreamResult,
   LocalTurnSubmitResult,
   LocalWorkspaceClientResult,
   WorkspaceListResult,

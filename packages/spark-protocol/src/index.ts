@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TASK_STATUSES } from "@zendev-lab/spark-core";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
+import { sparkSessionPendingTurnSchema } from "./session-assignment.ts";
 
 export * from "./action-bars.ts";
 export * from "./ask-semantics.ts";
@@ -22,6 +23,7 @@ export * from "./runtime-v1/ephemeral-secret.ts";
 export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
 export * from "./session-assignment.ts";
+export * from "./side-thread.ts";
 export * from "./state-ownership.ts";
 export * from "./tool-display.ts";
 export { SPARK_PROTOCOL_VERSION } from "./version.ts";
@@ -314,20 +316,6 @@ export const sparkSessionUsageSchema = z.object({
   contextTokens: z.number().nonnegative().optional(),
   contextTokenSource: z.enum(["reported", "tokenizer", "estimated"]).optional(),
   contextWindow: z.number().positive().optional(),
-});
-
-/**
- * Daemon-owned admission state for turns that have not reached a terminal
- * invocation status yet. The field on `SparkSessionView` is optional so a
- * Cockpit-only fallback projection can be distinguished from an authoritative
- * daemon snapshot with an empty pending set.
- */
-export const sparkSessionPendingTurnSchema = z.object({
-  invocationId: z.string().min(1),
-  prompt: z.string(),
-  status: z.enum(["queued", "running"]),
-  createdAt: sparkIsoDateTimeSchema,
-  startedAt: sparkIsoDateTimeSchema.optional(),
 });
 
 export const sparkSessionViewSchema = z.object({
@@ -677,7 +665,6 @@ export type SparkSessionMailChannelDeliveryView = z.infer<
 >;
 export type SparkSessionMailMessageView = z.infer<typeof sparkSessionMailMessageViewSchema>;
 export type SparkSessionUsage = z.infer<typeof sparkSessionUsageSchema>;
-export type SparkSessionPendingTurn = z.infer<typeof sparkSessionPendingTurnSchema>;
 export type SparkSessionView = z.infer<typeof sparkSessionViewSchema>;
 export type SparkSessionSnapshotHistory = z.infer<typeof sparkSessionSnapshotHistorySchema>;
 export type SparkSessionSnapshotPage = z.infer<typeof sparkSessionSnapshotPageSchema>;

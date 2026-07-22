@@ -13,17 +13,23 @@
   "exports": {
     ".": "./src/agent-loop.ts",
     "./behavior-eval": "./src/behavior-eval.ts",
-    "./prompt-manifest": "./src/prompt-manifest.ts"
+    "./prompt-manifest": "./src/prompt-manifest.ts",
+    "./side-thread": "./src/side-thread.ts"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
+    "check": "vp check --no-fmt --no-lint . && vp test run",
+    "test": "vp test run"
   },
   "dependencies": {
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^"
+  },
+  "devDependencies": {
+    "fast-check": "catalog:",
+    "vitest": "catalog:"
   }
 }

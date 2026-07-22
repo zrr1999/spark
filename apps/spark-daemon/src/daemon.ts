@@ -139,6 +139,7 @@ import {
 } from "./spark/bridge.js";
 import { createChannelAwareTaskExecutor, sessionSourceForTask } from "./spark/session-run.js";
 import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
+import { notifySessionRequestCompletion } from "./session-request-completion-notify.ts";
 import { executeSparkDaemonSessionControl } from "./session-control.ts";
 import {
   nextSparkDaemonTokenRefreshDelayMs,
@@ -431,8 +432,8 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
                     : {}),
                 }),
             }),
-          completeInvocation: (invocation, task, completion) =>
-            completeInvocationWithChannelDelivery(
+          completeInvocation: (invocation, task, completion) => {
+            const completed = completeInvocationWithChannelDelivery(
               {
                 db: options.db,
                 invocations: invocationStore,
@@ -441,7 +442,24 @@ export async function startSparkDaemon(options: StartSparkDaemonOptions): Promis
               invocation,
               task,
               completion,
-            ),
+            );
+            if (options.sessionRegistry) {
+              void notifySessionRequestCompletion(
+                {
+                  invocationStore,
+                  sessionRegistry: options.sessionRegistry,
+                  ...(options.modelControl ? { modelControl: options.modelControl } : {}),
+                  resolveWorkspaceCwd: (workspaceId) =>
+                    resolveWorkspaceLocalPath(options.db, workspaceId),
+                  canAdmit: () => channelAdmissionOpen && !runtimeSignal.aborted,
+                },
+                { invocation, task, completion },
+              ).catch((error) => {
+                console.error("[spark-daemon] session request completion notify failed", error);
+              });
+            }
+            return completed;
+          },
           emitEvent: emitInvocationEvent,
           concurrency: options.schedulerConcurrency,
           taskTimeoutMs: options.invocationTimeoutMs,

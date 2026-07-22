@@ -46,7 +46,7 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@types/web-push": "^3.6.4",
     "@types/ws": "catalog:",
-    "@vitest/browser-playwright": "4.1.9",
+    "@vitest/browser-playwright": "4.1.10",
     "playwright": "1.61.1",
     "svelte-check": "^4.3.1",
     "tsx": "^4.20.5",

@@ -260,6 +260,9 @@ test("Spark extension publishes role-run footer status, below-editor widget, and
       content: string;
       details?: Record<string, unknown>;
     }> = [];
+    const sendOptions: Array<
+      { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean } | undefined
+    > = [];
     const messageRenderers = new Map<string, MessageRenderer>();
     let sparkStatusWidget: { render(): string[]; invalidate(): void } | undefined;
     const widgetTui: SparkWidgetTui = { terminal: { columns: 160 }, requestRender() {} };
@@ -295,10 +298,11 @@ test("Spark extension publishes role-run footer status, below-editor widget, and
       on(event, handler) {
         handlers.set(event, [...(handlers.get(event) ?? []), handler]);
       },
-      sendMessage(message) {
+      sendMessage(message, options) {
         messages.push(
           message as { customType: string; content: string; details?: Record<string, unknown> },
         );
+        sendOptions.push(options);
       },
       registerMessageRenderer(customType, renderer) {
         messageRenderers.set(customType, renderer as MessageRenderer);
@@ -345,6 +349,7 @@ test("Spark extension publishes role-run footer status, below-editor widget, and
     assert.equal(messages.length, 1);
     assert.equal(messages[0]?.customType, "spark-role-run-completion");
     assert.match(messages[0]?.content ?? "", /worker completed: run:dddddddd/);
+    assert.deepEqual(sendOptions[0], { deliverAs: "followUp", triggerTurn: true });
     const renderer = messageRenderers.get("spark-role-run-completion");
     assert.ok(renderer);
     const rendered = renderer(

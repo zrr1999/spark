@@ -306,6 +306,7 @@ function piAllowedSparkFoundationDirs() {
     "spark-loop",
     "spark-modes",
     "spark-tasks",
+    "spark-turn",
     "spark-workflows",
     // Old script treated spark-tui as non-spark for the foundation allowlist check
     // (isSparkSpecifier returned false for spark-tui). Keep spark-text similarly allowed.

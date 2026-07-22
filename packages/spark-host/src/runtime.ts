@@ -40,7 +40,11 @@ import type {
   ToolConfig,
   ToolInfo,
 } from "@zendev-lab/spark-core";
-import { resolveToolPolicy } from "@zendev-lab/spark-core";
+import {
+  resolveToolPolicy,
+  type ResolvedToolPolicy,
+  type ToolEffect,
+} from "@zendev-lab/spark-core";
 import {
   SPARK_PROTOCOL_VERSION,
   createBlockedInteractionResponse,
@@ -97,6 +101,12 @@ export interface SparkHostRuntimeOptions {
   sessionQuestionChain?: readonly string[];
   /** When present, this host instance must never activate tools outside this allowlist. */
   allowedTools?: readonly string[];
+  /**
+   * When present, this host instance must never advertise or dispatch a tool
+   * whose declared effect is outside this allowlist. An unknown declaration is
+   * deliberately denied: callers opt into capability classes, never names.
+   */
+  allowedToolEffects?: readonly ToolEffect[];
   hasUI?: boolean;
   ui?: SparkHostUiTransport;
   sessionManager?: SparkHostSessionManagerStub;
@@ -134,6 +144,7 @@ export class SparkHostRuntime implements SparkHostAPI {
   readonly hasUI: boolean;
   private readonly tools: RegisteredToolMap = new Map();
   private readonly allowedTools: ReadonlySet<string> | undefined;
+  private readonly allowedToolEffects: ReadonlySet<ToolEffect> | undefined;
   private readonly commands: RegisteredCommandMap = new Map();
   private readonly listeners: EventListenerMap = new Map();
   private readonly outbox: OutboxEnvelope[] = [];
@@ -161,6 +172,9 @@ export class SparkHostRuntime implements SparkHostAPI {
       ?.map((entry) => entry.trim())
       .filter(Boolean);
     this.allowedTools = options.allowedTools ? new Set(options.allowedTools) : undefined;
+    this.allowedToolEffects = options.allowedToolEffects
+      ? new Set(options.allowedToolEffects)
+      : undefined;
     this.hasUI = options.hasUI ?? false;
     this.uiTransport = options.ui ?? {};
     this.sessionManager = options.sessionManager ?? {};
@@ -178,10 +192,11 @@ export class SparkHostRuntime implements SparkHostAPI {
   registerTool = (config: ToolConfig): void => {
     if (!config.name) throw new Error("SparkHostRuntime.registerTool requires a tool name");
     const existing = this.tools.get(config.name);
+    const policy = resolveToolPolicy(config);
     const entry: RegisteredTool = {
       config,
-      policy: resolveToolPolicy(config),
-      active: this.isToolAllowed(config.name) && (existing?.active ?? true),
+      policy,
+      active: this.isToolAllowed(config.name, policy) && (existing?.active ?? true),
     };
     this.tools.set(config.name, entry);
     for (const listener of Array.from(this.toolRegistrationListeners)) {
@@ -288,7 +303,7 @@ export class SparkHostRuntime implements SparkHostAPI {
   setActiveTools = (names: string[]): void => {
     const requested = new Set(names);
     for (const [name, tool] of Array.from(this.tools)) {
-      tool.active = this.isToolAllowed(name) && requested.has(name);
+      tool.active = this.isToolAllowed(name, tool.policy) && requested.has(name);
     }
   };
 
@@ -322,8 +337,25 @@ export class SparkHostRuntime implements SparkHostAPI {
     this.roleRunner = roleRunner;
   }
 
-  private isToolAllowed(name: string): boolean {
-    return this.allowedTools?.has(name) ?? true;
+  /**
+   * Final host-owned admission check used by the shared turn loop immediately
+   * before calling a tool. Keep this separate from `active`: callers may hold
+   * a stale registered-tool reference while policy is changed or reloaded.
+   */
+  isToolDispatchAllowed(name: string, tool: RegisteredTool): boolean {
+    return this.tools.get(name) === tool && tool.active && this.isToolAllowed(name, tool.policy);
+  }
+
+  private isToolAllowed(name: string, policy?: ResolvedToolPolicy): boolean {
+    if (this.allowedTools && !this.allowedTools.has(name)) return false;
+    // A missing policy is not an implicit read capability. `resolveToolPolicy`
+    // marks malformed/missing effects as unknown, which fails this allowlist.
+    if (!this.allowedToolEffects) return true;
+    return (
+      policy?.effect !== undefined &&
+      policy.effect !== "unknown" &&
+      this.allowedToolEffects.has(policy.effect)
+    );
   }
 
   /** Snapshot of currently registered tools (active or not). */

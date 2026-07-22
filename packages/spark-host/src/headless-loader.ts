@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
+  ToolEffect,
 } from "@zendev-lab/spark-core";
 
 export type SparkHeadlessRoleRunStatus =
@@ -40,6 +41,8 @@ export interface SparkHeadlessSessionRunInput {
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
+  /** Host-enforced effect allowlist; unknown tool effects are denied. */
+  allowedToolEffects?: readonly ToolEffect[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
