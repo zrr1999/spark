@@ -13,6 +13,7 @@ import {
   type SparkSessionView,
   type SparkTaskView,
   type SparkThinkingLevel,
+  type SparkTurnResult,
 } from "@zendev-lab/spark-protocol";
 
 import {
@@ -23,6 +24,7 @@ import {
   clientGetManagedSessionSnapshot,
   clientListDaemonWorkspaces,
   clientListManagedSessions,
+  clientTurnStatus,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
   ensureSparkDaemonWorkspaceSession,
@@ -30,6 +32,7 @@ import {
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
+  requestSparkDaemonControl,
   type SparkDaemonClientOptions,
   type SparkDaemonCliCommand,
   type SparkDaemonWorkspace,
@@ -106,6 +109,7 @@ export interface SparkCliRuntimeOptions {
   sessionDir?: string;
   sparkSessionKey?: string;
   noSession?: boolean;
+  wait?: boolean;
   name?: string;
   extensions?: string[];
   noExtensions?: boolean;
@@ -310,6 +314,10 @@ function parseSparkPiCompatibleOptions(argv: string[]): ParsedSparkPiOptions {
         break;
       case "--no-session":
         options.noSession = true;
+        break;
+      case "--wait":
+      case "-w":
+        options.wait = true;
         break;
       case "--name":
       case "-n":
@@ -969,13 +977,48 @@ export async function runSparkCli(
             json: true,
             sessionId,
             prompt: command.prompt,
+            model:
+              command.options?.model &&
+              command.options.provider &&
+              !command.options.model.includes("/")
+                ? `${command.options.provider}/${command.options.model}`
+                : command.options?.model,
             reset: command.options?.noSession,
           },
           daemonClient,
         );
-        if (command.mode === "json") printSparkJsonEventStream(command.prompt, sessionId, result);
-        else console.log(JSON.stringify(result, null, 2));
-        return 0;
+
+        if (!command.options?.wait) {
+          // Default: queued ACK semantics
+          if (command.mode === "json") printSparkJsonEventStream(command.prompt, sessionId, result);
+          else console.log(JSON.stringify(result, null, 2));
+          return 0;
+        }
+
+        // --wait: poll until terminal status, then fetch result
+        const submitResult = (result as { result?: { invocationId?: string } }).result;
+        const invocationId = submitResult?.invocationId;
+        if (!invocationId) {
+          console.error("No invocationId in submit response; cannot --wait.");
+          return 1;
+        }
+
+        const waitResult = await waitForInvocationTerminal(invocationId, daemonClient);
+        if (command.mode === "json") {
+          printSparkJsonEventStream(
+            command.prompt,
+            sessionId,
+            { result: waitResult },
+            waitResult.status === "succeeded"
+              ? (waitResult.assistantText ?? tuiCliStrings.headlessAccepted)
+              : `[${waitResult.status}] ${waitResult.error?.message ?? ""}`,
+          );
+        } else {
+          console.log(JSON.stringify(waitResult, null, 2));
+        }
+        if (waitResult.status === "succeeded") return 0;
+        if (waitResult.status === "cancelled") return 2;
+        return 1; // failed or unknown
       } finally {
         await lease.release();
       }
@@ -1646,6 +1689,62 @@ function printSparkJsonEventStream(
     { type: "agent_end", messages: [] },
   ];
   for (const line of lines) console.log(JSON.stringify(line));
+}
+
+const WAIT_POLL_INTERVAL_MS = 500;
+const WAIT_POLL_MAX_INTERVAL_MS = 5_000;
+const WAIT_DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+async function waitForInvocationTerminal(
+  invocationId: string,
+  client: SparkDaemonClientOptions,
+): Promise<SparkTurnResult> {
+  const deadline = Date.now() + WAIT_DEFAULT_TIMEOUT_MS;
+  let interval = WAIT_POLL_INTERVAL_MS;
+  let failureCount = 0;
+
+  while (Date.now() < deadline) {
+    try {
+      const status = await clientTurnStatus({ invocationId }, client, {
+        ensureRunning: failureCount > 0,
+      });
+      failureCount = 0;
+      if (
+        status.status === "succeeded" ||
+        status.status === "failed" ||
+        status.status === "cancelled"
+      ) {
+        // Fetch the full result
+        return await requestSparkDaemonControl<SparkTurnResult>(
+          "turn.result",
+          { invocationId },
+          client,
+        );
+      }
+      // Still running/queued — poll again
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(interval, remaining)));
+      interval = Math.min(interval * 1.5, WAIT_POLL_MAX_INTERVAL_MS);
+    } catch {
+      failureCount += 1;
+      if (failureCount > 10) {
+        throw new Error(`Too many consecutive failures polling invocation ${invocationId}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * failureCount, 5000)));
+    }
+  }
+
+  // Timeout: try to get whatever status we can
+  return {
+    invocationId,
+    status: "failed",
+    error: {
+      code: "timeout",
+      message: "Timed out waiting for invocation to complete",
+      retryable: true,
+    },
+  } as SparkTurnResult;
 }
 
 export interface SparkRpcState {

@@ -64,8 +64,8 @@ hooks = [
   },
   {
     id = "vp-check",
-    name = "vp check --fix",
-    entry = "bash -c 'pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm exec vp check --fix'",
+    name = "Spark static checks --fix",
+    entry = "bash -c 'pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:static:fix'",
     language = "system",
     pass_filenames = false,
     stages = ["pre-commit"]
