@@ -94,11 +94,7 @@ describe("deliberateSparkFusion", () => {
     );
 
     await allPanelsStarted.promise;
-    expect(started).toEqual([
-      "fusion-panel:first",
-      "fusion-panel:second",
-      "fusion-panel:third",
-    ]);
+    expect(started).toEqual(["fusion-panel:first", "fusion-panel:second", "fusion-panel:third"]);
     firstPanelRelease.resolve();
     await expect(pending).resolves.toMatchObject({ status: "complete" });
   });

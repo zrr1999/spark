@@ -54,7 +54,7 @@
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
     "test:npm-product": "node scripts/smoke-npm-product.mjs",
     "publish:npm-product": "pnpm publish dist/npm-package --access public --registry=https://registry.npmjs.org/",
-    "publish": "pnpm run check && pnpm run test:npm-product && pnpm run publish:npm-product"
+    "publish": "pnpm run check && pnpm run test:npm-product && pnpm run publish:npm-product",
     "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {

@@ -66,7 +66,10 @@ test("reproduce and scale ticks apply the selective evidence-gated Fusion policy
     assert.match(instruction, /at least two plausible falsifiable hypotheses remain/);
     assert.match(instruction, /the evidence conflicts/);
     assert.match(instruction, /latest runtime_verdict is inconclusive/);
-    assert.match(instruction, /Skip Fusion when the next single-variable experiment is already clear and cheap/);
+    assert.match(
+      instruction,
+      /Skip Fusion when the next single-variable experiment is already clear and cheap/,
+    );
     assert.match(instruction, /bounded summary/);
     assert.match(instruction, /original evidence: refs/);
     assert.match(instruction, /Never pass the full transcript, raw logs, or stale context/);
