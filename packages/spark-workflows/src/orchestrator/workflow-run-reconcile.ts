@@ -60,7 +60,8 @@ function reconcileStaleWorkflowRun(
     completedFallback: taskRuns.filter((run) => run.status !== "queued" && run.status !== "running")
       .length,
   });
-  if (taskRuns.some((run) => run.status === "failed")) record.status = "failed";
+  if (taskRuns.some((run) => run.status === "failed" || run.status === "blocked"))
+    record.status = "failed";
   else if (taskRuns.length > 0 && taskRuns.every((run) => run.status === "succeeded"))
     record.status = "succeeded";
   else if (taskRuns.some((run) => run.status === "cancelled")) record.status = "failed";

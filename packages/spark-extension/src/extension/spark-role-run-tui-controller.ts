@@ -167,7 +167,12 @@ export class SparkRoleRunTuiController {
 }
 
 function isTerminalEntry(entry: SparkRoleRunRegistryEntry): boolean {
-  return entry.status === "done" || entry.status === "failed" || entry.status === "cancelled";
+  return (
+    entry.status === "done" ||
+    entry.status === "blocked" ||
+    entry.status === "failed" ||
+    entry.status === "cancelled"
+  );
 }
 
 function terminalKey(entry: SparkRoleRunRegistryEntry): string {

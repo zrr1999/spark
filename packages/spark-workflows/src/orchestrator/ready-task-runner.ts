@@ -70,6 +70,7 @@ export interface ReadyTaskRunnerResult {
   scheduled: number;
   completed: number;
   succeeded: number;
+  blocked: number;
   failed: number;
   cancelled: number;
   /** Legacy workflow-run timeout flag. New foreground wait expiry is reported via foregroundTimedOut/detached. */
@@ -193,6 +194,7 @@ export async function runReadyTasks(input: ReadyTaskRunnerOptions): Promise<Read
     scheduled: scheduled.size,
     completed: runs.filter((run) => run.status !== "running" && run.status !== "queued").length,
     succeeded: runs.filter((run) => run.status === "succeeded").length,
+    blocked: runs.filter((run) => run.status === "blocked").length,
     failed: runs.filter((run) => run.status === "failed").length,
     cancelled: runs.filter((run) => run.status === "cancelled").length,
     timedOut: false,

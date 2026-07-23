@@ -221,10 +221,11 @@ function terminalSparkRunControlStatus(
 }
 
 function workflowResultTerminalForControl(result: {
+  blocked?: number;
   failed?: number;
   cancelled?: number;
 }): boolean {
-  return (result.failed ?? 0) > 0 || (result.cancelled ?? 0) > 0;
+  return (result.blocked ?? 0) > 0 || (result.failed ?? 0) > 0 || (result.cancelled ?? 0) > 0;
 }
 
 function emitSparkWorkflowRunCompletionFollowUp(

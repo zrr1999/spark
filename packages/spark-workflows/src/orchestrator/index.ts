@@ -216,6 +216,7 @@ export interface WorkflowRunFinishInput {
   scheduled: number;
   completed: number;
   timedOut: boolean;
+  blocked?: number;
   failed?: number;
   cancelled?: number;
   foregroundTimedOut?: boolean;
@@ -469,9 +470,10 @@ export class WorkflowRunStore {
       const now = nowIso();
       const record = snapshot.runs.find((candidate) => candidate.ref === runRef);
       if (!record) return;
+      const blockedChildren = result.blocked ?? 0;
       const failedChildren = result.failed ?? 0;
       const cancelledChildren = result.cancelled ?? 0;
-      const hasFailedChildren = failedChildren > 0 || cancelledChildren > 0;
+      const hasFailedChildren = blockedChildren > 0 || failedChildren > 0 || cancelledChildren > 0;
       if (isTerminalWorkflowRunStatus(record.status)) {
         followUp = record.completionFollowUp;
         return;
@@ -509,7 +511,7 @@ export class WorkflowRunStore {
           : error
             ? JSON.stringify(error)
             : hasFailedChildren
-              ? `workflow child runs failed: failed=${failedChildren} cancelled=${cancelledChildren}`
+              ? `workflow child runs failed: blocked=${blockedChildren} failed=${failedChildren} cancelled=${cancelledChildren}`
               : undefined;
       record.finishedAt = now;
       record.updatedAt = now;
