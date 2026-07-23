@@ -96,6 +96,7 @@ describe("channel inbound durable admission", () => {
             prompt: assignment.goal,
             assignment: assignment.assignment,
             workspaceId: "ws-overlap",
+            workspaceBindingId: "rtwb-overlap",
             cwd: "/workspace",
             channelReply: { ...assignment.channelReply, externalKey: assignment.externalKey },
             ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
@@ -129,6 +130,7 @@ describe("channel inbound durable admission", () => {
 
         const records = firstStore.listPage({ limit: 10 }).invocations;
         expect(records.every((record) => record.sourceKind === "channel")).toBe(true);
+        expect(records.every((record) => record.workspaceBindingId === "rtwb-overlap")).toBe(true);
         for (const record of records) {
           expect(record.idempotencyKey).not.toContain("user-private");
           expect(record.idempotencyKey).not.toContain("platform-message");

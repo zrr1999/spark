@@ -334,6 +334,121 @@ describe("runtime session projections", () => {
     h.db.close();
   });
 
+  it("does not let an older cursor page replace the canonical latest snapshot", () => {
+    const h = setup();
+    const session = workspaceSession(h.workspaceId);
+    projectSession(h, session, "workspace");
+
+    const latestCommand = submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      workspaceId: h.workspaceId,
+      sessionId: session.sessionId,
+      payload: {
+        kind: "session.snapshot.request",
+        scope: "workspace",
+        payload: { sessionId: session.sessionId },
+      },
+      createdAt: now,
+    });
+    recordResult(h, latestCommand.commandId, {
+      status: "succeeded",
+      result: {},
+      projection: {
+        kind: "session.snapshot",
+        data: {
+          snapshot: {
+            version: 1,
+            sessionId: session.sessionId,
+            status: "idle",
+            messages: [
+              {
+                version: 1,
+                id: "latest-message",
+                role: "user",
+                text: "latest",
+                status: "done",
+                metadata: {},
+              },
+            ],
+            tools: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            metadata: {},
+          },
+          history: {
+            totalMessages: 3,
+            loadedMessages: 1,
+            hiddenMessages: 2,
+            earlierMessages: 2,
+            laterMessages: 0,
+            hasEarlierMessages: true,
+            nextBeforeMessageId: "latest-message",
+          },
+        },
+      },
+      completedAt: "2026-07-15T00:00:01.000Z",
+    });
+
+    const olderCommand = submitRuntimeControlCommand(h.db, {
+      runtimeId: h.runtimeId,
+      workspaceId: h.workspaceId,
+      sessionId: session.sessionId,
+      payload: {
+        kind: "session.snapshot.request",
+        scope: "workspace",
+        payload: { sessionId: session.sessionId, beforeMessageId: "latest-message" },
+      },
+      createdAt: now,
+    });
+    recordResult(h, olderCommand.commandId, {
+      status: "succeeded",
+      result: {},
+      projection: {
+        kind: "session.snapshot",
+        data: {
+          snapshot: {
+            version: 1,
+            sessionId: session.sessionId,
+            status: "idle",
+            messages: [
+              {
+                version: 1,
+                id: "older-message",
+                role: "user",
+                text: "older",
+                status: "done",
+                metadata: {},
+              },
+            ],
+            tools: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            metadata: {},
+          },
+          history: {
+            totalMessages: 3,
+            loadedMessages: 1,
+            hiddenMessages: 2,
+            earlierMessages: 1,
+            laterMessages: 1,
+            hasEarlierMessages: true,
+            nextBeforeMessageId: "older-message",
+          },
+        },
+      },
+      completedAt: "2026-07-15T00:00:02.000Z",
+    });
+
+    expect(getRuntimeSessionProjection(h.db, session.sessionId)).toMatchObject({
+      snapshot: { messages: [{ id: "latest-message", text: "latest" }] },
+      history: { totalMessages: 3, loadedMessages: 1, hiddenMessages: 2 },
+      projectedAt: "2026-07-15T00:00:01.000Z",
+    });
+    h.db.close();
+  });
+
   it("keeps direct invocation projections synchronized with runtime lifecycle updates", () => {
     const h = setup();
     const session = workspaceSession(h.workspaceId);

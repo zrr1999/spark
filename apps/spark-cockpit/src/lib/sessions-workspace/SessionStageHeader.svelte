@@ -10,9 +10,11 @@
   let {
     host,
     sessionDetails,
+    onOpenSideThread,
   }: {
     host: SessionConversationHost;
     sessionDetails: Snippet<[boolean?]>;
+    onOpenSideThread: () => void;
   } = $props();
 
   let displayedSessionStatus = $derived(visibleSessionStatus(host.selected.status));
@@ -37,6 +39,15 @@
       </div>
       <div class="stage-actions">
         {#if host.selected.role}<span class="context-chip">{host.selected.role}</span>{/if}
+        <Button
+          variant="secondary"
+          size="compact"
+          type="button"
+          onclick={onOpenSideThread}
+        >
+          <Icon name="repos" size={14} stroke={2.1} />
+          <span>{host.messages.sideThread.title}</span>
+        </Button>
         {#if host.conversationBusy}
           <span
             class="session-working-indicator"

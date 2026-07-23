@@ -74,6 +74,38 @@ describe("channel images", () => {
     });
   });
 
+  it("allows one transport-owned private media endpoint with per-hop authentication", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Uint8Array.from([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const mediaUrl = "https://apiin.im.baidu.com/api/v2/im/images?imgKey=opaque";
+
+    const images = await materializeChannelImages([{ url: mediaUrl, mediaType: "image/png" }], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      lookupHostname: async () => [{ address: "10.11.154.217", family: 4 }],
+      isTrustedPrivateUrl: (url) =>
+        url.hostname === "apiin.im.baidu.com" && url.pathname === "/api/v2/im/images",
+      requestHeaders: async (url) =>
+        url.hostname === "apiin.im.baidu.com" ? { Authorization: "Bearer-test-token" } : undefined,
+    });
+
+    expect(images).toEqual([
+      {
+        data: Buffer.from([137, 80, 78, 71]).toString("base64"),
+        mediaType: "image/png",
+      },
+    ]);
+    expect(fetchImpl).toHaveBeenCalledWith(mediaUrl, {
+      method: "GET",
+      redirect: "manual",
+      headers: { Authorization: "Bearer-test-token" },
+    });
+  });
+
   it("revalidates DNS on redirects before issuing the next request", async () => {
     const fetchImpl = vi.fn(async () => Response.redirect("https://media.example/next", 302));
     const lookupHostname = vi

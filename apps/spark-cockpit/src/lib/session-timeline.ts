@@ -179,9 +179,7 @@ export function buildSessionTimeline(input: {
     canonicalMessageIds.add(message.id);
     const invocationId = userMessageInvocationId(message);
     if (invocationId) canonicalUserInvocationIds.add(invocationId);
-    if (message.role === "user" || isFailedTerminalStatus(message.status)) {
-      incrementCount(canonicalFallbackMatches, fallbackMatchKey(actor, displayText));
-    }
+    incrementCount(canonicalFallbackMatches, fallbackMatchKey(actor, displayText));
     items.push({
       id: `message:${message.id}`,
       actor,
@@ -272,11 +270,16 @@ export function buildSessionTimeline(input: {
         part.type === "artifact" ||
         part.type === "error",
     );
+    const isPlainConversationReply =
+      report.kind === "turn.submit.assistant" || report.kind === "session.message";
     items.push({
       id: sourceMessageId ? `message:${sourceMessageId}` : `report:${report.id}`,
       actor,
       body: conversationItemBody(parts, report.text),
-      title: actor !== "spark" || hasStructuredReportPart ? null : report.title,
+      title:
+        actor !== "spark" || hasStructuredReportPart || isPlainConversationReply
+          ? null
+          : report.title,
       status: conversationItemStatus(report.status, report.message?.role, parts),
       timestamp: report.createdAt,
       meta: conversationRoleMeta(report.role),
@@ -602,7 +605,11 @@ function normalizeMessage(value: string) {
 }
 
 function isDirectTurnFallback(report: SessionTimelineReport): boolean {
-  return report.kind === "turn.submit.prompt" || report.kind === "turn.submit.failure";
+  return (
+    report.kind === "turn.submit.prompt" ||
+    report.kind === "turn.submit.assistant" ||
+    report.kind === "turn.submit.failure"
+  );
 }
 
 function fallbackMatchKey(actor: ConversationMessageView["actor"], text: string): string {

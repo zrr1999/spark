@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   SPARK_PROTOCOL_VERSION,
   parseSparkDaemonEvent,
@@ -728,7 +730,7 @@ export async function executeSparkDaemonSessionRunTask(
     ...(!task.hiddenExecution && sessionContext.sessionPath
       ? { sessionPath: sessionContext.sessionPath }
       : {}),
-    prompt: sessionRunPrompt(task),
+    prompt: sessionRunPrompt(task, options.paths, context.invocationId),
     ...(task.model ? { model: task.model } : {}),
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
@@ -808,17 +810,64 @@ function completeChannelBinding(task: SparkDaemonSessionRunTask) {
 
 function sessionRunPrompt(
   task: SparkDaemonSessionRunTask,
+  paths: SparkPaths,
+  invocationId: string,
 ): Parameters<SparkHeadlessSessionExecutor>[0]["prompt"] {
-  const images = task.channelContext?.images ?? [];
-  if (images.length === 0) return task.prompt;
+  const browserImages = (task.attachments ?? []).filter(
+    (attachment) => attachment.kind === "image",
+  );
+  const channelImages = task.channelContext?.images ?? [];
+  const files = (task.attachments ?? []).filter((attachment) => attachment.kind === "file");
+  const filePrompt = materializeTurnFiles(files, paths, invocationId);
+  const text = filePrompt ? `${task.prompt}\n\n${filePrompt}` : task.prompt;
+  if (browserImages.length === 0 && channelImages.length === 0) return text;
   return [
-    { type: "text", text: task.prompt },
-    ...images.map((image) => ({
+    { type: "text", text },
+    ...browserImages.map((image) => ({
+      type: "image" as const,
+      data: image.data,
+      mimeType: image.mediaType,
+    })),
+    ...channelImages.map((image) => ({
       type: "image" as const,
       data: image.data,
       mimeType: image.mediaType,
     })),
   ];
+}
+
+function materializeTurnFiles(
+  files: NonNullable<SparkDaemonSessionRunTask["attachments"]>,
+  paths: SparkPaths,
+  invocationId: string,
+): string {
+  if (files.length === 0) return "";
+  const attachmentDir = join(paths.dataDir, "turn-attachments", safePathSegment(invocationId));
+  mkdirSync(attachmentDir, { recursive: true, mode: 0o700 });
+  const entries = files.map((file, index) => {
+    const safeName = safeAttachmentName(file.name);
+    const fileName = `${index + 1}-${safeName}`;
+    const filePath = join(attachmentDir, fileName);
+    writeFileSync(filePath, Buffer.from(file.data, "base64"), { mode: 0o600 });
+    return `- ${safeName} (${file.mediaType}, ${file.size} bytes): ${filePath}`;
+  });
+  return [
+    "The user attached local files for this turn. Read them from these daemon-owned paths when needed:",
+    ...entries,
+  ].join("\n");
+}
+
+function safeAttachmentName(name: string): string {
+  const normalized = name
+    .normalize("NFKC")
+    .replace(/[\p{Cc}/\\:]/gu, "_")
+    .replace(/^\.+/u, "")
+    .slice(0, 180);
+  return normalized || "attachment";
+}
+
+function safePathSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/gu, "_").slice(0, 160) || "turn";
 }
 
 function sessionRunMessageMetadata(

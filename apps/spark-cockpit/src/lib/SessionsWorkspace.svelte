@@ -188,7 +188,14 @@
     getInitialEventCursor: () => initialEventCursor,
     getActivityCommandIds: () => activityCommands.map((command) => command.id),
     getActivityInvocationIds: () =>
-      activityCommands.flatMap((command) => (command.invocationId ? [command.invocationId] : [])),
+      [
+        ...activityCommands.flatMap((command) =>
+          command.invocationId ? [command.invocationId] : [],
+        ),
+        ...activityReports.flatMap((report) =>
+          report.invocationId ? [report.invocationId] : [],
+        ),
+      ],
     getSessionActivityState: () => sessionActivityState,
     invalidateAll,
     onRefreshActivity: () => activityRefresh.scheduleActivityRefresh(),
@@ -649,6 +656,7 @@
     enhanceSendMessage,
     slashActionAvailability: (action, _surface) => slashActionAvailability(action, "session"),
     handleSessionMessageChange: composer.handleSessionMessageChange,
+    handleSessionAttachmentsChange: composer.handleSessionAttachmentsChange,
     handleSlashCompletionKeydown: (event, _surface) =>
       handleSlashCompletionKeydown(event, "session"),
     selectSlashSuggestion: (suggestion, _surface) => selectSlashSuggestion(suggestion, "session"),

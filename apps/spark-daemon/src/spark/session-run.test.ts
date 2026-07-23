@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CHANNEL_DELIVERY_OUTCOME_UNKNOWN_ERROR_CODE,
@@ -39,7 +42,7 @@ function context(
 
 describe("daemon native session execution", () => {
   it("leaves daemon execution timeout ownership with the pausable scheduler", async () => {
-    const executeSession = vi.fn(async () => ({ assistantText: "done" }));
+    const executeSession = vi.fn(async (_input: unknown) => ({ assistantText: "done" }));
     const task: SparkDaemonSessionRunTask = {
       type: "session.run",
       sessionId: "sess_scheduler_timeout",
@@ -53,6 +56,69 @@ describe("daemon native session execution", () => {
     expect(executeSession).toHaveBeenCalledWith(
       expect.not.objectContaining({ timeoutMs: expect.anything() }),
     );
+  });
+
+  it("passes images as multimodal input and materializes other files for tools", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "spark-turn-attachments-"));
+    const attachmentPaths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: "/tmp/spark-daemon-session-run-test" },
+      overrides: { dataDir },
+    });
+    const executeSession = vi.fn(async (_input: unknown) => ({ assistantText: "done" }));
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_attachments",
+      prompt: "Inspect these attachments.",
+      attachments: [
+        {
+          kind: "image",
+          name: "shot.png",
+          mediaType: "image/png",
+          size: 3,
+          data: "AQID",
+        },
+        {
+          kind: "file",
+          name: "../notes.txt",
+          mediaType: "text/plain",
+          size: 5,
+          data: "aGVsbG8=",
+        },
+      ],
+    };
+
+    try {
+      await executeSparkDaemonSessionRunTask(task, context(task), {
+        paths: attachmentPaths,
+        executeSession,
+      });
+      const prompt = (
+        executeSession.mock.calls[0]?.[0] as
+          | {
+              prompt?:
+                | string
+                | Array<
+                    | { type: "text"; text: string }
+                    | { type: "image"; data: string; mimeType: string }
+                  >;
+            }
+          | undefined
+      )?.prompt;
+      expect(prompt).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining("daemon-owned paths"),
+        },
+        { type: "image", data: "AQID", mimeType: "image/png" },
+      ]);
+      const filePath = join(dataDir, "turn-attachments", "invocation-1", "1-_notes.txt");
+      expect(existsSync(filePath)).toBe(true);
+      expect(readFileSync(filePath, "utf8")).toBe("hello");
+      expect(JSON.stringify(prompt)).toContain(filePath);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("fails closed before model execution for an incomplete frozen channel binding", async () => {

@@ -4,6 +4,7 @@ import {
   sparkTurnSubmitResultSchema,
   type SparkAssignment,
   type SparkInvocationStatus,
+  type SparkTurnAttachment,
 } from "@zendev-lab/spark-protocol";
 import { createCockpitRuntimeSessionClient } from "./cockpit-runtime-session-client";
 import { conversationTurnIdempotencyKey } from "./conversation-submission";
@@ -15,6 +16,7 @@ export interface SubmitCockpitConversationTurnInput {
   title: string;
   /** Opaque browser-generated nonce reused only when retrying the same submit. */
   submissionId?: string;
+  attachments?: SparkTurnAttachment[];
 }
 
 export interface SubmittedCockpitConversationTurn {
@@ -39,6 +41,7 @@ export interface CockpitConversationControlClient {
     prompt: string;
     assignment: SparkAssignment;
     messageMetadata?: Record<string, unknown>;
+    attachments?: SparkTurnAttachment[];
     idempotencyKey?: string;
   }): Promise<unknown>;
 }
@@ -75,8 +78,19 @@ export async function submitConversationTurnForCockpit(
     prompt: input.prompt,
     assignment,
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     messageMetadata: {
       origin: { kind: "user", host: "web", surface: "local" },
+      ...(input.attachments?.length
+        ? {
+            attachments: input.attachments.map(({ kind, name, mediaType, size }) => ({
+              kind,
+              name,
+              mediaType,
+              size,
+            })),
+          }
+        : {}),
     },
   });
   const receipt = sparkTurnSubmitResultSchema.safeParse(result);

@@ -268,6 +268,7 @@ export async function executeSparkDaemonSessionControl(
             ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
             ...(parsed.assignment ? { assignment: parsed.assignment } : {}),
             ...(parsed.messageMetadata ? { messageMetadata: parsed.messageMetadata } : {}),
+            ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
             ...(parsed.originBinding
               ? {
                   channelReply: {
@@ -377,6 +378,7 @@ function assertIdempotentTurnReplay(
     task.reset !== parsed.reset ||
     JSON.stringify(task.assignment) !== JSON.stringify(parsed.assignment) ||
     JSON.stringify(task.messageMetadata) !== JSON.stringify(parsed.messageMetadata) ||
+    JSON.stringify(task.attachments) !== JSON.stringify(parsed.attachments) ||
     JSON.stringify(originBindingFromTask(task)) !== JSON.stringify(parsed.originBinding)
   ) {
     throw new Error(`Invocation idempotency conflict: ${parsed.idempotencyKey ?? "unknown"}`);

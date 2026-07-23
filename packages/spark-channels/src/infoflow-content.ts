@@ -129,6 +129,11 @@ function normalizeBody(body: unknown[], contentType: string): InfoflowNormalized
         parts.push(transcript ? `[语音] ${safeText(transcript)}` : "[语音]");
         break;
       }
+      case "face": {
+        const name = firstStringField(entry, "name", "title", "text");
+        parts.push(name ? `[表情: ${safeInline(name)}]` : "[表情]");
+        break;
+      }
       case "link":
       case "url": {
         const label = firstStringField(entry, "label", "title", "content", "text") || "链接";
@@ -254,8 +259,8 @@ function joinBodyParts(parts: string[]): string {
   for (const rawPart of parts) {
     const part = rawPart.trim();
     if (!part) continue;
-    const block = /^\[(?:图片|文件|语音|如流消息)/u.test(part);
-    const previousIsBlock = /(?:^|\n)\[(?:图片|文件|语音|如流消息)[^\n]*\]$/u.test(text);
+    const block = /^\[(?:图片|文件|语音|表情|如流消息)/u.test(part);
+    const previousIsBlock = /(?:^|\n)\[(?:图片|文件|语音|表情|如流消息)[^\n]*\]$/u.test(text);
     if (text && (block || previousIsBlock)) {
       text += "\n";
     } else if (text && !/[\s\n]$/u.test(text) && !/^[，。！？、；：,.!?;:)]/u.test(part)) {

@@ -44,6 +44,7 @@ import {
   type SparkTurnCancelResult,
   type SparkTurnStatusResult,
   type SparkTurnStreamPage,
+  type SparkTurnAttachment,
   type SparkTurnSubmitResult,
 } from "@zendev-lab/spark-protocol";
 import {
@@ -134,6 +135,7 @@ export interface CockpitRuntimeSessionClient {
     prompt: string;
     assignment: SparkAssignment;
     messageMetadata?: Record<string, unknown>;
+    attachments?: SparkTurnAttachment[];
     idempotencyKey?: string;
   }): Promise<SparkTurnSubmitResult>;
   cancel(input: {
@@ -547,6 +549,7 @@ async function submitTurn(
     prompt: string;
     assignment: SparkAssignment;
     messageMetadata?: Record<string, unknown>;
+    attachments?: SparkTurnAttachment[];
     idempotencyKey?: string;
   },
 ): Promise<SparkTurnSubmitResult> {
@@ -564,6 +567,7 @@ async function submitTurn(
         ...(input.messageMetadata
           ? { messageMetadata: publicJsonObject(input.messageMetadata) }
           : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       },
     },
   });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   sparkInvocationEventSchema,
   sparkTurnCancelRequestSchema,
+  sparkTurnAttachmentsSchema,
   sparkTurnSubmitRequestSchema,
   sparkTurnStatusResultSchema,
   sparkTurnStreamPageSchema,
@@ -85,6 +86,39 @@ describe("invocation lifecycle protocol", () => {
         model: "has space/model",
       }),
     ).toThrow();
+  });
+
+  it("accepts bounded canonical image and file attachments", () => {
+    const data = Buffer.from("hello").toString("base64");
+    const attachments = sparkTurnAttachmentsSchema.parse([
+      {
+        kind: "image",
+        name: "shot.png",
+        mediaType: "image/png",
+        size: 5,
+        data,
+      },
+      {
+        kind: "file",
+        name: "notes.txt",
+        mediaType: "text/plain",
+        size: 5,
+        data,
+      },
+    ]);
+
+    expect(attachments.map((attachment) => attachment.name)).toEqual(["shot.png", "notes.txt"]);
+    expect(() =>
+      sparkTurnAttachmentsSchema.parse([
+        {
+          kind: "image",
+          name: "broken.png",
+          mediaType: "image/png",
+          size: 4,
+          data,
+        },
+      ]),
+    ).toThrow(/canonical base64 matching size/u);
   });
 
   it("rejects queue-shaped ids and oversized event pages", () => {

@@ -530,6 +530,61 @@ describe("session timeline", () => {
     ]);
   });
 
+  it("does not duplicate a rebuilt direct assistant reply once the canonical message arrives", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message(
+          "assistant-native",
+          "assistant",
+          "Found seven sessions.",
+          "2026-07-10T00:00:02.000Z",
+        ),
+      ],
+      commands: [],
+      reports: [
+        {
+          id: "turn-submit:one:assistant",
+          kind: "turn.submit.assistant",
+          title: "Assistant reply",
+          text: "Found seven sessions.",
+          role: "assistant",
+          status: "done",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => [item.id, item.body])).toEqual([
+      ["message:assistant-native", "Found seven sessions."],
+    ]);
+  });
+
+  it("does not render an internal title above a rebuilt assistant reply", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "turn-submit:one:assistant",
+          kind: "turn.submit.assistant",
+          title: "Assistant reply",
+          text: "Found seven sessions.",
+          role: "assistant",
+          status: "done",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      body: "Found seven sessions.",
+      title: null,
+    });
+  });
+
   it("labels channel users from platform metadata and leaves local turns unlabeled", () => {
     const timeline = buildSessionTimeline({
       fallbackTimestamp: "2026-07-10T00:00:00.000Z",

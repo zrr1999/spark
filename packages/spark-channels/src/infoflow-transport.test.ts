@@ -600,6 +600,155 @@ describe("infoflow transport", () => {
     ]);
   });
 
+  it("recovers private mixed face semantics hidden by the text callback", async () => {
+    const handlers = new Map<string, (event: unknown) => void | Promise<void>>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void | Promise<void>) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {},
+      disconnect() {},
+      getState() {
+        return "connected";
+      },
+    } as unknown as WSClient;
+    const getMessageDetail = vi.fn(async () => ({
+      msgId: "mixed-1",
+      fromId: "alice",
+      receiverId: "19690",
+      receiverType: 7,
+      msgType: "text",
+      subType: "mixed",
+      senderUserId: 1,
+      sendTime: Date.now(),
+      content: {
+        blocks: [
+          { type: "face", id: "face-1", name: "吐舌" },
+          { type: "text", text: "这是啥" },
+        ],
+      },
+      deletedFlag: 0,
+      rawData: {},
+    }));
+    const received: unknown[] = [];
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      { getMessageDetail, wsClientFactory: () => client },
+    );
+    await transport.start((raw) => received.push(raw));
+
+    await handlers.get("private.*")?.({
+      type: "private.text",
+      data: {
+        chatType: "private",
+        msgType: "text",
+        raw: { FromUserId: "alice", Content: "这是啥", MsgId: "mixed-1" },
+      },
+    });
+
+    expect(getMessageDetail).toHaveBeenCalledWith({
+      fromId: "alice",
+      receiverId: "19690",
+      receiverType: 7,
+      msgId: "mixed-1",
+    });
+    expect(received).toEqual([
+      expect.objectContaining({
+        user_id: "alice",
+        message_id: "mixed-1",
+        content_type: "mixed",
+        text: "[表情: 吐舌]\n这是啥",
+      }),
+    ]);
+    await transport.stop();
+  });
+
+  it("downloads an authenticated mixed-message image from the Infoflow media host", async () => {
+    const handlers = new Map<string, (event: unknown) => void | Promise<void>>();
+    const client = {
+      on(pattern: string, handler: (event: unknown) => void | Promise<void>) {
+        handlers.set(pattern, handler);
+      },
+      off(pattern: string) {
+        handlers.delete(pattern);
+      },
+      async connect() {},
+      disconnect() {},
+      getState() {
+        return "connected";
+      },
+    } as unknown as WSClient;
+    const mediaUrl = "https://apiin.im.baidu.com/api/v2/im/images?imgKey=opaque";
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Uint8Array.from([137, 80, 78, 71]), {
+          headers: { "content-type": "image/png" },
+        }),
+    ) as unknown as typeof fetch;
+    const getImageAccessToken = vi.fn(async () => "image-token");
+    const received: unknown[] = [];
+    const transport = createInfoflowTransport(
+      { type: "infoflow", app_key: "key", app_secret: "secret", app_agent_id: "19690" },
+      {
+        fetchImpl,
+        getImageAccessToken,
+        getMessageDetail: async () => ({
+          msgId: "mixed-image-1",
+          fromId: "alice",
+          receiverId: "19690",
+          receiverType: 7,
+          msgType: "text",
+          subType: "mixed",
+          senderUserId: 1,
+          sendTime: Date.now(),
+          content: {
+            blocks: [
+              { type: "image", downloadUrl: mediaUrl, imageType: "png", imageName: "shot.png" },
+              { type: "text", text: "这是什么动物" },
+            ],
+          },
+          deletedFlag: 0,
+          rawData: {},
+        }),
+        lookupHostname: async () => [{ address: "10.11.154.217", family: 4 }],
+        wsClientFactory: () => client,
+      },
+    );
+    await transport.start((raw) => received.push(raw));
+
+    await handlers.get("private.*")?.({
+      type: "private.text",
+      data: {
+        chatType: "private",
+        msgType: "text",
+        raw: { FromUserId: "alice", Content: "这是什么动物", MsgId: "mixed-image-1" },
+      },
+    });
+
+    expect(getImageAccessToken).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledWith(mediaUrl, {
+      method: "GET",
+      redirect: "manual",
+      headers: { Authorization: "Bearer-image-token" },
+    });
+    expect(received).toEqual([
+      expect.objectContaining({
+        text: "[图片]\n这是什么动物",
+        images: [
+          {
+            data: Buffer.from([137, 80, 78, 71]).toString("base64"),
+            mediaType: "image/png",
+            name: "shot.png",
+          },
+        ],
+      }),
+    ]);
+    await transport.stop();
+  });
+
   it("normalizes private and group inbound payloads", () => {
     assert.deepEqual(
       normalizeInfoflowInbound({

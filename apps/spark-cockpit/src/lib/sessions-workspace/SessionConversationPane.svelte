@@ -16,6 +16,7 @@
   import type { SessionConversationHost } from "./conversation-host";
   import SessionStageHeader from "./SessionStageHeader.svelte";
   import SessionComposerPane from "./SessionComposerPane.svelte";
+  import SessionSideThreadDialog from "./SessionSideThreadDialog.svelte";
 
   let {
     host,
@@ -24,9 +25,11 @@
     host: SessionConversationHost;
     sessionDetails: Snippet<[boolean?]>;
   } = $props();
+
+  let sideThreadOpen = $state(false);
 </script>
 
-<SessionStageHeader {host} {sessionDetails} />
+<SessionStageHeader {host} {sessionDetails} onOpenSideThread={() => (sideThreadOpen = true)} />
 
     {#key host.selected.sessionId}
       <ConversationViewport
@@ -124,6 +127,15 @@
 
 
 <SessionComposerPane {host} />
+
+{#if sideThreadOpen}
+  <SessionSideThreadDialog
+    sessionId={host.selected.sessionId}
+    messages={host.messages}
+    statusLabel={host.statusLabel}
+    onClose={() => (sideThreadOpen = false)}
+  />
+{/if}
 
 <style>
 

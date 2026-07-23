@@ -1,6 +1,7 @@
 import {
   Activity,
   Archive,
+  ArrowUp,
   Bell,
   Bot,
   Box,
@@ -39,6 +40,7 @@ export const iconMap = {
   activity: Activity,
   agents: Bot,
   archive: Archive,
+  "arrow-up": ArrowUp,
   artifacts: Box,
   bell: Bell,
   check: Check,

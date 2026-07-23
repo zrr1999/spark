@@ -73,6 +73,21 @@ describe("normalizeInfoflowContent", () => {
     expect(normalizeInfoflowContent({ messageType: "private.face" }).text).toBe("[如流消息: face]");
   });
 
+  it("preserves face semantics inside mixed message history", () => {
+    expect(
+      normalizeInfoflowContent({
+        messageType: "mixed",
+        body: [
+          { type: "face", id: "face-1", name: "吐舌" },
+          { type: "text", text: "这是啥" },
+        ],
+      }),
+    ).toMatchObject({
+      text: "[表情: 吐舌]\n这是啥",
+      contentType: "mixed",
+    });
+  });
+
   it("extracts quote/reply parts into messageReference without inlining into text", () => {
     const normalized = normalizeInfoflowContent({
       messageType: "group.mixed",
