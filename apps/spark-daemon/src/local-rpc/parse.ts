@@ -4,6 +4,11 @@ import {
   parseSparkSessionSetModelRequest,
   parseSparkSessionSetThinkingRequest,
   prefixedIdSchema,
+  sparkDriverMutationRequestSchema,
+  sparkDriverScheduleRequestSchema,
+  sparkDriverStartRequestSchema,
+  sparkDriverStatusRequestSchema,
+  sparkDriverWakeRequestSchema,
   sparkInvocationListRequestSchema,
   sparkInvocationRetentionPreviewRequestSchema,
   sparkInvocationRetryRequestSchema,
@@ -161,6 +166,41 @@ export function parseLocalRpcRequest(line: string): LocalRpcRequest {
       id: value.id,
       method: value.method,
       params: sparkInvocationRetentionPreviewRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "driver.start") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkDriverStartRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "driver.status") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkDriverStatusRequestSchema.parse(value.params ?? {}),
+    });
+  }
+  if (value.method === "driver.stop" || value.method === "driver.restart") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkDriverMutationRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "driver.wake") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkDriverWakeRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "driver.schedule") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkDriverScheduleRequestSchema.parse(value.params),
     });
   }
   if (value.method === "turn.stream") {

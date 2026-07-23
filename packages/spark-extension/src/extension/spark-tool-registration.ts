@@ -2,6 +2,7 @@ import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
   ExtensionRoleRunner,
+  SparkHostDriverContext,
 } from "@zendev-lab/spark-core";
 import type { ToolCallComponent, ToolCallRenderTheme } from "./tool-rendering.ts";
 import type { SparkDriveModeInput } from "./spark-drive-state.ts";
@@ -39,6 +40,9 @@ export interface SparkSessionModelRef {
 
 export interface SparkToolContext {
   cwd: string;
+  sessionId?: string;
+  invocationId?: string;
+  driver?: SparkHostDriverContext;
   /** Command-host bridge for dispatching a turn through an externally owned session runtime. */
   sendUserMessage?: (content: string) => Promise<void>;
   model?: SparkSessionModelRef;

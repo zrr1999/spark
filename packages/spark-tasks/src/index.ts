@@ -3,6 +3,7 @@ export * from "./display.ts";
 export * from "./graph.ts";
 export * from "./graph-store.ts";
 export * from "./todo-store.ts";
+export * from "./driver-policy.ts";
 export {
   applyIndependentTodoOps,
   assertAcyclic,

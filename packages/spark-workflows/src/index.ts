@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { resolveSparkUserPaths } from "@zendev-lab/spark-system";
+export * from "./driver-policy.ts";
 import {
   getBuiltinWorkflowDefinition,
   listBuiltinWorkflows,

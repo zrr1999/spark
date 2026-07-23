@@ -33,6 +33,7 @@ import {
   type CommandConfig,
   type SparkHostAPI,
   type SparkHostContext,
+  type SparkHostDriverContext,
   type SparkHostRuntimeMessage,
   type SparkHostHookOptions,
   type ExtensionUi,
@@ -97,6 +98,8 @@ export interface SparkHostRuntimeOptions {
     adapterAccountIdentity?: string;
   };
   invocationId?: string;
+  stateOwnerSessionId?: string;
+  driver?: SparkHostDriverContext;
   sessionQuestionChain?: readonly string[];
   /** When present, this host instance must never activate tools outside this allowlist. */
   allowedTools?: readonly string[];
@@ -152,6 +155,8 @@ export class SparkHostRuntime implements SparkHostAPI {
       }
     | undefined;
   readonly invocationId: string | undefined;
+  readonly stateOwnerSessionId: string | undefined;
+  readonly driver: SparkHostDriverContext | undefined;
   readonly sessionQuestionChain: readonly string[] | undefined;
   readonly hasUI: boolean;
   private readonly tools: RegisteredToolMap = new Map();
@@ -180,6 +185,8 @@ export class SparkHostRuntime implements SparkHostAPI {
     this.sessionSource = options.sessionSource;
     this.channelBinding = options.channelBinding;
     this.invocationId = options.invocationId?.trim() || undefined;
+    this.stateOwnerSessionId = options.stateOwnerSessionId?.trim() || undefined;
+    this.driver = options.driver;
     this.sessionQuestionChain = options.sessionQuestionChain
       ?.map((entry) => entry.trim())
       .filter(Boolean);
@@ -501,12 +508,15 @@ export class SparkHostRuntime implements SparkHostAPI {
   } {
     return {
       cwd: this.cwd,
-      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+      ...(this.stateOwnerSessionId || this.sessionId
+        ? { sessionId: this.stateOwnerSessionId ?? this.sessionId }
+        : {}),
       ...(this.sparkStateRoot ? { sparkStateRoot: this.sparkStateRoot } : {}),
       ...(this.sessionSurface ? { sessionSurface: this.sessionSurface } : {}),
       ...(this.sessionSource ? { sessionSource: this.sessionSource } : {}),
       ...(this.channelBinding ? { channelBinding: this.channelBinding } : {}),
       ...(this.invocationId ? { invocationId: this.invocationId } : {}),
+      ...(this.driver ? { driver: this.driver } : {}),
       ...(this.sessionQuestionChain
         ? { sessionQuestionChain: [...this.sessionQuestionChain] }
         : {}),

@@ -63,6 +63,8 @@ import {
   type SparkInvocationEvent,
   type SparkInvocationRecord,
 } from "./store/invocations.ts";
+import { driverUpdateEvent, SparkDriverStore, type SparkDriverRecord } from "./store/drivers.ts";
+import { migrateLegacyDriverState } from "./store/driver-state-migration.ts";
 import {
   getWorkspaceById,
   isUserDetachedWorkspace,
@@ -78,6 +80,7 @@ import { runSparkCommandBridge, cancelSparkBridgeInvocation } from "./spark/brid
 import { createChannelAwareTaskExecutor, sessionSourceForTask } from "./spark/session-run.js";
 import { reconcileSessionNotificationDeliveries } from "./session-notification-delivery.ts";
 import { notifySessionRequestCompletion } from "./session-request-completion-notify.ts";
+import { reconcileIdleSessionTodos } from "./session-todo-auto-runner.ts";
 import {
   nextSparkDaemonTokenRefreshDelayMs,
   refreshSparkDaemonCredentials,
@@ -156,6 +159,9 @@ interface PreparedDaemonRuntime {
   registerHumanRequestOutboxTarget: (flush: () => void) => () => boolean;
   eventHub: InvocationEventHub;
   invocationStore: SparkInvocationStore;
+  driverStore: SparkDriverStore;
+  nextDriverGcAtMs: number;
+  nextTodoReconcileAtMs: number;
   channelReplyDeliveryStore: ChannelReplyDeliveryStore;
   scheduler: SparkInvocationScheduler | null;
   mailStore: SparkSessionMailStore;
@@ -215,16 +221,25 @@ async function createPreparedDaemonRuntime(
   });
   const eventHub = createInvocationEventHub(options);
   const invocationStore = new SparkInvocationStore(options.db);
+  const driverStore = new SparkDriverStore(options.db, invocationStore);
   const channelReplyDeliveryStore = new ChannelReplyDeliveryStore(options.db, invocationStore);
   channelReplyDeliveryStore.recoverInterrupted();
   recoverInterruptedRuntimeCommandReceipts(options.db);
   await migrateLegacyInvocationHistory(options);
+  await migrateLegacyDriverState({
+    db: options.db,
+    driverStore,
+    sessionRegistry: options.sessionRegistry,
+    resolveWorkspaceCwd: (workspaceId) => resolveWorkspaceLocalPath(options.db, workspaceId),
+  });
+  await gcDriverHiddenSessions(driverStore);
   const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
   const scheduler = createDaemonScheduler({
     options,
     runtimeSignal,
     admission,
     invocationStore,
+    driverStore,
     channelDeliveryStore,
     channelIngress,
     channelReplyDeliveryStore,
@@ -272,6 +287,9 @@ async function createPreparedDaemonRuntime(
     registerHumanRequestOutboxTarget,
     eventHub,
     invocationStore,
+    driverStore,
+    nextDriverGcAtMs: Date.now() + 60_000,
+    nextTodoReconcileAtMs: 0,
     channelReplyDeliveryStore,
     scheduler,
     mailStore:
@@ -419,7 +437,7 @@ async function prepareDaemonServing(runtime: PreparedDaemonRuntime): Promise<voi
   if (channelIngress && canOpenDaemonAdmission(runtime)) {
     await startPreparedChannelIngress(channelIngress, options);
   }
-  if (canOpenDaemonAdmission(runtime)) activateDaemonAdmission(runtime);
+  if (canOpenDaemonAdmission(runtime)) await activateDaemonAdmission(runtime);
   startDaemonServingLoops(runtime);
   commitDaemonServingFence(runtime);
 }
@@ -428,8 +446,10 @@ function canOpenDaemonAdmission(runtime: PreparedDaemonRuntime): boolean {
   return !runtime.runtimeSignal.aborted && !runtime.options.drainSignal?.aborted;
 }
 
-function activateDaemonAdmission(runtime: PreparedDaemonRuntime): void {
+async function activateDaemonAdmission(runtime: PreparedDaemonRuntime): Promise<void> {
   runtime.scheduler?.recover();
+  runtime.driverStore.reconcileTerminalTicks();
+  await reconcileSessionTodoDrivers(runtime, true);
   runtime.scheduler?.activateAdmission();
   runtime.invocationRegistry.activateAdmission();
   runtime.admission.open = true;
@@ -496,7 +516,10 @@ function commitDaemonServingFence(runtime: PreparedDaemonRuntime): void {
 
 async function runSchedulerLoop(runtime: PreparedDaemonRuntime): Promise<void> {
   while (!runtime.runtimeSignal.aborted) {
-    const didWork = runtime.scheduler?.processBatch() ?? false;
+    if (runtime.admission.open) await reconcileDriverHiddenSessionGc(runtime);
+    if (runtime.admission.open) await reconcileSessionTodoDrivers(runtime);
+    const materialized = runtime.admission.open ? materializeDriverDue(runtime) : undefined;
+    const didWork = (runtime.scheduler?.processBatch() ?? false) || Boolean(materialized);
     if (!didWork) {
       await delayUnlessAborted(
         runtime.options.schedulerPollIntervalMs ?? 250,
@@ -509,6 +532,9 @@ async function runSchedulerLoop(runtime: PreparedDaemonRuntime): Promise<void> {
 async function runDaemonOnce(runtime: PreparedDaemonRuntime): Promise<void> {
   const { scheduler, channelIngress, runtimeSignal } = runtime;
   if (scheduler) {
+    await reconcileDriverHiddenSessionGc(runtime, true);
+    await reconcileSessionTodoDrivers(runtime, true);
+    materializeDriverDue(runtime);
     scheduler.processBatch();
     await scheduler.wait();
   }
@@ -523,6 +549,48 @@ async function runDaemonOnce(runtime: PreparedDaemonRuntime): Promise<void> {
     );
   }
   await runSparkDaemonServerConnectionsOnce(daemonServerConnectionOptions(runtime));
+}
+
+async function reconcileDriverHiddenSessionGc(
+  runtime: PreparedDaemonRuntime,
+  force = false,
+): Promise<void> {
+  const now = Date.now();
+  if (!force && now < runtime.nextDriverGcAtMs) return;
+  runtime.nextDriverGcAtMs = now + 60_000;
+  await gcDriverHiddenSessions(runtime.driverStore);
+}
+
+async function gcDriverHiddenSessions(driverStore: SparkDriverStore): Promise<void> {
+  const result = await driverStore.gcHiddenSessions();
+  for (const error of result.errors) {
+    console.warn(
+      `[spark-daemon] hidden driver session GC failed for ${error.executionSessionId}: ${error.message}`,
+    );
+  }
+}
+
+async function reconcileSessionTodoDrivers(
+  runtime: PreparedDaemonRuntime,
+  force = false,
+): Promise<void> {
+  const sessionRegistry = runtime.options.sessionRegistry;
+  if (!sessionRegistry || (!runtime.admission.open && runtime.options.drainSignal?.aborted)) return;
+  const now = Date.now();
+  if (!force && now < runtime.nextTodoReconcileAtMs) return;
+  runtime.nextTodoReconcileAtMs = now + 1_000;
+  const result = await reconcileIdleSessionTodos({
+    driverStore: runtime.driverStore,
+    sessionRegistry,
+    resolveWorkspaceCwd: (workspaceId) =>
+      resolveWorkspaceLocalPath(runtime.options.db, workspaceId),
+    canAdmit: () => canOpenDaemonAdmission(runtime),
+  });
+  for (const error of result.errors) {
+    console.warn(
+      `[spark-daemon] session TODO driver reconcile failed for ${error.sessionId}: ${error.message}`,
+    );
+  }
 }
 
 function daemonServerConnectionOptions(
@@ -566,6 +634,7 @@ function createDaemonScheduler(input: {
   runtimeSignal: AbortSignal;
   admission: { open: boolean };
   invocationStore: SparkInvocationStore;
+  driverStore: SparkDriverStore;
   channelDeliveryStore: SparkChannelDeliveryStore;
   channelIngress: DaemonChannelIngressRuntime | null;
   channelReplyDeliveryStore: ChannelReplyDeliveryStore;
@@ -587,6 +656,27 @@ function createDaemonScheduler(input: {
         channelsSparkHome: input.channelsSparkHome,
         ...(options.modelControl ? { modelControl: options.modelControl } : {}),
         ...(options.sessionRegistry ? { sessionRegistry: options.sessionRegistry } : {}),
+        driverControl: {
+          schedule: (task, schedule) => {
+            const driver = input.driverStore.schedule({
+              driverId: task.driverId,
+              generation: task.generation,
+              ...schedule,
+            });
+            emitDriverUpdate(input, driver, driver.lastInvocationId);
+            return input.driverStore.mutationResult(driver);
+          },
+          stop: (task, stop) => {
+            const driver = input.driverStore.stop(
+              task.driverId,
+              stop?.reason ?? "stopped by driver tick",
+              undefined,
+              { cancelInvocation: false },
+            );
+            emitDriverUpdate(input, driver, driver.lastInvocationId);
+            return input.driverStore.mutationResult(driver);
+          },
+        },
         channelIngress: {
           openReplyStream: async (workspaceId, adapterId, target, streamOptions) =>
             await input.channelIngress?.openReplyStream(
@@ -642,6 +732,11 @@ function completeScheduledInvocation(
   task: SparkDaemonTask,
   completion: CompleteSparkInvocationInput,
 ): ReturnType<NonNullable<SparkInvocationSchedulerOptions["completeInvocation"]>> {
+  if (task.type === "driver.tick") {
+    const completed = input.driverStore.completeTick(invocation, task, completion);
+    emitDriverUpdate(input, completed.driver, invocation.invocationId);
+    return completed.invocation;
+  }
   const completed = completeInvocationWithChannelDelivery(
     {
       db: input.options.db,
@@ -668,6 +763,43 @@ function completeScheduledInvocation(
     });
   }
   return completed;
+}
+
+function materializeDriverDue(runtime: PreparedDaemonRuntime): SparkInvocationRecord | undefined {
+  const invocation = runtime.driverStore.materializeDue();
+  if (!invocation?.sourceRef) return invocation;
+  const driver = runtime.driverStore.get(invocation.sourceRef);
+  if (driver) {
+    emitDriverUpdate(
+      {
+        invocationStore: runtime.invocationStore,
+        eventHub: runtime.eventHub,
+      },
+      driver,
+      invocation.invocationId,
+    );
+  }
+  return invocation;
+}
+
+function emitDriverUpdate(
+  input: {
+    invocationStore: SparkInvocationStore;
+    eventHub: InvocationEventHub;
+  },
+  driver: SparkDriverRecord,
+  invocationId?: string,
+): void {
+  const event = driverUpdateEvent(driver, invocationId);
+  if (!invocationId) return;
+  const persisted = input.invocationStore.appendEvent(
+    invocationId,
+    event.type,
+    event as unknown as Record<string, unknown>,
+  );
+  void input.eventHub.emit(persisted).catch((error) => {
+    console.error("[spark-daemon] driver projection sink failed", error);
+  });
 }
 
 function createDaemonRuntimeSignal(options: StartSparkDaemonOptions): {

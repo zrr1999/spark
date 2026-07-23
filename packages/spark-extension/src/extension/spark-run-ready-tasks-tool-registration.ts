@@ -22,7 +22,7 @@ import { createSparkRoleRegistry } from "./spark-role-registry.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 
 interface SparkRunReadyTasksToolDeps {
-  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
+  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => Promise<void>;
   piCommand?: (cwd: string, ctx: SparkToolContext) => string | undefined;
 }
 
@@ -134,7 +134,7 @@ export function registerSparkRunReadyTasksTool(
           status: "running",
           policy: { maxConcurrency, timeoutMs },
         });
-        deps.ensureWorkflowRunManager(cwd, ctx);
+        await deps.ensureWorkflowRunManager(cwd, ctx);
         ctx.ui?.notify?.(
           `Spark workflow-run scheduler started for “${project.title}”. Progress appears in the Spark widget; inspect with task_read({ action: "run_status" }).`,
           "info",

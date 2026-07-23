@@ -277,7 +277,7 @@ function testInputRouter(): {
       deps: {
         queueSparkAgentInstruction: (_ctx, instruction) => queuedInstructions.push(instruction),
         refreshSparkWidget: async () => undefined,
-        ensureWorkflowRunManager: () => undefined,
+        ensureWorkflowRunManager: async () => undefined,
       },
     },
   };

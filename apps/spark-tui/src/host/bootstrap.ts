@@ -100,6 +100,8 @@ export interface SparkCliHostServicesOptions {
   sessionSource?: "tui" | "web" | "channel" | "daemon" | "session";
   channelBinding?: SparkHostRuntimeOptions["channelBinding"];
   invocationId?: string;
+  stateOwnerSessionId?: string;
+  driver?: SparkHostRuntimeOptions["driver"];
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   /** Host-enforced effect allowlist; unknown tool effects are denied. */
@@ -167,6 +169,8 @@ export async function createSparkCliHostServices(
     sessionSource: options.sessionSource,
     channelBinding: options.channelBinding,
     invocationId: options.invocationId,
+    stateOwnerSessionId: options.stateOwnerSessionId,
+    driver: options.driver,
     sessionQuestionChain: options.sessionQuestionChain,
     allowedTools: options.allowedTools,
     allowedToolEffects: options.allowedToolEffects,

@@ -7,6 +7,7 @@ import type {
   ExtensionRoleRunInputControl,
   RoleRef,
   RunRef,
+  SparkHostDriverContext,
   ToolEffect,
 } from "@zendev-lab/spark-core";
 
@@ -86,6 +87,9 @@ export interface SparkHeadlessSessionRunInput {
   model?: string;
   thinkingLevel?: string;
   reset?: boolean;
+  /** Internal transcript metadata for daemon-owned hidden execution. */
+  sessionVisibility?: "internal";
+  sessionPurpose?: "driver_tick";
   /** Continue a turn after daemon/process interrupt using persisted session state. */
   resumeFromInterrupt?: boolean;
   signal?: AbortSignal;
@@ -102,6 +106,8 @@ export interface SparkHeadlessSessionRunInput {
     adapterAccountIdentity?: string;
   };
   invocationId?: string;
+  stateOwnerSessionId?: string;
+  driver?: SparkHostDriverContext;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   /** Host-enforced effect allowlist; unknown tool effects are denied. */
@@ -167,6 +173,8 @@ export async function runSparkHeadlessSession(
     sessionSource: input.sessionSource,
     channelBinding: input.channelBinding,
     invocationId: input.invocationId,
+    stateOwnerSessionId: input.stateOwnerSessionId,
+    driver: input.driver,
     sessionQuestionChain: input.sessionQuestionChain,
     allowedTools: input.allowedTools,
     allowedToolEffects: input.allowedToolEffects,
@@ -219,6 +227,8 @@ export async function runSparkHeadlessSession(
         ...(input.sessionPath ? { sessionPath: input.sessionPath } : {}),
         prompt: input.prompt,
         reset: input.reset,
+        sessionVisibility: input.sessionVisibility,
+        sessionPurpose: input.sessionPurpose,
         ...(input.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),
         ...(input.messageMetadata ? { messageMetadata: input.messageMetadata } : {}),
       }),

@@ -249,7 +249,6 @@ function compactSparkStatusDetails(
       ? {
           status: input.sessionLoop.status,
           objective: truncateInline(input.sessionLoop.objective, 180),
-          nextRunAt: input.sessionLoop.schedule?.nextRunAt,
         }
       : undefined,
     ...(scope === "workspace" && input.projectLimit === undefined
@@ -636,11 +635,8 @@ function renderProjectLines(
       );
     }
     if (isCurrent && input.sessionLoop) {
-      const nextRun = input.sessionLoop.schedule?.nextRunAt
-        ? ` | next=${input.sessionLoop.schedule.nextRunAt}`
-        : "";
       lines.push(
-        `  Session loop: ${input.sessionLoop.status} | ${truncateInline(input.sessionLoop.objective, 180)}${nextRun}`,
+        `  Session loop: ${input.sessionLoop.status} | ${truncateInline(input.sessionLoop.objective, 180)} | cadence=daemon-owned`,
       );
     }
     if (hiddenByView > 0)

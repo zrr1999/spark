@@ -44,7 +44,7 @@ export interface SparkModeEntryDeps {
     options?: { goalId?: string },
   ) => void;
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
-  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
+  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => Promise<void>;
 }
 
 export async function dispatchSparkAgentInstruction(

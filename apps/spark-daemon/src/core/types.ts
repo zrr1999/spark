@@ -4,6 +4,8 @@ import {
   parseSparkAssignment,
   type SparkAssignment,
   type SparkDaemonEvent,
+  type SparkDriverContinuity,
+  type SparkDriverKind,
 } from "@zendev-lab/spark-protocol";
 import {
   CHANNEL_IMAGE_MAX_COUNT,
@@ -16,7 +18,26 @@ import {
   type InfoflowAttachment,
 } from "@zendev-lab/spark-channels";
 
-export type SparkDaemonTask = SparkDaemonSessionRunTask;
+export type SparkDaemonTask = SparkDaemonSessionRunTask | SparkDaemonDriverTickTask;
+
+export interface SparkDaemonDriverTickTask extends Omit<
+  SparkDaemonSessionRunTask,
+  "type" | "sessionId" | "cwd"
+> {
+  type: "driver.tick";
+  /** Compatibility alias used by generic invocation/session projections. */
+  sessionId: string;
+  driverId: string;
+  kind: SparkDriverKind;
+  ownerSessionId: string;
+  generation: number;
+  continuity: SparkDriverContinuity;
+  cwd: string;
+  executionSessionId?: string;
+  stateOwnerSessionId: string;
+  reset?: boolean;
+  resumeFromInterrupt?: boolean;
+}
 
 /** Normalized platform facts captured with one inbound channel message. */
 export interface SparkDaemonChannelContext {
@@ -39,6 +60,12 @@ export interface SparkDaemonChannelContext {
 export interface SparkDaemonSessionRunTask {
   type: "session.run";
   sessionId: string;
+  /** Daemon-internal transcript identity for a fresh driver tick. */
+  executionSessionId?: string;
+  /** Session-scoped domain state owner when executionSessionId is private. */
+  stateOwnerSessionId?: string;
+  /** Private execution transcripts are not indexed into the public registry. */
+  hiddenExecution?: boolean;
   prompt: string;
   /** Canonical provider/model frozen when this turn is enqueued. */
   model?: string;
@@ -89,14 +116,17 @@ export type SparkDaemonTaskExecutor = (
 ) => Promise<unknown>;
 
 export function getSparkDaemonTaskSessionId(task: SparkDaemonTask): string | null {
-  return task.type === "session.run" ? task.sessionId : null;
+  return task.type === "session.run" ? task.sessionId : task.ownerSessionId;
 }
 
 export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("daemon task must be an object");
   }
-  const task = value as Partial<SparkDaemonSessionRunTask>;
+  const task = value as Partial<SparkDaemonSessionRunTask | SparkDaemonDriverTickTask>;
+  if (task.type === "driver.tick") {
+    return validateSparkDaemonDriverTickTask(task);
+  }
   if (task.type !== "session.run") {
     throw new Error(`unsupported daemon task type: ${String((value as { type?: unknown }).type)}`);
   }
@@ -109,6 +139,9 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
   return {
     type: "session.run",
     sessionId: task.sessionId.trim(),
+    executionSessionId: nonEmptyString(task.executionSessionId),
+    stateOwnerSessionId: nonEmptyString(task.stateOwnerSessionId),
+    hiddenExecution: typeof task.hiddenExecution === "boolean" ? task.hiddenExecution : undefined,
     prompt: task.prompt,
     model: nonEmptyString(task.model),
     thinkingLevel: nonEmptyString(task.thinkingLevel),
@@ -132,6 +165,65 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     ...(parseChannelContext(task.channelContext)
       ? { channelContext: parseChannelContext(task.channelContext) }
       : {}),
+  };
+}
+
+function validateSparkDaemonDriverTickTask(
+  task: Partial<SparkDaemonDriverTickTask>,
+): SparkDaemonDriverTickTask {
+  const driverId = nonEmptyString(task.driverId);
+  const ownerSessionId = nonEmptyString(task.ownerSessionId);
+  const prompt = nonEmptyString(task.prompt);
+  const cwd = nonEmptyString(task.cwd);
+  const stateOwnerSessionId = nonEmptyString(task.stateOwnerSessionId);
+  if (!driverId) throw new Error("driver.tick task requires driverId");
+  if (!ownerSessionId) throw new Error("driver.tick task requires ownerSessionId");
+  if (!prompt) throw new Error("driver.tick task requires prompt");
+  if (!cwd) throw new Error("driver.tick task requires cwd");
+  if (!stateOwnerSessionId || stateOwnerSessionId !== ownerSessionId) {
+    throw new Error("driver.tick task stateOwnerSessionId must match ownerSessionId");
+  }
+  if (
+    task.kind !== "goal" &&
+    task.kind !== "loop" &&
+    task.kind !== "repro" &&
+    task.kind !== "implement" &&
+    task.kind !== "workflow" &&
+    task.kind !== "session_todo"
+  ) {
+    throw new Error("driver.tick task requires a supported driver kind");
+  }
+  if (task.continuity !== "session" && task.continuity !== "fresh") {
+    throw new Error("driver.tick task requires continuity");
+  }
+  if (!Number.isInteger(task.generation) || Number(task.generation) <= 0) {
+    throw new Error("driver.tick task requires a positive generation");
+  }
+  const executionSessionId = nonEmptyString(task.executionSessionId);
+  if (task.continuity === "fresh" && !executionSessionId) {
+    throw new Error("fresh driver.tick task requires executionSessionId");
+  }
+  return {
+    type: "driver.tick",
+    sessionId: ownerSessionId,
+    driverId,
+    kind: task.kind,
+    ownerSessionId,
+    generation: Number(task.generation),
+    continuity: task.continuity,
+    prompt,
+    cwd,
+    stateOwnerSessionId,
+    ...(executionSessionId ? { executionSessionId } : {}),
+    ...(typeof task.reset === "boolean" ? { reset: task.reset } : {}),
+    ...(typeof task.resumeFromInterrupt === "boolean"
+      ? { resumeFromInterrupt: task.resumeFromInterrupt }
+      : {}),
+    ...(nonEmptyString(task.workspaceBindingId)
+      ? { workspaceBindingId: nonEmptyString(task.workspaceBindingId)! }
+      : {}),
+    ...(nonEmptyString(task.workspaceId) ? { workspaceId: nonEmptyString(task.workspaceId)! } : {}),
+    ...(nonEmptyString(task.projectId) ? { projectId: nonEmptyString(task.projectId)! } : {}),
   };
 }
 

@@ -5,7 +5,11 @@ import {
 } from "@zendev-lab/spark-channels";
 import { SPARK_PROTOCOL_VERSION, type SparkDaemonEvent } from "@zendev-lab/spark-protocol";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import type { SparkDaemonSessionRunTask, SparkDaemonTaskExecutionContext } from "../core/types.ts";
+import type {
+  SparkDaemonDriverTickTask,
+  SparkDaemonSessionRunTask,
+  SparkDaemonTaskExecutionContext,
+} from "../core/types.ts";
 import {
   CHANNEL_REPLY_TERMINAL_PRESENTED_ERROR_CODE,
   channelReplyDeliveryForCompletion,
@@ -20,7 +24,7 @@ const paths = resolveSparkPaths({
 });
 
 function context(
-  _task: SparkDaemonSessionRunTask,
+  _task: SparkDaemonSessionRunTask | SparkDaemonDriverTickTask,
   emitted: SparkDaemonEvent[] = [],
   signal: AbortSignal = new AbortController().signal,
 ): SparkDaemonTaskExecutionContext {
@@ -1436,6 +1440,124 @@ describe("daemon native session execution", () => {
           message: expect.objectContaining({
             role: "user",
             metadata: { invocationId: "invocation-1" },
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("runs fresh driver ticks in a hidden reset session without indexing the owner transcript", async () => {
+    const emitted: SparkDaemonEvent[] = [];
+    const recordTurnQueued = vi.fn(async () => ({}) as never);
+    const recordTurnSettled = vi.fn(async () => ({}) as never);
+    const recordRun = vi.fn(async () => ({}) as never);
+    const task: SparkDaemonDriverTickTask = {
+      type: "driver.tick",
+      sessionId: "owner-session",
+      driverId: "fresh-loop",
+      kind: "loop",
+      ownerSessionId: "owner-session",
+      generation: 4,
+      continuity: "fresh",
+      prompt: "fresh tick",
+      cwd: "/workspace/fresh",
+      executionSessionId: "driver_fresh-loop_4",
+      stateOwnerSessionId: "owner-session",
+      reset: true,
+    };
+    const executeSession = vi.fn(async (input: { onEvent?: (event: unknown) => unknown }) => {
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.snapshot",
+          session: {
+            version: SPARK_PROTOCOL_VERSION,
+            sessionId: "driver_fresh-loop_4",
+            status: "running",
+            messages: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            evidence: [],
+          },
+        },
+      });
+      await input.onEvent?.({
+        type: "view_event",
+        event: {
+          version: SPARK_PROTOCOL_VERSION,
+          type: "session.message",
+          sessionId: "driver_fresh-loop_4",
+          message: {
+            version: SPARK_PROTOCOL_VERSION,
+            id: "hidden-assistant",
+            role: "assistant",
+            text: "fresh result",
+            status: "done",
+            metadata: {},
+          },
+        },
+      });
+      return {
+        sessionId: "driver_fresh-loop_4",
+        sessionPath: "/daemon/sessions/driver_fresh-loop_4.jsonl",
+        assistantText: "fresh result",
+      };
+    });
+    const executor = createSparkDaemonTaskExecutor({
+      paths,
+      sessionRegistry: {
+        get: vi.fn(async () => ({
+          sessionId: "owner-session",
+          scope: { kind: "workspace" as const, workspaceId: "workspace-fresh" },
+          workspaceId: "workspace-fresh",
+          status: "ready" as const,
+          bindings: [],
+          sessionPath: "/daemon/sessions/owner-session.jsonl",
+          createdAt: "2026-07-23T00:00:00.000Z",
+          updatedAt: "2026-07-23T00:00:00.000Z",
+        })),
+        recordTurnQueued,
+        recordTurnSettled,
+        recordRun,
+      },
+      driverControl: {
+        schedule: vi.fn(),
+        stop: vi.fn(),
+      },
+      createSparkHeadlessSessionExecutor: () => executeSession,
+    });
+
+    await expect(executor(task, context(task, emitted))).resolves.toMatchObject({
+      assistantText: "fresh result",
+      sessionPath: "/daemon/sessions/driver_fresh-loop_4.jsonl",
+    });
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "driver_fresh-loop_4",
+        stateOwnerSessionId: "owner-session",
+        reset: true,
+        sessionVisibility: "internal",
+        sessionPurpose: "driver_tick",
+      }),
+    );
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionPath: "/daemon/sessions/owner-session.jsonl" }),
+    );
+    expect(recordRun).not.toHaveBeenCalled();
+    expect(recordTurnSettled).toHaveBeenCalledWith("owner-session");
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        sessionId: "owner-session",
+        view: expect.objectContaining({
+          type: "session.message",
+          sessionId: "owner-session",
+          message: expect.objectContaining({
+            metadata: expect.objectContaining({
+              driverExecution: true,
+              stateOwnerSessionId: "owner-session",
+            }),
           }),
         }),
       }),

@@ -670,6 +670,36 @@ export type ExtensionRoleRunner = (
 
 export type SparkSessionMessageSource = "tui" | "web" | "channel" | "daemon" | "session";
 
+export interface SparkHostDriverContext {
+  driverId: string;
+  kind: "goal" | "loop" | "repro" | "implement" | "workflow" | "session_todo";
+  generation: number;
+  ownerSessionId: string;
+  stateOwnerSessionId: string;
+  schedule(input: {
+    delayMs?: number;
+    dueAt?: string;
+    reason?: string;
+    prompt?: string;
+  }): Promise<unknown>;
+  stop(input?: { reason?: string }): Promise<unknown>;
+}
+
+export type SparkRuntimeDriverKind =
+  | "goal"
+  | "loop"
+  | "repro"
+  | "implement"
+  | "workflow"
+  | "session_todo";
+
+/** Capability-owned cadence/retry policy consumed by the generic daemon runtime. */
+export interface SparkDriverPolicyDefinition {
+  kind: SparkRuntimeDriverKind;
+  success: { status: "scheduled"; delayMs: number } | { status: "dormant" };
+  retryDelaysMs: readonly number[];
+}
+
 export interface SparkHostContext {
   cwd?: string;
   /** Current Spark view/session identity for session-scoped extension state. */
@@ -682,6 +712,8 @@ export interface SparkHostContext {
   sessionSource?: SparkSessionMessageSource;
   /** Current daemon invocation, available only in daemon-owned headless turns. */
   invocationId?: string;
+  /** Present only inside a daemon-owned autonomous driver tick. */
+  driver?: SparkHostDriverContext;
   /** Session IDs already participating in a synchronous question chain. */
   sessionQuestionChain?: string[];
   model?: SessionModelRef;

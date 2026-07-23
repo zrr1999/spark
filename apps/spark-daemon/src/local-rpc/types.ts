@@ -16,6 +16,11 @@ import {
   type SparkAssignment,
   type SparkCommand,
   type SparkDaemonEvent,
+  type SparkDriverMutationRequest,
+  type SparkDriverScheduleRequest,
+  type SparkDriverStartRequest,
+  type SparkDriverStatusRequest,
+  type SparkDriverWakeRequest,
   type SparkInvocationListResult,
   type SparkInvocationRetentionPreviewResult,
   type SparkInvocationRetryResult,
@@ -206,6 +211,7 @@ export interface LocalRpcHandlerOptions {
   getLifecycle?: () => SparkDaemonLifecycleSnapshot;
   /** Startup fence: before this opens, only readiness/status and stop are admitted. */
   isReady?: () => boolean;
+  eventBus?: SparkDaemonLocalEventBus;
 }
 
 export type LocalRpcRequest =
@@ -276,6 +282,36 @@ export type LocalRpcRequest =
       id: string;
       method: "invocation.retention.preview";
       params: ReturnType<typeof sparkInvocationRetentionPreviewRequestSchema.parse>;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "driver.start";
+      params: SparkDriverStartRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "driver.status";
+      params: SparkDriverStatusRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "driver.stop" | "driver.restart";
+      params: SparkDriverMutationRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "driver.wake";
+      params: SparkDriverWakeRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "driver.schedule";
+      params: SparkDriverScheduleRequest;
       sparkCommand: SparkCommand;
     }
   | {

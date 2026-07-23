@@ -52,6 +52,9 @@ export interface SparkAgentSessionRunOptions {
   sessionPath?: string;
   prompt: UserMessage["content"];
   reset?: boolean;
+  /** Internal transcript metadata; public callers leave both fields unset. */
+  sessionVisibility?: "internal";
+  sessionPurpose?: "driver_tick";
   forkFromSession?: string;
   /** Display-safe metadata persisted on this turn's submitted user message only. */
   messageMetadata?: Record<string, unknown>;
@@ -229,7 +232,13 @@ export class SparkAgentSession {
       const parent = await this.services.sessionStore.loadByRef(options.forkFromSession);
       return this.services.sessionStore.forkSession(parent, { id: options.sessionId });
     }
-    if (options.reset) return this.services.sessionStore.createSession({ id: options.sessionId });
+    if (options.reset) {
+      return this.services.sessionStore.createSession({
+        id: options.sessionId,
+        visibility: options.sessionVisibility,
+        purpose: options.sessionPurpose,
+      });
+    }
     if (options.sessionPath) {
       const path = resolve(options.sessionPath);
       const fromSessionDir = relative(this.services.sessionStore.sessionDir, path);
@@ -253,7 +262,14 @@ export class SparkAgentSession {
       return record;
     }
     const existing = await this.services.sessionStore.findById(options.sessionId);
-    return existing ?? this.services.sessionStore.createSession({ id: options.sessionId });
+    return (
+      existing ??
+      this.services.sessionStore.createSession({
+        id: options.sessionId,
+        visibility: options.sessionVisibility,
+        purpose: options.sessionPurpose,
+      })
+    );
   }
 
   private loadPromptItems(record: SparkSessionRecord): number {

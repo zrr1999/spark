@@ -4,6 +4,7 @@ import type { CommandMetadata, SparkHostCommandContext } from "@zendev-lab/spark
 import type {
   SparkArtifactView,
   SparkEvidenceView,
+  SparkDriverView,
   SparkInteractionRequest,
   SparkInteractionResponse,
   SparkMessageView,
@@ -200,6 +201,7 @@ export interface SparkNativeCockpitState {
   readonly tasks: Map<string, SparkTaskView>;
   readonly artifacts: Map<string, SparkArtifactView>;
   readonly evidence: Map<string, SparkEvidenceView>;
+  readonly drivers: Map<string, SparkDriverView>;
   readonly interactions: Map<string, SparkInteractionRequest>;
 }
 

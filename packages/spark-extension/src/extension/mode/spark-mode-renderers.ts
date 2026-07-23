@@ -85,11 +85,13 @@ export function renderSparkImplementationModePrompt(
         WORKFLOW_AND_SUBAGENT_ARE_TOOLS,
         PARALLEL_EXECUTION_WORKFLOW_STRATEGY,
         "If work becomes open-ended with no natural completion condition, suggest /loop. If the user wants autonomous completion with auto-decision policy and reviewer-gated completion, suggest /goal. If the user wants a scripted saved workflow, suggest /workflow.",
+        'When this phase is running as a daemon driver tick, inspect project_status before ending: call driver({ action: "schedule", delayMs: 0, reason }) only when concrete ready work remains; call driver({ action: "stop", reason }) when no work is ready, a blocker exists, or a human/review decision is pending. Omitting both leaves the driver dormant to prevent a no-progress spin.',
         ASK_BEFORE_GUESSING,
       ]
     : [
         'Select a current project with task_write({ action: "project_use" }) before claiming project-bound work; use task_read({ action: "workspace_status" }) to inspect available projects first if needed.',
         "Do not claim project-bound work until a current project is selected.",
+        'When running inside a daemon driver tick, call driver({ action: "stop", reason: "no current project" }) before ending the turn.',
         ASK_BEFORE_GUESSING,
       ];
   return renderModePrompt(graph, selectedProjectRef, focus, "Implementation", requirements);

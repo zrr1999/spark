@@ -126,6 +126,8 @@ describe("migrateSparkDaemonDatabase", () => {
       migrateSparkDaemonDatabase(db);
       expect(tableExists(db, "invocations")).toBe(true);
       expect(tableExists(db, "invocation_events")).toBe(true);
+      expect(tableExists(db, "driver_wakeups")).toBe(true);
+      expect(tableExists(db, "driver_hidden_sessions")).toBe(true);
       expect(tableExists(db, "invocation_event_deliveries")).toBe(true);
       expect(tableExists(db, "invocation_event_delivery_consumers")).toBe(true);
       expect(tableExists(db, "runtime_command_receipts")).toBe(true);
@@ -161,6 +163,26 @@ describe("migrateSparkDaemonDatabase", () => {
           "finished_at",
         ]),
       );
+      expect(columnNames(db, "driver_wakeups")).toEqual(
+        expect.arrayContaining([
+          "driver_id",
+          "kind",
+          "lane",
+          "owner_session_id",
+          "continuity",
+          "status",
+          "generation",
+          "due_at",
+          "attempt",
+          "last_invocation_id",
+          "domain_state_digest",
+          "wake_prompt",
+        ]),
+      );
+      expect(indexNames(db, "driver_wakeups")).toEqual(
+        expect.arrayContaining(["driver_wakeups_due_idx", "driver_wakeups_owner_idx"]),
+      );
+      expect(indexNames(db, "driver_hidden_sessions")).toContain("driver_hidden_sessions_gc_idx");
       expect(indexNames(db, "invocations")).toEqual(
         expect.arrayContaining([
           "invocations_status_idx",
@@ -175,6 +197,39 @@ describe("migrateSparkDaemonDatabase", () => {
       expect(indexNames(db, "runtime_command_receipts")).toContain(
         "runtime_command_receipts_terminal_idx",
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("adds one-shot wake storage to an existing driver runtime schema", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE driver_wakeups (
+          driver_id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          lane TEXT NOT NULL,
+          owner_session_id TEXT NOT NULL,
+          continuity TEXT NOT NULL,
+          status TEXT NOT NULL,
+          generation INTEGER NOT NULL,
+          due_at TEXT,
+          attempt INTEGER NOT NULL DEFAULT 0,
+          last_invocation_id TEXT,
+          reason TEXT,
+          error TEXT,
+          prompt TEXT NOT NULL,
+          route_json TEXT NOT NULL,
+          domain_state_digest TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+
+      migrateSparkDaemonDatabase(db);
+
+      expect(columnNames(db, "driver_wakeups")).toContain("wake_prompt");
     } finally {
       db.close();
     }

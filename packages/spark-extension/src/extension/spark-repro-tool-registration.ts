@@ -27,8 +27,10 @@ import {
 } from "./spark-session-repro.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
 import { sparkSessionOwnerKey } from "@zendev-lab/spark-loop";
+import { type SparkDaemonDriverControl } from "./spark-daemon-driver-client.ts";
 
 interface SparkReproToolDeps {
+  driverControl: SparkDaemonDriverControl;
   refreshSparkWidget?: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
 }
 
@@ -124,9 +126,10 @@ export function registerSparkReproTool(
         if (existing?.status === "active") {
           const repro =
             objective && existing.objective !== objective
-              ? { ...existing, objective, updatedAt: nowIso(), retryState: undefined }
+              ? { ...existing, objective, updatedAt: nowIso() }
               : existing;
           if (repro !== existing) await writeSessionRepro(cwd, repro, ctx);
+          await startReproDriver(ctx, deps.driverControl, repro, "repro activated by tool");
           await deps.refreshSparkWidget?.(cwd, ctx);
           return {
             content: [
@@ -145,6 +148,7 @@ export function registerSparkReproTool(
         await clearSessionLoop(cwd, ctx);
         const repro = createSparkSessionRepro(sparkSessionOwnerKey(ctx), undefined, { objective });
         await writeSessionRepro(cwd, repro, ctx);
+        await startReproDriver(ctx, deps.driverControl, repro, "repro activated by tool");
         ctx.sparkActiveLens = sparkActiveLens(repro.currentPhase, "repro");
         await deps.refreshSparkWidget?.(cwd, ctx);
         return {
@@ -235,6 +239,12 @@ export function registerSparkReproTool(
         if (stageAdvanced) {
           await writeSessionRepro(cwd, stageAdvanced, ctx);
           if (stageAdvanced.status === "complete") {
+            if (ctx.driver) await ctx.driver.stop({ reason: "repro completed" });
+            else
+              await deps.driverControl.stop({
+                driverId: stageAdvanced.reproId,
+                reason: "repro completed",
+              });
             ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "plan", "assist");
             await deps.refreshSparkWidget?.(cwd, ctx);
             return {
@@ -277,6 +287,12 @@ export function registerSparkReproTool(
           };
         }
         await writeSessionRepro(cwd, undefined, ctx);
+        if (ctx.driver) await ctx.driver.stop({ reason: "repro stopped" });
+        else
+          await deps.driverControl.stop({
+            driverId: repro.reproId,
+            reason: "repro stopped",
+          });
         ctx.sparkActiveLens = sparkActiveLens(ctx.sparkActiveLens?.phase ?? "plan", "assist");
         await deps.refreshSparkWidget?.(cwd, ctx);
         return {
@@ -287,6 +303,25 @@ export function registerSparkReproTool(
 
       return assertNeverReproAction(action);
     },
+  });
+}
+
+async function startReproDriver(
+  ctx: SparkToolContext,
+  driverControl: SparkDaemonDriverControl,
+  repro: SparkSessionRepro,
+  reason: string,
+): Promise<void> {
+  const ownerSessionId = ctx.sessionId?.trim();
+  if (!ownerSessionId) throw new Error("Spark repro driver requires a daemon-owned session");
+  await driverControl.start({
+    driverId: repro.reproId,
+    kind: "repro",
+    ownerSessionId,
+    continuity: "session",
+    cwd: ctx.cwd,
+    prompt: renderReproTickInstruction(repro),
+    reason,
   });
 }
 

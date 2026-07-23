@@ -129,6 +129,10 @@ export function sessionViewRevisionKey(view: SparkSessionView | null): string {
     latest?.status ?? "",
     latest?.text ?? "",
     view.runs.length,
+    view.drivers?.length ?? 0,
+    view.drivers
+      ?.map((driver) => `${driver.driverId}:${driver.status}:${driver.dueAt ?? ""}`)
+      .join(",") ?? "",
     view.tasks.length,
     view.artifacts.length,
     view.mailbox?.length ?? 0,
@@ -562,6 +566,17 @@ function applyDaemonEvent(
         viewEvent.run.startedAt ??
         daemonEvent.emittedAt ??
         event.createdAt,
+    };
+    return { changed: true, refreshActivity: false };
+  }
+  if (viewEvent.type === "driver.update") {
+    if (viewEvent.sessionId !== state.sessionId) {
+      return { changed: false, refreshActivity: false };
+    }
+    state.view = {
+      ...current,
+      drivers: upsertByKey(current.drivers ?? [], viewEvent.driver, (driver) => driver.driverId),
+      updatedAt: daemonEvent.emittedAt ?? event.createdAt,
     };
     return { changed: true, refreshActivity: false };
   }

@@ -28,6 +28,7 @@ inspired_by:
 ## 目标
 
 - 以 daemon 为持久会话与调用调度真源；TUI、Cockpit、消息通道、本地 RPC 共用一套 registry 与 invocation，不维护并行会话状态机。
+- 以 daemon 为 `goal | loop | repro | implement | workflow | session_todo` 的唯一自治运行时；计时、generation、重试、恢复和 fresh 隐藏执行均进入 SQLite 与现有 invocation scheduler，前端只发控制命令并展示投影。
 - 在 `spark-protocol` 中沉淀跨表面交互协议（ask 判定、slash/action catalog、session status / pending turns、可展示错误），各表面只保留呈现与执行胶水。
 - 保持 Pi SDK 为内核：模型流、provider、终端 UI 原语继续建立在 `pi-ai` / `pi-tui`（经 `spark-ai` / `spark-tui` 边界）之上，不把“退场 Pi 产品”误解为剥离 SDK。
 - 由 `spark-extension` 统一拥有产品 extension 组合；`package.json#pi` 仅保留指向同一实现的兼容发现元数据，不保留第二套 facade 或 `pi-coding-agent` 运行时依赖。
@@ -58,6 +59,7 @@ inspired_by:
 - 不让结构化提问成为用户必须直接操作的独立产品面。
 - 不把竞品的 agent dashboard、terminal mux、worktree manager 或 provider gateway 整套嵌入 Spark；只吸收能进入现有 owner 边界的领域闭环。
 - 不用 Temporal、Restate、Inngest 等外部 durable engine 替换当前 daemon/SQLite 调度真相；只有隔离实验能证明本地 step journal 无法满足需求时才重新评估。
+- 不实现 root 跨 Unix 用户 supervisor；多用户部署采用每个 Unix 用户独立运行一个 Spark daemon。
 
 ## 成功信号
 
@@ -85,6 +87,7 @@ inspired_by:
 - Spark v0.1 通过生成的自包含 `@zendev-lab/spark` 产物发布 npm；源码 workspace 保持 private，完整 check 校验公开产品与内部 owner 分类，`pnpm run smoke` 在仓库外安装 tarball 并验证 dispatcher、TUI、daemon migrations/lifecycle 与 Cockpit health。
 - 将现有 PR/CI 读取能力收敛成 change delivery feedback 事件，先完成“失败反馈回原 session”，再考虑 GitHub Checks 回写。
 - 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
+- 自治 driver 硬切完成后，以它替代 marrow-core 的核心运行时；systemd 安装、自检/doctor、独立更新器、外部服务托管、profile 导入完善与日志保留作为非阻塞运维 TODO，且不得形成第二个运行时 owner。
 - `memory` owns durable scoped memory, recall candidates (`recall` tool), the `LearningStore` / `learning` tool, and reflection pipelines (`.spark/memory/reflections/`).
 
 ## 修订记录
@@ -105,3 +108,4 @@ inspired_by:
 - 2026-07-22：真实 TUI/Zellij 验收覆盖 Side Thread 提交、繁忙并行、重启恢复、配置及 full/summary handoff，并修复旧 generation-less 转录在 daemon 升级重启后的兼容读取；决定 `pi-btw` 仅随 Pi 产品宿主整体退场，modal overlay 不作为门禁。
 - 2026-07-23：用户确认恢复 npm 发布、以原生 BTW 完全替代并删除 `pi-btw`、Cockpit 与 TUI 共用 daemon Side Thread controller，同时为早期架构增长 ceiling 留出适度余量；发布面收敛为编译后、自包含的 `@zendev-lab/spark` 产品包，内部 workspace 不成为公共 API。
 - 2026-07-23：将 `pi-extension` 完整并入 `spark-extension`，原生与兼容加载器共用单一组合根；继续保留 `pi-ai` / `pi-tui` SDK 内核。
+- 2026-07-23：将 goal/loop/repro/implement/workflow/session TODO 的计时、generation、重试、恢复与 fresh continuity 硬切到 daemon；确定每个 Unix 用户独立 daemon，并将 marrow-core 的非核心运维便利能力转为 Spark TODO。

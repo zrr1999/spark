@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
+  SparkHostDriverContext,
   ToolEffect,
 } from "@zendev-lab/spark-core";
 
@@ -27,6 +28,9 @@ export interface SparkHeadlessSessionRunInput {
   model?: string;
   thinkingLevel?: string;
   reset?: boolean;
+  /** Internal transcript metadata for daemon-owned hidden execution. */
+  sessionVisibility?: "internal";
+  sessionPurpose?: "driver_tick";
   signal?: AbortSignal;
   timeoutMs?: number;
   sparkHome?: string;
@@ -41,6 +45,8 @@ export interface SparkHeadlessSessionRunInput {
     adapterAccountIdentity?: string;
   };
   invocationId?: string;
+  stateOwnerSessionId?: string;
+  driver?: SparkHostDriverContext;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
   /** Host-enforced effect allowlist; unknown tool effects are denied. */

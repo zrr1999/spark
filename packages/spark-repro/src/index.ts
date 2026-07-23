@@ -1,4 +1,5 @@
 import { nowIso, type ArtifactRef } from "@zendev-lab/spark-core";
+export * from "./driver-policy.ts";
 
 export type SparkSessionPhase = "plan" | "implement";
 
@@ -67,12 +68,6 @@ export interface SparkReproStage {
 
 export type SparkReproStatus = "active" | "complete";
 
-export interface SparkSessionReproRetryState {
-  consecutiveFailures: number;
-  lastFailureAt?: string;
-  nextDelayMs?: number;
-}
-
 export interface SparkSessionRepro {
   version: 3;
   reproId: string;
@@ -82,7 +77,6 @@ export interface SparkSessionRepro {
   currentStageIndex: number;
   currentPhase: SparkSessionPhase;
   stages: SparkReproStage[];
-  retryState?: SparkSessionReproRetryState;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

@@ -3,10 +3,8 @@ import { createHash } from "node:crypto";
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 import { defaultTaskTodoStore, type SessionTodoEntry } from "@zendev-lab/spark-tasks";
 
-import type { SparkDaemonModelControl } from "./model-control.ts";
 import type { DaemonSessionRegistry } from "./session-registry.ts";
-import type { SparkDaemonSessionRunTask } from "./core/types.ts";
-import { SparkInvocationStore } from "./store/invocations.ts";
+import { SparkDriverStore } from "./store/drivers.ts";
 
 export const SESSION_TODO_AUTO_SOURCE_KIND = "session.todo";
 
@@ -17,24 +15,17 @@ export interface IdleSessionTodoReconcileResult {
 }
 
 export interface IdleSessionTodoReconcileDependencies {
-  invocationStore: SparkInvocationStore;
-  sessionRegistry: Pick<DaemonSessionRegistry, "list" | "recordTurnQueued">;
-  modelControl?: Pick<
-    SparkDaemonModelControl,
-    "effectiveModel" | "effectiveThinkingLevel" | "prepareModel"
-  >;
+  driverStore: SparkDriverStore;
+  sessionRegistry: Pick<DaemonSessionRegistry, "list">;
   resolveWorkspaceCwd?: (workspaceId: string) => string | undefined;
   /** Synchronous daemon-generation fence checked before every durable admission. */
   canAdmit?: () => boolean;
 }
 
 /**
- * Admit one durable continuation for each idle session with executable session
- * TODOs. Channel-bound sessions keep their bounded tool surface, but this
- * internal continuation does not carry a channel-reply target and therefore
- * cannot manufacture an unsolicited platform reply. The TODO-state digest is
- * the idempotency boundary: an
- * automatic turn that makes no checklist progress cannot trigger itself again.
+ * Reconcile one daemon-owned fallback driver for each session with executable
+ * TODOs. The TODO-state digest is the progress boundary: a tick that makes no
+ * checklist progress becomes dormant and cannot trigger itself again.
  */
 export async function reconcileIdleSessionTodos(
   deps: IdleSessionTodoReconcileDependencies,
@@ -49,7 +40,6 @@ export async function reconcileIdleSessionTodos(
   for (const session of sessions) {
     if (deps.canAdmit?.() === false) break;
     if (!isRunnableSession(session)) continue;
-    if (deps.invocationStore.sessionActivity(session.sessionId).active) continue;
     try {
       const cwd = sessionExecutionCwd(session, deps.resolveWorkspaceCwd);
       if (!cwd) continue;
@@ -57,53 +47,46 @@ export async function reconcileIdleSessionTodos(
         sessionTodoOwnerRef(session.sessionId),
       );
       const executable = executableSessionTodos(todos);
-      if (executable.length === 0) continue;
+      const driverId = sessionTodoDriverId(session.sessionId);
+      const existing = deps.driverStore.get(driverId);
+      if (executable.length === 0) {
+        if (existing && existing.status !== "stopped") {
+          deps.driverStore.stop(driverId, "session TODO checklist has no executable work");
+        }
+        continue;
+      }
+
+      const explicitForeground = deps.driverStore
+        .list({ ownerSessionId: session.sessionId })
+        .find((driver) => driver.lane === "foreground" && driver.status !== "stopped");
+      if (explicitForeground) {
+        if (existing && existing.status !== "stopped") {
+          deps.driverStore.stop(driverId, "explicit foreground driver owns the session");
+        }
+        continue;
+      }
 
       const stateDigest = sessionTodoStateDigest(session.sessionId, todos);
-      const idempotencyKey = `session.todo:${stateDigest}`;
-      if (deps.invocationStore.findByIdempotencyKey(idempotencyKey)) continue;
+      if (existing?.domainStateDigest === stateDigest && existing.status !== "stopped") {
+        continue;
+      }
       if (deps.canAdmit?.() === false) break;
 
-      const model = deps.modelControl
-        ? await deps.modelControl.effectiveModel(session.sessionId)
-        : undefined;
-      if (model) await deps.modelControl?.prepareModel(model);
-      const thinkingLevel = deps.modelControl
-        ? await deps.modelControl.effectiveThinkingLevel(session.sessionId)
-        : undefined;
-      const task: SparkDaemonSessionRunTask = {
-        type: "session.run",
-        sessionId: session.sessionId,
+      deps.driverStore.start({
+        driverId,
+        kind: "session_todo",
+        ownerSessionId: session.sessionId,
+        continuity: "session",
         prompt: renderSessionTodoContinuationPrompt(executable),
         cwd,
         ...(session.scope.kind === "workspace" ? { workspaceId: session.scope.workspaceId } : {}),
-        ...(model ? { model: `${model.providerName}/${model.modelId}` } : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        actor: "spark-daemon-session-todo",
-        messageMetadata: {
-          origin: { kind: "system", host: "daemon", intent: SESSION_TODO_AUTO_SOURCE_KIND },
-          sessionTodo: {
-            mode: "auto",
-            stateDigest,
-            itemIds: executable.flatMap((todo) => (todo.id ? [todo.id] : [])),
-          },
-        },
-      };
-      if (deps.canAdmit?.() === false) break;
-      deps.invocationStore.submitIfSessionIdle({
-        sessionId: session.sessionId,
-        idempotencyKey,
-        prompt: task.prompt,
-        task,
-        sourceKind: SESSION_TODO_AUTO_SOURCE_KIND,
-        sourceRef: stateDigest,
+        domainStateDigest: stateDigest,
+        reason: "executable session TODO state changed",
       });
-      await deps.sessionRegistry.recordTurnQueued(session.sessionId);
       result.submitted += 1;
     } catch (error) {
       // Another producer may win the idle admission race after our optimistic
       // activity read. That is expected and needs no operator-facing error.
-      if (errorMessage(error).startsWith("SESSION_NOT_IDLE:")) continue;
       result.errors.push({ sessionId: session.sessionId, message: errorMessage(error) });
     }
   }
@@ -162,6 +145,10 @@ function executableSessionTodos(todos: SessionTodoEntry[]): SessionTodoEntry[] {
 function sessionTodoOwnerRef(sessionId: string): string {
   const normalized = sessionId.trim();
   return normalized.startsWith("session:") ? normalized : `session:${normalized}`;
+}
+
+function sessionTodoDriverId(sessionId: string): string {
+  return `session-todo:${sessionId.trim()}`;
 }
 
 function errorMessage(error: unknown): string {

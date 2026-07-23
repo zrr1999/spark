@@ -526,6 +526,7 @@ function loadSessionReports(
 function stableReportKey(report: SessionActivityReport) {
   if (
     report.kind !== "run.update" &&
+    report.kind !== "driver.update" &&
     report.kind !== "task.update" &&
     report.kind !== "artifact.update" &&
     report.kind !== "evidence.update"
@@ -635,6 +636,22 @@ function reportFromDaemonPayload(
         status,
         createdAt: row.createdAt,
         ...(runKind ? { runKind } : {}),
+      };
+    }
+    if (viewType === "driver.update") {
+      const driver = recordValue(view, "driver");
+      const driverId = stringValue(driver, "driverId");
+      const kind = stringValue(driver, "kind");
+      const status = stringValue(driver, "status");
+      const dueAt = stringValue(driver, "dueAt");
+      return {
+        id: driverId || row.id,
+        kind: viewType,
+        title: `${kind ?? "Spark"} driver`,
+        text: `${status ? `Driver ${status}.` : "Driver updated."}${dueAt ? ` Next wake: ${dueAt}.` : ""}`,
+        role: null,
+        status,
+        createdAt: row.createdAt,
       };
     }
     if (viewType === "task.update") {

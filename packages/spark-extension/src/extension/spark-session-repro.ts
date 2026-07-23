@@ -11,9 +11,7 @@ import {
   type SparkReproStage,
   type SparkSessionPhase,
   type SparkSessionRepro,
-  type SparkSessionReproRetryState,
 } from "@zendev-lab/spark-repro";
-import { nowIso } from "@zendev-lab/spark-core";
 import {
   rebuildSessionIndex,
   sessionReproStorePathV2,
@@ -96,31 +94,23 @@ export async function writeSessionRepro(
   ctx?: SparkSessionContext,
 ): Promise<void> {
   const path = sessionReproStorePath(cwd, ctx);
-  const snapshot: SparkSessionReproSnapshotV3 = { version: 3, repro };
+  const snapshot: SparkSessionReproSnapshotV3 = {
+    version: 3,
+    repro: repro ? withoutReproRuntimeState(repro) : undefined,
+  };
   await writeJsonFileAtomic(path, snapshot);
   await rebuildSessionIndex(cwd);
 }
 
-export async function clearSessionRepro(cwd: string, ctx?: SparkSessionContext): Promise<void> {
-  await writeSessionRepro(cwd, undefined, ctx);
+function withoutReproRuntimeState(repro: SparkSessionRepro): SparkSessionRepro {
+  const { retryState: _retryState, ...canonical } = repro as SparkSessionRepro & {
+    retryState?: unknown;
+  };
+  return canonical;
 }
 
-export async function updateSessionReproRetryState(
-  cwd: string,
-  ctx: SparkSessionContext | undefined,
-  retryState: SparkSessionReproRetryState | null,
-  options: { expectedReproId?: string } = {},
-): Promise<SparkSessionRepro | undefined> {
-  const existing = await readSessionRepro(cwd, ctx);
-  if (!existing || existing.status !== "active") return undefined;
-  if (options.expectedReproId && existing.reproId !== options.expectedReproId) return undefined;
-  const updated: SparkSessionRepro = {
-    ...existing,
-    retryState: retryState ?? undefined,
-    updatedAt: nowIso(),
-  };
-  await writeSessionRepro(cwd, updated, ctx);
-  return updated;
+export async function clearSessionRepro(cwd: string, ctx?: SparkSessionContext): Promise<void> {
+  await writeSessionRepro(cwd, undefined, ctx);
 }
 
 function migrateLegacySessionRepro(legacy: LegacySparkSessionRepro): SparkSessionRepro {

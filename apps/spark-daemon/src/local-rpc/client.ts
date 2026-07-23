@@ -9,10 +9,19 @@ import {
 import type { ChannelNotifyInput, ChannelsConfig } from "@zendev-lab/spark-channels";
 import {
   parseSparkSessionView,
+  sparkDriverListResultSchema,
+  sparkDriverMutationResultSchema,
   sparkTurnCancelResultSchema,
   sparkTurnStatusResultSchema,
   sparkTurnStreamPageSchema,
   type SparkSessionView,
+  type SparkDriverListResult,
+  type SparkDriverMutationRequest,
+  type SparkDriverMutationResult,
+  type SparkDriverScheduleRequest,
+  type SparkDriverStartRequest,
+  type SparkDriverStatusRequest,
+  type SparkDriverWakeRequest,
 } from "@zendev-lab/spark-protocol";
 import {
   LocalRpcUnavailableError,
@@ -75,6 +84,64 @@ export async function requestDaemonStop(paths: SparkPaths): Promise<LocalDaemonS
 
 export async function requestDaemonRestart(paths: SparkPaths): Promise<LocalDaemonRestartResult> {
   return localRpcRequest(paths, { id: localRequestId(), method: "daemon.restart" }, daemonRestart);
+}
+
+export async function requestDriverStart(
+  paths: SparkPaths,
+  params: SparkDriverStartRequest,
+): Promise<SparkDriverMutationResult> {
+  return localRpcRequest(paths, { id: localRequestId(), method: "driver.start", params }, (value) =>
+    sparkDriverMutationResultSchema.parse(value),
+  );
+}
+
+export async function requestDriverStatus(
+  paths: SparkPaths,
+  params: SparkDriverStatusRequest = { includeStopped: false },
+): Promise<SparkDriverListResult> {
+  return localRpcRequest(
+    paths,
+    { id: localRequestId(), method: "driver.status", params },
+    (value) => sparkDriverListResultSchema.parse(value),
+  );
+}
+
+export async function requestDriverStop(
+  paths: SparkPaths,
+  params: SparkDriverMutationRequest,
+): Promise<SparkDriverMutationResult> {
+  return requestDriverMutation(paths, "driver.stop", params);
+}
+
+export async function requestDriverRestart(
+  paths: SparkPaths,
+  params: SparkDriverMutationRequest,
+): Promise<SparkDriverMutationResult> {
+  return requestDriverMutation(paths, "driver.restart", params);
+}
+
+export async function requestDriverWake(
+  paths: SparkPaths,
+  params: SparkDriverWakeRequest,
+): Promise<SparkDriverMutationResult> {
+  return requestDriverMutation(paths, "driver.wake", params);
+}
+
+export async function requestDriverSchedule(
+  paths: SparkPaths,
+  params: SparkDriverScheduleRequest,
+): Promise<SparkDriverMutationResult> {
+  return requestDriverMutation(paths, "driver.schedule", params);
+}
+
+async function requestDriverMutation(
+  paths: SparkPaths,
+  method: "driver.stop" | "driver.restart" | "driver.wake" | "driver.schedule",
+  params: SparkDriverMutationRequest | SparkDriverWakeRequest | SparkDriverScheduleRequest,
+): Promise<SparkDriverMutationResult> {
+  return localRpcRequest(paths, { id: localRequestId(), method, params }, (value) =>
+    sparkDriverMutationResultSchema.parse(value),
+  );
 }
 
 export async function requestChannelStatus(

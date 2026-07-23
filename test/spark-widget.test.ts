@@ -22,7 +22,6 @@ import {
 } from "../packages/spark-extension/src/extension/spark-session-repro.ts";
 import {
   loadSessionLoop,
-  scheduleSessionLoopTick,
   setSessionGoal,
   setSessionLoop,
 } from "../packages/spark-loop/src/index.ts";
@@ -482,15 +481,10 @@ test("spark widget controller lets active loop use the foreground slot instead o
       source: "explicit",
       status: "complete",
     });
-    const loop = await setSessionLoop(dir, undefined, {
+    await setSessionLoop(dir, undefined, {
       objective: "Active loop should be visible",
       source: "explicit",
       status: "active",
-    });
-    await scheduleSessionLoopTick(dir, undefined, {
-      delayMs: 1_800_000,
-      reason: "show widget cadence",
-      expectedLoopId: loop.loopId,
     });
     let component: ReturnType<NonNullable<SparkWidgetRegistration["cb"]>> | undefined;
     const controller = new SparkWidgetController();
@@ -503,7 +497,7 @@ test("spark widget controller lets active loop use the foreground slot instead o
     });
 
     const lines = component?.render() ?? [];
-    assert.match(lines[0] ?? "", /◆ Loop\(▱▱▱▱▱ 30m\): Active loop should be visible/);
+    assert.match(lines[0] ?? "", /◆ Loop\(●\): Active loop should be visible/);
     assert.doesNotMatch(lines.join("\n"), /Completed old goal/);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });

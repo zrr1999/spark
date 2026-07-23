@@ -2,6 +2,7 @@ import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import {
   DEFAULT_READY_TASK_MAX_CONCURRENCY,
   DEFAULT_READY_TASK_TIMEOUT_MS,
+  stableId,
   type TaskRef,
   type ProjectRef,
 } from "@zendev-lab/spark-core";
@@ -25,48 +26,52 @@ import { mergeTaskProgressIntoStore } from "./task-progress-store.ts";
 import { sessionModelName } from "./session-model.ts";
 import { createSparkRuntimeReadyTaskRunner } from "./spark-ready-task-runtime.ts";
 import { createSparkRoleRegistry } from "./spark-role-registry.ts";
+import {
+  sparkDaemonDriverControl,
+  type SparkDaemonDriverControl,
+} from "./spark-daemon-driver-client.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
-
-const WORKFLOW_RUN_MANAGER_POLL_INTERVAL_MS = 1_000;
 
 export type SparkWorkflowRunManagerContext = SparkToolContext;
 
-interface SparkWorkflowRunManagerTickResult {
+export interface SparkWorkflowRunManagerTickResult {
   continuePolling: boolean;
 }
 
 export class SparkWorkflowRunManagerController {
-  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly hooks: {
     refreshSparkWidget: (cwd: string, ctx: SparkWorkflowRunManagerContext) => Promise<void>;
     piCommand?: (cwd: string, ctx: SparkWorkflowRunManagerContext) => string | undefined;
+    driverControl: SparkDaemonDriverControl;
   };
 
   constructor(hooks: {
     refreshSparkWidget: (cwd: string, ctx: SparkWorkflowRunManagerContext) => Promise<void>;
     piCommand?: (cwd: string, ctx: SparkWorkflowRunManagerContext) => string | undefined;
+    driverControl?: SparkDaemonDriverControl;
   }) {
-    this.hooks = hooks;
+    this.hooks = { ...hooks, driverControl: hooks.driverControl ?? sparkDaemonDriverControl };
   }
 
-  ensure(cwd: string, ctx: SparkWorkflowRunManagerContext): void {
-    if (this.timers.has(cwd)) return;
-    const tick = async () => {
-      this.timers.delete(cwd);
-      if (!(await hasLocalSparkDirectory(cwd))) return;
-      const result = await this.runOnce(cwd, ctx);
-      const control = await defaultSparkWorkflowRunStore(cwd).loadControl();
-      if (result.continuePolling && (!control || control.status === "running")) {
-        this.schedule(cwd, tick, WORKFLOW_RUN_MANAGER_POLL_INTERVAL_MS);
-      }
-    };
-    this.schedule(cwd, tick, 0);
-  }
-
-  private schedule(cwd: string, tick: () => Promise<void>, delayMs: number): void {
-    const timer = setTimeout(() => void tick().catch(reportSparkWorkflowRunManagerError), delayMs);
-    timer.unref?.();
-    this.timers.set(cwd, timer);
+  async ensure(cwd: string, ctx: SparkWorkflowRunManagerContext): Promise<void> {
+    if (!(await hasLocalSparkDirectory(cwd))) return;
+    const control = await defaultSparkWorkflowRunStore(cwd).loadControl();
+    if (!control || control.status !== "running") return;
+    const ownerSessionId = ctx.sessionId?.trim();
+    if (!ownerSessionId) throw new Error("Spark workflow driver requires a daemon-owned session");
+    await this.hooks.driverControl.start({
+      driverId: `workflow:${stableId(`${cwd}:${ownerSessionId}`)}`,
+      kind: "workflow",
+      ownerSessionId,
+      continuity: "session",
+      cwd,
+      prompt: [
+        "Advance the active Spark workflow scheduler by exactly one daemon-owned tick.",
+        'Call workflow_driver({ action: "tick" }) exactly once.',
+        "Do not wait, sleep, or run a frontend polling loop.",
+      ].join("\n"),
+      reason: "workflow scheduler active",
+    });
   }
 
   async runOnce(
@@ -238,12 +243,6 @@ function sparkWorkflowRunCompletionNotificationLevel(
   status: WorkflowRunStatus,
 ): "info" | "warning" | "error" {
   return status === "succeeded" ? "info" : status === "timed_out" ? "warning" : "error";
-}
-
-function reportSparkWorkflowRunManagerError(error: unknown): void {
-  console.warn(
-    `Spark workflow-run manager failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
 }
 
 function reportSparkWorkflowRunManagerRefreshError(

@@ -52,6 +52,39 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
       PRIMARY KEY (invocation_id, sequence)
     );
 
+    CREATE TABLE IF NOT EXISTS driver_wakeups (
+      driver_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('goal', 'loop', 'repro', 'implement', 'workflow', 'session_todo')),
+      lane TEXT NOT NULL CHECK (lane IN ('foreground', 'background', 'fallback')),
+      owner_session_id TEXT NOT NULL,
+      continuity TEXT NOT NULL CHECK (continuity IN ('session', 'fresh')),
+      status TEXT NOT NULL CHECK (status IN ('scheduled', 'running', 'retry_wait', 'dormant', 'blocked', 'stopped')),
+      generation INTEGER NOT NULL CHECK (generation > 0),
+      due_at TEXT,
+      attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+      last_invocation_id TEXT REFERENCES invocations(id),
+      reason TEXT,
+      error TEXT,
+      prompt TEXT NOT NULL,
+      wake_prompt TEXT,
+      route_json TEXT NOT NULL,
+      domain_state_digest TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS driver_hidden_sessions (
+      execution_session_id TEXT PRIMARY KEY,
+      driver_id TEXT NOT NULL REFERENCES driver_wakeups(driver_id) ON DELETE CASCADE,
+      generation INTEGER NOT NULL CHECK (generation > 0),
+      invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+      status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+      session_path TEXT,
+      created_at TEXT NOT NULL,
+      archived_at TEXT,
+      gc_after TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS invocation_event_deliveries (
       destination TEXT NOT NULL,
       invocation_id TEXT NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
@@ -148,6 +181,14 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
     );
 
     CREATE INDEX IF NOT EXISTS invocations_status_idx ON invocations(status, created_at);
+    CREATE INDEX IF NOT EXISTS driver_wakeups_due_idx
+      ON driver_wakeups(status, due_at, updated_at)
+      WHERE status IN ('scheduled', 'retry_wait');
+    CREATE INDEX IF NOT EXISTS driver_wakeups_owner_idx
+      ON driver_wakeups(owner_session_id, status, lane);
+    CREATE INDEX IF NOT EXISTS driver_hidden_sessions_gc_idx
+      ON driver_hidden_sessions(status, gc_after)
+      WHERE status = 'archived';
     CREATE INDEX IF NOT EXISTS invocation_events_cursor_idx
       ON invocation_events(invocation_id, sequence);
     CREATE INDEX IF NOT EXISTS invocation_event_deliveries_cursor_idx
@@ -170,6 +211,7 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
   migrateChannelDeliverySchema(db);
   addMissingRuntimeCommandReceiptColumns(db);
   addMissingInvocationColumns(db);
+  addMissingDriverColumns(db);
   db.exec(`
     INSERT OR IGNORE INTO invocation_event_delivery_consumers (destination, registered_at)
     SELECT DISTINCT destination, MIN(updated_at)
@@ -185,6 +227,13 @@ export function migrateSparkDaemonDatabase(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS workspaces_status_idx ON workspaces(status)");
   migrateSparkDaemonRegistrationTables(db);
   backfillSparkDaemonRegistrationTables(db);
+}
+
+function addMissingDriverColumns(db: DatabaseSync): void {
+  const columns = workspaceColumns(db, "driver_wakeups");
+  if (!columns.has("wake_prompt")) {
+    db.exec("ALTER TABLE driver_wakeups ADD COLUMN wake_prompt TEXT");
+  }
 }
 
 function addMissingRuntimeCommandReceiptColumns(db: DatabaseSync): void {

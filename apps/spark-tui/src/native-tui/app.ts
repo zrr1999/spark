@@ -895,6 +895,9 @@ export class SparkNativeTuiApp implements Component, Focusable {
       case "run.update":
         this.recordRunView(parsed.run);
         break;
+      case "driver.update":
+        this.cockpit.drivers.set(parsed.driver.driverId, parsed.driver);
+        break;
       case "task.update": {
         this.cockpit.tasks.set(parsed.task.ref, parsed.task);
         this.session.addCustomMessage({
@@ -941,6 +944,10 @@ export class SparkNativeTuiApp implements Component, Focusable {
     this.cockpit.tasks.clear();
     this.cockpit.artifacts.clear();
     this.cockpit.evidence.clear();
+    this.cockpit.drivers.clear();
+    for (const driver of view.drivers ?? []) {
+      this.cockpit.drivers.set(driver.driverId, driver);
+    }
     for (const run of view.runs) this.recordRunView(run, false);
     if (view.runs.length === 0) this.recordActiveRunStatus();
     for (const task of view.tasks) this.cockpit.tasks.set(task.ref, task);
@@ -1687,6 +1694,13 @@ export class SparkNativeTuiApp implements Component, Focusable {
   private statusLine(): string {
     const statusSuffix = this.extensionStatusSuffix();
     const commandSuffix = this.commandAvailabilitySuffix();
+    const activeDrivers = [...this.cockpit.drivers.values()].filter(
+      (driver) => driver.status !== "stopped",
+    );
+    const driverSuffix =
+      activeDrivers.length === 0
+        ? ""
+        : ` · driver=${activeDrivers.map((driver) => `${driver.kind}:${driver.status}`).join(",")}`;
     const sessionLabel =
       this.cockpit.sessionTitle?.trim() ||
       this.cockpit.sessionId?.trim() ||
@@ -1706,6 +1720,7 @@ export class SparkNativeTuiApp implements Component, Focusable {
         state: this.sessionStateLabel(),
         ...(queue.total > 0 ? { queue: { steer: queue.steer, followUp: queue.followUp } } : {}),
       }) +
+      driverSuffix +
       commandSuffix +
       statusSuffix
     );
