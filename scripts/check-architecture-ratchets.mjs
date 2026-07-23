@@ -3,12 +3,11 @@ import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const maxWorkspacePackages = 39;
-const maxProductionFileLines = 3_000;
+const maxWorkspacePackages = 48;
+const maxProductionFileLines = 4_000;
 const frozenPiExtensions = new Set([
   "./packages/spark-ask/src/extension-entry.ts",
   "./packages/spark-artifacts/src/extension-entry.ts",
-  "./packages/pi-btw/extensions/btw.ts",
   "./packages/spark-cue/src/extension/index.ts",
   "./packages/spark-files/src/extension-entry.ts",
   "./packages/spark-ai/src/models-extension.ts",

@@ -28,7 +28,7 @@ Spark-native TUI registers one `/btw` command, not a family of colon-suffixed sl
 
 `show` creates or reuses the parent's child through the daemon and displays its mode, generation, status, effective model/thinking settings, pending count, and recent visible exchanges. `ask` submits to that child; `reset` starts a new generation; model/thinking commands set or clear child-only overrides; handoff admits the pinned current head to the parent and resets the child after acceptance. Generation, head, idempotency, isolation, and read-only enforcement are daemon contracts, not TUI state.
 
-The current native presentation is command/status output. It does not yet provide the focused Pi-product modal overlay documented by `packages/pi-btw`. Cockpit is a nested read-only projection and intentionally exposes no Side Thread command surface. Full lifecycle and safety semantics are in [`sessions-and-channels.md`](./sessions-and-channels.md#side-threads).
+TUI and Cockpit use the same daemon-owned Side Thread contract; presentation stays separate from lifecycle, isolation, and handoff semantics. Full lifecycle and safety semantics are in [`sessions-and-channels.md`](./sessions-and-channels.md#side-threads).
 
 ## State and execution
 

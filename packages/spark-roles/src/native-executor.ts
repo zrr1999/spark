@@ -79,6 +79,8 @@ async function loadFallbackHeadlessRoleExecutor(
  * executor on Node's ESM resolver, where package export maps remain authoritative.
  */
 export function resolveSparkSourceHeadlessExecutorSpecifier(): string {
+  const packagedExecutor = process.env.SPARK_HEADLESS_EXECUTOR_MODULE;
+  if (packagedExecutor) return packagedExecutor;
   const rolesDirectory = dirname(realpathSync(new URL(import.meta.url)));
   return pathToFileURL(
     join(rolesDirectory, "../../../apps/spark-tui/src/headless-role-executor.ts"),

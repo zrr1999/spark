@@ -8,8 +8,16 @@
     "Coding Agent",
     "Spark"
   ],
+  "homepage": "https://github.com/zrr1999/spark#readme",
+  "bugs": {
+    "url": "https://github.com/zrr1999/spark/issues"
+  },
   "license": "MIT",
   "author": "zrr1999",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zrr1999/spark.git"
+  },
   "bin": {
     "spark": "./apps/spark-cli/bin/spark"
   },
@@ -23,7 +31,7 @@
   "scripts": {
     "check": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:architecture && pnpm run check:distribution && pnpm run check:boundaries && node scripts/check-doc-terminology.mjs && pnpm run check:static && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --filter './apps/*' run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "check:architecture": "node scripts/check-architecture-ratchets.mjs",
-    "check:distribution": "node scripts/check-source-distribution.mjs",
+    "check:distribution": "node scripts/check-npm-product.mjs",
     "check:static": "vp fmt . --check && vp lint --quiet && vp check --no-fmt --no-lint",
     "check:static:fix": "vp fmt . --write && vp lint --fix --quiet && vp check --no-fmt --no-lint",
     "check:boundaries": "depcruise --config .dependency-cruiser.cjs apps packages test",
@@ -41,12 +49,15 @@
     "test:file": "vp test run --config vitest.root.config.ts",
     "test:mutation": "node scripts/run-leaf-mutation.mjs",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
+    "build:npm-product": "node scripts/build-npm-product.mjs",
+    "check:npm-product": "node scripts/check-npm-product.mjs",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
-    "test:source-distribution": "node scripts/smoke-source-distribution.mjs",
+    "test:npm-product": "node scripts/smoke-npm-product.mjs",
+    "publish:npm-product": "pnpm publish dist/npm-package --access public --registry=https://registry.npmjs.org/",
+    "publish": "pnpm run check && pnpm run test:npm-product && pnpm run publish:npm-product",
     "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
-    "@zendev-lab/pi-btw": "workspace:^",
     "@zendev-lab/spark-ai": "workspace:^",
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-ask": "workspace:^",
@@ -79,6 +90,7 @@
     "@zendev-lab/spark-system": "workspace:*",
     "dependency-cruiser": "^18.1.0",
     "es-toolkit": "catalog:",
+    "esbuild": "^0.28.0",
     "jscpd": "^5.0.12",
     "knip": "^6.27.0",
     "p-retry": "catalog:",
@@ -104,7 +116,6 @@
     "extensions": [
       "./packages/spark-ask/src/extension-entry.ts",
       "./packages/spark-artifacts/src/extension-entry.ts",
-      "./packages/pi-btw/extensions/btw.ts",
       "./packages/spark-cue/src/extension/index.ts",
       "./packages/spark-files/src/extension-entry.ts",
       "./packages/spark-ai/src/models-extension.ts",
@@ -115,9 +126,6 @@
       "./packages/spark-workflows/src/extension-entry.ts",
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",
       "./packages/pi-extension/src/extension/index.ts"
-    ],
-    "skills": [
-      "./packages/pi-btw/skills"
     ]
   }
 }

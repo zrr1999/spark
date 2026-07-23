@@ -2,7 +2,7 @@
 
 These files are current contracts or operator procedures. Product and package implementation details belong in source and package READMEs.
 
-- [`specs/command-planes.md`](./specs/command-planes.md): canonical CLI planes, state ownership, adapter boundaries, growth ratchets, dependency adoption, and the source-distribution contract.
+- [`specs/command-planes.md`](./specs/command-planes.md): canonical CLI planes, state ownership, adapter boundaries, growth ratchets, dependency adoption, and the npm product-distribution contract.
 - [`specs/configuration-and-paths.md`](./specs/configuration-and-paths.md): `SPARK_HOME` and XDG path layout, precedence, and migration policy.
 - [`specs/compact-v2.md`](./specs/compact-v2.md): compaction thresholds, token sources, repeated-overflow bounds, and Memory handoff.
 - [`specs/tools.md`](./specs/tools.md): public agent-facing tools and commands.

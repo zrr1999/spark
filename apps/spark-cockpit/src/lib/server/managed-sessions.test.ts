@@ -6,6 +6,7 @@ import {
   bindManagedSessionForCockpit,
   createManagedSessionForCockpit,
   getManagedSessionForCockpit,
+  getLiveManagedSessionForCockpit,
   getManagedSideThreadSnapshotForCockpit,
   getManagedSessionSnapshotForCockpit,
   listManagedSessionsForCockpit,
@@ -123,6 +124,17 @@ describe("managed sessions for cockpit", () => {
     ).resolves.toBeNull();
     expect(client.get).toHaveBeenCalledWith(session.sessionId);
     expect(client.sideThreadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves Side Thread owner unavailability instead of reporting absence", async () => {
+    const client = daemonClient();
+    client.sideThreadSnapshot.mockRejectedValueOnce(
+      new CockpitRuntimeSessionUnavailableError("daemon offline"),
+    );
+
+    await expect(
+      getManagedSideThreadSnapshotForCockpit(session.sessionId, {}, client),
+    ).rejects.toThrow(CockpitRuntimeSessionUnavailableError);
   });
 
   it("keeps daemon-scoped sessions outside every Cockpit read surface", async () => {
@@ -245,6 +257,15 @@ describe("managed sessions for cockpit", () => {
     await expect(getManagedSessionForCockpit("sess_a", client)).resolves.toBeNull();
     await expect(getManagedSessionForCockpit("sess_missing", client)).resolves.toBeNull();
     await expect(getManagedSessionForCockpit("sess_foreign", client)).resolves.toBeNull();
+  });
+
+  it("preserves owner unavailability for authorization-sensitive reads", async () => {
+    const client = daemonClient();
+    client.get.mockRejectedValueOnce(new CockpitRuntimeSessionUnavailableError("daemon offline"));
+
+    await expect(getLiveManagedSessionForCockpit("sess_a", client)).rejects.toThrow(
+      CockpitRuntimeSessionUnavailableError,
+    );
   });
 
   it("returns null for unavailable snapshots and surfaces invalid daemon responses", async () => {

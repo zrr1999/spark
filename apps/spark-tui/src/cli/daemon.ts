@@ -2721,6 +2721,10 @@ async function runForeground(command: string, args: string[]): Promise<number> {
 }
 
 function sparkDaemonServiceCliCommand(): { command: string; args: string[] } {
+  const packagedEntrypoint = process.env.SPARK_DAEMON_ENTRYPOINT;
+  if (packagedEntrypoint && existsSync(packagedEntrypoint)) {
+    return { command: process.execPath, args: [packagedEntrypoint] };
+  }
   const daemonAppDir = fileURLToPath(new URL("../../../spark-daemon", import.meta.url));
   const distCli = join(daemonAppDir, "dist", "cli.js");
   if (existsSync(distCli)) {

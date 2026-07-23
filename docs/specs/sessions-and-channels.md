@@ -44,7 +44,7 @@ Every side-thread model run receives the read-only prompt and `allowedToolEffect
 
 Snapshots are display projections capped below the runtime command envelope: oversized prompts and answers are UTF-8-safely shortened with explicit truncation metadata, and older exchanges are paged out before transport. The native transcript remains intact. `handoff full` admits the complete visible side-thread exchanges from that transcript to the parent subject to its separate 48 KiB admission cap; `handoff summary` admits a compact bounded rendering. Both treat the material as untrusted analysis that the parent must verify. The daemon admits the parent invocation before it resets the child generation, and an idempotent replay completes any still-pending reset without submitting a second parent turn.
 
-The Spark-native TUI exposes this controller through one `/btw` command with subcommands; it currently renders command/status output rather than a focused modal overlay. Cockpit exposes only a nested, GET-only projection under the authorized parent session. Opening that panel never creates, resets, configures, submits, or hands off a Side Thread.
+The Spark-native TUI exposes this controller through one `/btw` command with subcommands. Cockpit exposes the same ensure, submit, reset, configure, and handoff operations inside the authorized parent session. Both adapters send the protocol command shapes to the daemon and refresh its projection; neither owns a second Side Thread state machine or writes the native transcript directly.
 
 ## Message origin
 

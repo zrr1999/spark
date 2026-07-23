@@ -38,6 +38,35 @@ export interface CockpitManagedSessionsClient {
     parentSessionId: string,
     options?: { beforeExchangeId?: string; limit?: number },
   ): Promise<SparkSideThreadSnapshot>;
+  ensureSideThread?(input: {
+    parentSessionId: string;
+    mode?: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  submitSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    prompt: string;
+    idempotencyKey: string;
+  }): Promise<unknown>;
+  resetSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    mode: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  configureSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    modelOverride?: { providerName: string; modelId: string } | null;
+    thinkingOverride?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  }): Promise<SparkSideThreadSnapshot>;
+  handoffSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    expectedHeadExchangeId: string;
+    kind: "full" | "summary";
+    instructions?: string;
+    idempotencyKey: string;
+  }): Promise<unknown>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -115,8 +144,7 @@ export async function getManagedSessionForCockpit(
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord | null> {
   try {
-    const session = await client.get(sessionId);
-    return isCockpitWorkspaceSession(session) ? session : null;
+    return await getLiveManagedSessionForCockpit(sessionId, client);
   } catch (error) {
     // A disconnected owner or stale projection must not turn the workbench
     // layout or session page into a 500.
@@ -128,6 +156,24 @@ export async function getManagedSessionForCockpit(
     ) {
       return null;
     }
+    throw error;
+  }
+}
+
+/**
+ * Read current owner state without collapsing transport failure into absence.
+ * Authorization-sensitive routes use this variant so offline/timeout remains
+ * distinguishable from a missing or foreign session.
+ */
+export async function getLiveManagedSessionForCockpit(
+  sessionId: string,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<SparkSessionRegistryRecord | null> {
+  try {
+    const session = await client.get(sessionId);
+    return isCockpitWorkspaceSession(session) ? session : null;
+  } catch (error) {
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     throw error;
   }
 }
@@ -222,18 +268,30 @@ export async function getManagedSideThreadSnapshotForCockpit(
       ...(options.limit ? { limit: options.limit } : {}),
     });
   } catch (error) {
-    if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
     if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     if (
       error instanceof RuntimeControlCommandError &&
-      (error.reasonCode === "COMMAND_RESULT_TIMEOUT" ||
-        error.reasonCode === "side_thread_not_found" ||
-        error.reasonCode === "SIDE_THREAD_NOT_FOUND")
+      (error.reasonCode === "side_thread_not_found" || error.reasonCode === "SIDE_THREAD_NOT_FOUND")
     ) {
       return null;
     }
     throw error;
   }
+}
+
+/**
+ * Mutate a Side Thread only after authorizing the parent workspace session.
+ * The command itself still goes to the daemon's single Side Thread controller.
+ */
+export async function controlManagedSideThreadForCockpit<T>(
+  parentSessionId: string,
+  workspaceId: string,
+  command: (client: CockpitManagedSessionsClient) => Promise<T>,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<T | null> {
+  const session = await client.get(parentSessionId);
+  if (!isCockpitWorkspaceSession(session) || session.scope.workspaceId !== workspaceId) return null;
+  return await command(client);
 }
 
 export async function createManagedSessionForCockpit(

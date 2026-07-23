@@ -34,17 +34,29 @@ spark cockpit
 
 Inside an agent host, ordinary input is lightweight by default. `/plan` creates or refines durable tasks, `/implement` executes ready work, `/loop` schedules recurring work, `/goal` runs reviewer-gated autonomous work, and `/workflow` runs a selected saved workflow. In Spark-native TUI, `/btw` controls a daemon-owned read-only Side Thread using command/status output; its lifecycle and subcommands are specified in [`docs/specs/tools.md`](./docs/specs/tools.md#native-btw).
 
+## Install
+
+The npm release exposes one public product and one executable:
+
+```text
+npm install --global @zendev-lab/spark
+spark --help
+spark daemon start
+spark cockpit
+```
+
+Node `>=26 <27` is required. The source monorepo and its workspaces stay private implementation boundaries; they are compiled into the published product rather than becoming separate public packages.
+
 ## Development
 
 ```text
 pnpm install
 pnpm run check
-pnpm run build
-pnpm run test:source-distribution
+pnpm run test:npm-product
 pnpm run preview
 pnpm run check:zellij-harness -- --session spark
 ```
 
-Node `>=26 <27` and pnpm `>=11 <12` are required. `.spark/` (including `.spark/memory/`) is local runtime state and should remain uncommitted unless explicitly exported. Legacy `.learnings/` directories are also ignored if present.
+pnpm `>=11 <12` is required for source development. Maintainers can run `pnpm run publish` to execute the full validation and clean-install smoke before publishing only the generated `@zendev-lab/spark` artifact. `.spark/` (including `.spark/memory/`) is local runtime state and should remain uncommitted unless explicitly exported. Legacy `.learnings/` directories are also ignored if present.
 
 Contracts, including state ownership and adapter boundaries, are indexed in [`docs/README.md`](./docs/README.md). Contributor and automation constraints are in [`AGENTS.md`](./AGENTS.md).

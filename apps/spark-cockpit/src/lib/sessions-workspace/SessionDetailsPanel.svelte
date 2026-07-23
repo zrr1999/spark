@@ -39,6 +39,14 @@
   let displayedSessionStatus = $derived(visibleSessionStatus(selected.status));
   let sideThread = $state<SparkSideThreadSnapshot | null>(null);
   let sideThreadState = $state<"idle" | "loading" | "missing" | "error">("idle");
+  let sideThreadActionState = $state<"idle" | "submitting" | "error">("idle");
+  let sideThreadPrompt = $state("");
+  let sideThreadMode = $state<"contextual" | "tangent">("contextual");
+  let sideThreadProvider = $state("");
+  let sideThreadModel = $state("");
+  let sideThreadThinking = $state("");
+  let sideThreadHandoffInstructions = $state("");
+  const sideThreadIdempotencyKeys = new Map<string, string>();
 
   async function loadSideThread(event: Event): Promise<void> {
     const panel = event.currentTarget as HTMLDetailsElement;
@@ -58,10 +66,147 @@
       }
       if (!response.ok) throw new Error(`side thread request failed: ${response.status}`);
       sideThread = (await response.json()) as SparkSideThreadSnapshot;
+      adoptSideThreadSnapshot(sideThread);
       sideThreadState = "idle";
     } catch {
       sideThreadState = "error";
     }
+  }
+
+  async function controlSideThread(
+    action: "ensure" | "submit" | "reset" | "configure" | "handoff",
+    extra: Record<string, unknown> = {},
+  ): Promise<boolean> {
+    const parentSessionId = selected.sessionId;
+    sideThreadActionState = "submitting";
+    try {
+      const response = await fetch(
+        `/api/v1/sessions/${encodeURIComponent(parentSessionId)}/side-thread`,
+        {
+          method: "POST",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          body: JSON.stringify({ action, ...extra }),
+        },
+      );
+      if (!response.ok) throw new Error(`side thread action failed: ${response.status}`);
+      if (selected.sessionId !== parentSessionId) return true;
+      const snapshot = snapshotFromControlResult(await response.json());
+      if (snapshot) adoptSideThreadSnapshot(snapshot);
+      sideThreadActionState = "idle";
+      // A command response is authoritative enough to update the panel. A
+      // follow-up GET is only convergence; its failure must not turn an
+      // accepted daemon mutation into an apparent UI failure.
+      void loadSideThreadSnapshot(parentSessionId).catch(() => undefined);
+      return true;
+    } catch {
+      sideThreadActionState = "error";
+      return false;
+    }
+  }
+
+  async function loadSideThreadSnapshot(parentSessionId: string): Promise<void> {
+    const response = await fetch(
+      `/api/v1/sessions/${encodeURIComponent(parentSessionId)}/side-thread`,
+      { headers: { accept: "application/json" } },
+    );
+    if (response.status === 404) {
+      sideThread = null;
+      sideThreadState = "missing";
+      return;
+    }
+    if (!response.ok) throw new Error(`side thread request failed: ${response.status}`);
+    sideThread = (await response.json()) as SparkSideThreadSnapshot;
+    adoptSideThreadSnapshot(sideThread);
+    sideThreadState = "idle";
+  }
+
+  function adoptSideThreadSnapshot(snapshot: SparkSideThreadSnapshot): void {
+    sideThread = snapshot;
+    sideThreadMode = snapshot.mode;
+    sideThreadProvider = snapshot.modelOverride?.providerName ?? "";
+    sideThreadModel = snapshot.modelOverride?.modelId ?? "";
+    sideThreadThinking = snapshot.thinkingOverride ?? "";
+  }
+
+  function snapshotFromControlResult(value: unknown): SparkSideThreadSnapshot | null {
+    const candidate =
+      value && typeof value === "object" && "snapshot" in value
+        ? (value as { snapshot?: unknown }).snapshot
+        : value;
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      !("parentSessionId" in candidate) ||
+      typeof candidate.parentSessionId !== "string"
+    ) {
+      return null;
+    }
+    return candidate as SparkSideThreadSnapshot;
+  }
+
+  function idempotencyKey(fingerprint: string): string {
+    const existing = sideThreadIdempotencyKeys.get(fingerprint);
+    if (existing) return existing;
+    const key = crypto.randomUUID();
+    sideThreadIdempotencyKeys.set(fingerprint, key);
+    return key;
+  }
+
+  function clearIdempotencyKey(fingerprint: string): void {
+    sideThreadIdempotencyKeys.delete(fingerprint);
+  }
+
+  function submitSideThread(): void {
+    if (!sideThread || !sideThreadPrompt.trim()) return;
+    const fingerprint = `submit:${sideThread.parentSessionId}:${sideThread.generation}:${sideThreadPrompt.trim()}`;
+    void controlSideThread("submit", {
+      expectedGeneration: sideThread.generation,
+      prompt: sideThreadPrompt,
+      idempotencyKey: idempotencyKey(fingerprint),
+    }).then((accepted) => {
+      if (accepted) {
+        clearIdempotencyKey(fingerprint);
+        sideThreadPrompt = "";
+      }
+    });
+  }
+
+  function configureSideThread(): void {
+    if (!sideThread) return;
+    if (!sideThreadModelPairIsValid()) {
+      sideThreadActionState = "error";
+      return;
+    }
+    void controlSideThread("configure", {
+      expectedGeneration: sideThread.generation,
+      modelOverride:
+        sideThreadProvider.trim() && sideThreadModel.trim()
+          ? { providerName: sideThreadProvider.trim(), modelId: sideThreadModel.trim() }
+          : null,
+      thinkingOverride: sideThreadThinking || null,
+    });
+  }
+
+  function sideThreadModelPairIsValid(): boolean {
+    return Boolean(sideThreadProvider.trim()) === Boolean(sideThreadModel.trim());
+  }
+
+  function handoffSideThread(kind: "full" | "summary"): void {
+    if (!sideThread?.headExchangeId) return;
+    const instructions = sideThreadHandoffInstructions.trim();
+    const fingerprint = `handoff:${sideThread.parentSessionId}:${sideThread.generation}:${sideThread.headExchangeId}:${kind}:${instructions}`;
+    void controlSideThread("handoff", {
+      expectedGeneration: sideThread.generation,
+      expectedHeadExchangeId: sideThread.headExchangeId,
+      kind,
+      ...(instructions ? { instructions } : {}),
+      idempotencyKey: idempotencyKey(fingerprint),
+    }).then((accepted) => {
+      if (accepted) {
+        clearIdempotencyKey(fingerprint);
+        sideThreadHandoffInstructions = "";
+      }
+    });
   }
 </script>
 
@@ -132,13 +277,26 @@
   <details class="side-thread-panel" ontoggle={loadSideThread}>
     <summary>
       <span>{messages.sideThread.title}</span>
-      <span class="readonly-badge">{messages.sideThread.readOnlyBadge}</span>
     </summary>
     <p class="side-thread-description">{messages.sideThread.description}</p>
     {#if sideThreadState === "loading"}
       <p class="muted">{messages.sideThread.loading}</p>
     {:else if sideThreadState === "missing"}
       <p class="muted">{messages.sideThread.missing}</p>
+      <div class="side-thread-actions">
+        <label>
+          {messages.sideThread.modeLabel}
+          <select bind:value={sideThreadMode} disabled={sideThreadActionState === "submitting"}>
+            <option value="contextual">contextual</option>
+            <option value="tangent">tangent</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={sideThreadActionState === "submitting"}
+          onclick={() => void controlSideThread("ensure", { mode: sideThreadMode })}
+        >{messages.sideThread.open}</button>
+      </div>
     {:else if sideThreadState === "error"}
       <p class="muted">{messages.sideThread.unavailable}</p>
     {:else if sideThread}
@@ -167,6 +325,62 @@
       {/if}
       {#if sideThread.projectionTruncated}
         <p class="muted">{messages.sideThread.projectionTruncated}</p>
+      {/if}
+      <div class="side-thread-actions">
+        <label>
+          {messages.sideThread.modeLabel}
+          <select bind:value={sideThreadMode} disabled={sideThreadActionState === "submitting"}>
+            <option value="contextual">contextual</option>
+            <option value="tangent">tangent</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={sideThreadActionState === "submitting"}
+          onclick={() => {
+            if (!sideThread) return;
+            void controlSideThread("reset", {
+              expectedGeneration: sideThread.generation,
+              mode: sideThreadMode,
+            });
+          }}
+        >{messages.sideThread.reset}</button>
+      </div>
+      <label class="side-thread-composer">
+        {messages.sideThread.promptLabel}
+        <textarea bind:value={sideThreadPrompt} placeholder={messages.sideThread.promptPlaceholder}></textarea>
+      </label>
+      <button
+        type="button"
+        disabled={sideThreadActionState === "submitting" || !sideThreadPrompt.trim()}
+        onclick={submitSideThread}
+      >{messages.sideThread.send}</button>
+      <div class="side-thread-configuration">
+        <label>{messages.sideThread.providerLabel}<input bind:value={sideThreadProvider} /></label>
+        <label>{messages.sideThread.modelIdLabel}<input bind:value={sideThreadModel} /></label>
+        <label>
+          {messages.sideThread.thinkingLabel}
+          <select bind:value={sideThreadThinking}>
+            <option value="">{messages.sideThread.inherited}</option>
+            <option value="off">off</option><option value="minimal">minimal</option>
+            <option value="low">low</option><option value="medium">medium</option>
+            <option value="high">high</option><option value="xhigh">xhigh</option>
+          </select>
+        </label>
+        <button type="button" disabled={sideThreadActionState === "submitting" || !sideThreadModelPairIsValid()} onclick={configureSideThread}>{messages.sideThread.configure}</button>
+      </div>
+      {#if sideThread.headExchangeId}
+        <label class="side-thread-composer">
+          {messages.sideThread.handoffInstructionsLabel}
+          <textarea bind:value={sideThreadHandoffInstructions} placeholder={messages.sideThread.handoffInstructionsPlaceholder}></textarea>
+        </label>
+        <div class="side-thread-actions">
+          <button type="button" disabled={sideThreadActionState === "submitting"} onclick={() => handoffSideThread("full")}>{messages.sideThread.handoffFull}</button>
+          <button type="button" disabled={sideThreadActionState === "submitting"} onclick={() => handoffSideThread("summary")}>{messages.sideThread.handoffSummary}</button>
+        </div>
+      {/if}
+      {#if sideThreadActionState === "error"}
+        <p class="muted">{messages.sideThread.actionFailed}</p>
       {/if}
     {/if}
   </details>
@@ -202,21 +416,57 @@
     justify-content: space-between;
   }
 
-  .readonly-badge {
-    background: var(--color-surface-soft);
-    border-radius: 999px;
-    color: var(--color-ink-subtle);
-    font-size: 10px;
-    font-weight: 650;
-    padding: 3px 7px;
-    text-transform: uppercase;
-  }
-
   .side-thread-description {
     color: var(--color-ink-subtle);
     font-size: 12px;
     line-height: 1.5;
     margin: 0;
+  }
+
+  .side-thread-actions,
+  .side-thread-configuration {
+    align-items: end;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .side-thread-actions label,
+  .side-thread-configuration label,
+  .side-thread-composer {
+    color: var(--color-ink-subtle);
+    display: grid;
+    font-size: 11px;
+    font-weight: 650;
+    gap: 4px;
+  }
+
+  .side-thread-actions button,
+  .side-thread-configuration button,
+  .side-thread-panel > button {
+    background: var(--color-accent, var(--color-ink));
+    border: 0;
+    border-radius: 6px;
+    color: var(--color-on-accent, white);
+    cursor: pointer;
+    font: inherit;
+    padding: 7px 10px;
+  }
+
+  .side-thread-panel input,
+  .side-thread-panel select,
+  .side-thread-panel textarea {
+    background: var(--color-surface, white);
+    border: 1px solid var(--color-border, var(--color-surface-soft));
+    border-radius: 6px;
+    color: var(--color-ink);
+    font: inherit;
+    padding: 6px 8px;
+  }
+
+  .side-thread-composer textarea {
+    min-height: 72px;
+    resize: vertical;
   }
 
   .side-thread-grid {

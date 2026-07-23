@@ -35,5 +35,5 @@ jobs:
 
       - run: pnpm run check
 
-      - name: Source distribution smoke
-        run: pnpm run test:source-distribution
+      - name: Npm product smoke
+        run: pnpm run test:npm-product

@@ -33,7 +33,7 @@ spark <plane> <resource> <verb> [args...]
 | cross-surface schemas and semantics | `spark-protocol` | each transport performs validation and translation only |
 | projects, tasks, goals, reviews, workflows, and evidence coordination | `spark-cockpit-coordination` and the capability package named for the domain | Cockpit routes and UI are replaceable projections |
 | terminal presentation and interaction | `apps/spark-tui` behind `spark-tui` / `spark-text` boundaries | no durable business-state ownership |
-| Pi product compatibility | `pi-extension` and `pi-btw`, frozen | may consume Spark foundation packages; must not become an owner for new native behavior |
+| Pi product compatibility | `pi-extension`, frozen | may consume Spark foundation packages; must not become an owner for new native behavior |
 
 Generated UI is artifact-backed data, never executable MDX, JS, JSX, imports, exports, or raw HTML. Public action-tool names remain canonical. Serialized `.spark/` markers change only through an explicit, idempotent migration with compatibility tests.
 
@@ -43,7 +43,7 @@ The default place for a change is inside its existing owner. Create another work
 
 Before adding a second adapter or surface, first move shared validation and semantics into the existing protocol/owner API. Transports remain thin, projections must be rebuildable, and caches cannot become admission or execution truth. Compatibility adapters have written exit criteria and do not receive new product behavior.
 
-`pnpm run check:architecture` is the mechanical growth ratchet. Its current ceilings are 39 `apps/*` + `packages/*` workspaces and 3,000 lines per production source file, and it rejects additions to the frozen root Pi extension manifest. These are ceilings, not design targets: an oversized module should still be split at a domain/adapter boundary before it reaches the limit. Raising a ceiling requires an architecture rationale in the same change; deleting a package or Pi manifest entry never requires lowering a frozen allowlist first.
+`pnpm run check:architecture` is the mechanical growth ratchet. During the early product phase its ceilings are 48 `apps/*` + `packages/*` workspaces and 4,000 lines per production source file, and it rejects additions to the frozen root Pi extension manifest. The headroom allows a small number of evidence-backed owner boundaries without pinning the ceiling to today's count. These remain ceilings, not design targets: an oversized module should still be split at a domain/adapter boundary before it reaches the limit. Raising a ceiling requires an architecture rationale in the same change; deleting a package or Pi manifest entry never requires lowering a frozen allowlist first.
 
 ### Open-source adoption
 
@@ -60,11 +60,11 @@ Prefer finishing the existing foundations before introducing overlapping framewo
 
 ## Distribution model
 
-Spark v0.1 is repository/source-distributed. Every workspace is private, no workspace declares `publishConfig`, and the root has no registry publish command. A checkout installs, checks, builds, and runs the complete product; Cockpit and its implementation packages are not a separate registry surface.
+Spark v0.1 has one public npm product: `@zendev-lab/spark`, exposing the `spark` executable. Source workspaces remain private implementation and owner boundaries; apps, Cockpit-private packages, protocol/runtime packages, experiments, and compatibility facades are not independently published merely because the product uses them.
 
-This is an explicit fail-closed decision, not a claim that TypeScript source packages are publish-ready. The current CLI, TUI, and shared packages expose `.ts` files, while Node refuses type stripping inside `node_modules`; publishing the previous hand-maintained subset would also omit dynamic assets such as daemon database migrations. `pnpm run check:distribution` prevents a package from becoming public accidentally.
+The npm package is generated from the checked source tree and contains compiled JavaScript plus the complete runtime closure: dispatcher, native TUI, daemon, database migrations, and built Cockpit assets. It must not execute `.ts` from `node_modules`, depend on an unpublished workspace package, discover a sibling checkout, or require the repository's `PATH`. The source root may remain private as a monorepo safety boundary; the generated package manifest is the public release contract.
 
-`pnpm run test:source-distribution` builds the checkout, starts the built daemon with bundled migrations, verifies its process identity through the source dispatcher, exercises the TUI entry point, and probes the built Cockpit health route under an isolated `SPARK_HOME`; `ci-verify` runs this smoke after the full check. A future registry distribution must first define compiled JavaScript/declaration outputs, include runtime assets, and pass a clean package-only install/start smoke; individual packages must not be made public ad hoc.
+`pnpm run check:distribution` validates the explicit public-product/internal-workspace classification and the generated manifest contract. `pnpm run test:npm-product` packs the generated product, installs the tarball in a clean temporary project, and probes dispatcher help, native TUI help, daemon lifecycle/migrations, and Cockpit health under an isolated `SPARK_HOME`. CI must pass this package-only smoke before publication; `pnpm run publish` publishes only that verified generated directory.
 
 ## Canonical examples
 
