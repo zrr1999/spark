@@ -121,7 +121,7 @@ async function startSparkNewProject(
 
   await saveCurrentProjectRef(ctx.cwd, ctx, result.projectRef as ProjectRef);
   await deps.refreshSparkWidget(ctx.cwd, ctx);
-  deps.ensureWorkflowRunManager(ctx.cwd, ctx);
+  await deps.ensureWorkflowRunManager(ctx.cwd, ctx);
 
   if (options.enterPhase === "plan") {
     const graph = await loadSparkGraph(ctx.cwd, ctx);

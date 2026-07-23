@@ -17,6 +17,7 @@
     "./command-delivery": "./src/command-delivery.ts",
     "./command-events": "./src/command-events.ts",
     "./command-sources": "./src/command-sources.ts",
+    "./driver": "./src/driver.ts",
     "./errors": "./src/errors.ts",
     "./model-control": "./src/model-control.ts",
     "./refs": "./src/refs.ts",

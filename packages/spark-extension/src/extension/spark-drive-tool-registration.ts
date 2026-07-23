@@ -22,8 +22,10 @@ import {
   writeSessionRepro,
 } from "./spark-session-repro.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import { type SparkDaemonDriverControl } from "./spark-daemon-driver-client.ts";
 
 interface SparkDriveToolDeps {
+  driverControl: SparkDaemonDriverControl;
   ensureSparkStateForActiveWorkspace: (cwd: string, ctx?: SparkToolContext) => Promise<unknown>;
   refreshSparkWidget?: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
 }
@@ -88,8 +90,14 @@ export function registerSparkDriveTool(
         };
       }
 
+      const ownerSessionId = requireDriveOwnerSessionId(ctx);
+      // Availability is checked before mutating workspace state. There is no
+      // frontend fallback when the daemon control plane is unavailable.
+      await deps.driverControl.list({ ownerSessionId, includeStopped: false });
+
       if (action === "stop") {
         const stoppedDrive = requestedDrive ?? before.mode;
+        await stopMatchingForegroundDriver(deps.driverControl, before, stoppedDrive);
         if (stoppedDrive === "goal") await clearSessionGoal(cwd, ctx);
         if (stoppedDrive === "loop") await clearSessionLoop(cwd, ctx);
         if (stoppedDrive === "repro") await clearSessionRepro(cwd, ctx);
@@ -105,6 +113,7 @@ export function registerSparkDriveTool(
       if (!requestedDrive) throw new Error("drive is required for start/switch");
 
       if (requestedDrive === "assist") {
+        await stopAllForegroundDrivers(deps.driverControl, ownerSessionId, "switched to assist");
         await clearSessionGoal(cwd, ctx);
         await clearSessionLoop(cwd, ctx);
         await clearSessionRepro(cwd, ctx);
@@ -121,11 +130,7 @@ export function registerSparkDriveTool(
             ctx,
           );
         } else if (objective && existingRepro.objective !== objective) {
-          await writeSessionRepro(
-            cwd,
-            { ...existingRepro, objective, updatedAt: nowIso(), retryState: undefined },
-            ctx,
-          );
+          await writeSessionRepro(cwd, { ...existingRepro, objective, updatedAt: nowIso() }, ctx);
         }
       } else if (requestedDrive === "goal") {
         const objective = resolveDriveObjective(params.objective, graph, project, "goal");
@@ -140,6 +145,7 @@ export function registerSparkDriveTool(
       }
 
       const after = await driveSnapshot(cwd, ctx, { ignoreActiveLens: true });
+      await startSelectedDriver(deps.driverControl, cwd, ownerSessionId, requestedDrive, after);
       ctx.sparkActiveLens = sparkActiveLens(activeLensPhaseForDrive(ctx, after), after.mode);
       await deps.refreshSparkWidget?.(cwd, ctx);
       return driveMutationResult(
@@ -150,6 +156,106 @@ export function registerSparkDriveTool(
       );
     },
   });
+}
+
+async function stopMatchingForegroundDriver(
+  driverControl: SparkDaemonDriverControl,
+  snapshot: Awaited<ReturnType<typeof driveSnapshot>>,
+  drive: SparkDriveMode,
+): Promise<void> {
+  const driverId =
+    drive === "goal"
+      ? snapshot.goal?.goalId
+      : drive === "loop"
+        ? snapshot.loop?.loopId
+        : drive === "repro"
+          ? snapshot.repro?.reproId
+          : undefined;
+  if (driverId) {
+    await driverControl.stop({ driverId, reason: `drive ${drive} stopped` });
+  }
+}
+
+async function stopAllForegroundDrivers(
+  driverControl: SparkDaemonDriverControl,
+  ownerSessionId: string,
+  reason: string,
+): Promise<void> {
+  const { drivers } = await driverControl.list({ ownerSessionId, includeStopped: false });
+  for (const driver of drivers) {
+    if (
+      driver.kind !== "workflow" &&
+      driver.kind !== "session_todo" &&
+      driver.status !== "stopped"
+    ) {
+      await driverControl.stop({ driverId: driver.driverId, reason });
+    }
+  }
+}
+
+async function startSelectedDriver(
+  driverControl: SparkDaemonDriverControl,
+  cwd: string,
+  ownerSessionId: string,
+  drive: SparkDriveMode,
+  snapshot: Awaited<ReturnType<typeof driveSnapshot>>,
+): Promise<void> {
+  if (drive === "assist") return;
+  if (drive === "goal" && snapshot.goal) {
+    await driverControl.start({
+      driverId: snapshot.goal.goalId,
+      kind: "goal",
+      ownerSessionId,
+      continuity: "session",
+      cwd,
+      prompt: [
+        "Continue the daemon-owned Spark goal by one concrete turn.",
+        `Goal: ${snapshot.goal.objective}`,
+        'When fully verified, call goal({ action: "complete", reason, requirements, validationRuns, unresolved }) for reviewer gating.',
+      ].join("\n"),
+      reason: "goal drive selected",
+    });
+    return;
+  }
+  if (drive === "loop" && snapshot.loop) {
+    await driverControl.start({
+      driverId: snapshot.loop.loopId,
+      kind: "loop",
+      ownerSessionId,
+      continuity: "session",
+      cwd,
+      prompt: [
+        "Continue the daemon-owned Spark loop by one concrete turn.",
+        `Loop objective: ${snapshot.loop.objective}`,
+        'Before ending, call loop({ action: "schedule", delayMs, reason }); otherwise the driver becomes dormant.',
+      ].join("\n"),
+      reason: "loop drive selected",
+    });
+    return;
+  }
+  if (drive === "repro" && snapshot.repro) {
+    await driverControl.start({
+      driverId: snapshot.repro.reproId,
+      kind: "repro",
+      ownerSessionId,
+      continuity: "session",
+      cwd,
+      prompt: [
+        "Advance the daemon-owned Spark reproduction contract by one evidence-backed turn.",
+        snapshot.repro.objective ? `Objective: ${snapshot.repro.objective}` : undefined,
+        'Use repro({ action: "status" }) and persist proof before advancing.',
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
+      reason: "repro drive selected",
+    });
+  }
+}
+
+function requireDriveOwnerSessionId(ctx: SparkToolContext): string {
+  const ownerSessionId = ctx.sessionId?.trim();
+  if (!ownerSessionId) throw new Error("Spark drive control requires a daemon-owned session");
+  return ownerSessionId;
 }
 
 function activeLensPhaseForDrive(

@@ -20,6 +20,8 @@ import { registerSparkGoalTool } from "./spark-goal-tool-registration.ts";
 import { registerSparkLoopTool } from "./spark-loop-tool-registration.ts";
 import { registerSparkReproTool } from "./spark-repro-tool-registration.ts";
 import { registerSparkDriveTool } from "./spark-drive-tool-registration.ts";
+import { registerSparkDriverTool } from "./spark-driver-tool-registration.ts";
+import { registerSparkWorkflowDriverTool } from "./spark-workflow-driver-tool-registration.ts";
 import { registerSparkStatusTool } from "./spark-status-tool-registration.ts";
 import { registerSparkPlanTasksTool } from "./spark-plan-tasks-tool-registration.ts";
 import { registerSparkProjectTools } from "./spark-project-tool-registration.ts";
@@ -51,8 +53,14 @@ import {
 import { registerSparkReflectionCommands } from "./reflection-in-session-scheduler.ts";
 import { sparkActiveLensPhase } from "./spark-drive-state.ts";
 import { loadSessionGoal } from "./spark-session-goals.ts";
+import {
+  sparkDaemonDriverControl,
+  type SparkDaemonDriverControl,
+} from "./spark-daemon-driver-client.ts";
 
 interface SparkProductFacadeApi extends SparkCommandApi {
+  /** Host/test override; production defaults to the daemon local RPC client. */
+  driverControl?: SparkDaemonDriverControl;
   registerTool?(config: SparkRegisteredToolConfig): void;
   registerInternalTool?(config: SparkRegisteredToolConfig): void;
   registerShortcut?(
@@ -81,6 +89,7 @@ interface SparkProductFacadeApi extends SparkCommandApi {
 }
 
 export default function sparkExtension(pi: SparkProductFacadeApi) {
+  const driverControl = pi.driverControl ?? sparkDaemonDriverControl;
   const widgetController = new SparkWidgetController();
   const roleRunTuiController = new SparkRoleRunTuiController(pi);
 
@@ -92,6 +101,7 @@ export default function sparkExtension(pi: SparkProductFacadeApi) {
   const workflowRunManagerController = new SparkWorkflowRunManagerController({
     refreshSparkWidget,
     piCommand: () => pi.getPiCommand?.(),
+    driverControl,
   });
 
   registerSparkAskAutoAnswerProvider("spark-goal-reviewer", async (request, rawCtx) => {
@@ -167,6 +177,7 @@ export default function sparkExtension(pi: SparkProductFacadeApi) {
       eventHandlers.queueSparkAgentInstruction(ctx, instruction, options),
     refreshSparkWidget,
     ensureWorkflowRunManager: (cwd, ctx) => workflowRunManagerController.ensure(cwd, ctx),
+    driverControl,
     createReviewerRunner,
   });
   registerSparkReflectionCommands(pi);
@@ -193,18 +204,24 @@ export default function sparkExtension(pi: SparkProductFacadeApi) {
   registerSparkPlanTasksTool(registerSparkImplementationTool, { refreshSparkWidget });
 
   registerSparkGoalTool(registerSparkTool, {
+    driverControl,
     refreshSparkWidget,
     syncAskAutoAnswerPolicy: (ctx) => eventHandlers.syncGoalAskAutoAnswerPolicy(ctx),
     createReviewerRunner,
   });
 
-  registerSparkLoopTool(registerSparkTool, { refreshSparkWidget });
+  registerSparkLoopTool(registerSparkTool, { driverControl, refreshSparkWidget });
 
-  registerSparkReproTool(registerSparkTool, { refreshSparkWidget });
+  registerSparkReproTool(registerSparkTool, { driverControl, refreshSparkWidget });
 
   registerSparkDriveTool(registerSparkTool, {
+    driverControl,
     ensureSparkStateForActiveWorkspace,
     refreshSparkWidget,
+  });
+  registerSparkDriverTool(registerSparkTool);
+  registerSparkWorkflowDriverTool(registerSparkImplementationTool, {
+    workflowRunManager: workflowRunManagerController,
   });
 
   registerSparkPhaseTool(registerSparkTool);

@@ -86,6 +86,20 @@ export function createLocalRpcOrpcRouter(input: CreateLocalRpcOrpcRouterOptions)
         ),
       },
     },
+    driver: {
+      start: os.driver.start.handler(async ({ input: params }) => invoke("driver.start", params)),
+      status: os.driver.status.handler(async ({ input: params }) =>
+        invoke("driver.status", params),
+      ),
+      stop: os.driver.stop.handler(async ({ input: params }) => invoke("driver.stop", params)),
+      restart: os.driver.restart.handler(async ({ input: params }) =>
+        invoke("driver.restart", params),
+      ),
+      wake: os.driver.wake.handler(async ({ input: params }) => invoke("driver.wake", params)),
+      schedule: os.driver.schedule.handler(async ({ input: params }) =>
+        invoke("driver.schedule", params),
+      ),
+    },
     workspace: {
       list: os.workspace.list.handler(async () => invoke("workspace.list")),
       register: os.workspace.register.handler(async ({ input: params }) =>

@@ -348,12 +348,18 @@ importers:
       '@zendev-lab/spark-i18n':
         specifier: workspace:^
         version: link:../../packages/spark-i18n
+      '@zendev-lab/spark-loop':
+        specifier: workspace:^
+        version: link:../../packages/spark-loop
       '@zendev-lab/spark-modes':
         specifier: workspace:^
         version: link:../../packages/spark-modes
       '@zendev-lab/spark-protocol':
         specifier: workspace:^
         version: link:../../packages/spark-protocol
+      '@zendev-lab/spark-repro':
+        specifier: workspace:^
+        version: link:../../packages/spark-repro
       '@zendev-lab/spark-retry':
         specifier: workspace:^
         version: link:../../packages/spark-retry
@@ -375,6 +381,9 @@ importers:
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:../../packages/spark-turn
+      '@zendev-lab/spark-workflows':
+        specifier: workspace:^
+        version: link:../../packages/spark-workflows
       ws:
         specifier: 'catalog:'
         version: 8.21.0
@@ -726,6 +735,9 @@ importers:
       '@zendev-lab/spark-core':
         specifier: workspace:^
         version: link:../spark-core
+      '@zendev-lab/spark-daemon-client':
+        specifier: workspace:^
+        version: link:../spark-daemon-client
       '@zendev-lab/spark-host':
         specifier: workspace:^
         version: link:../spark-host
@@ -741,6 +753,9 @@ importers:
       '@zendev-lab/spark-modes':
         specifier: workspace:^
         version: link:../spark-modes
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:^
+        version: link:../spark-protocol
       '@zendev-lab/spark-repro':
         specifier: workspace:^
         version: link:../spark-repro

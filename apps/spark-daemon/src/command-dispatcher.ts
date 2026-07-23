@@ -230,6 +230,16 @@ function localRpcRoute(method: string, params: unknown): Partial<SparkCommand["r
   if (method.startsWith("session.") && typeof params.sessionId === "string") {
     return { sessionId: params.sessionId };
   }
+  if (method.startsWith("driver.")) {
+    return {
+      ...(typeof params.ownerSessionId === "string" ? { sessionId: params.ownerSessionId } : {}),
+      ...(typeof params.workspaceBindingId === "string"
+        ? { workspaceBindingId: params.workspaceBindingId }
+        : {}),
+      ...(typeof params.workspaceId === "string" ? { workspaceId: params.workspaceId } : {}),
+      ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}),
+    };
+  }
   if (method.startsWith("side-thread.") && typeof params.parentSessionId === "string") {
     return { sessionId: params.parentSessionId };
   }

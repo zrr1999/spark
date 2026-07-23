@@ -48,6 +48,7 @@ import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import { SparkWorkflowRunManagerController } from "../packages/spark-extension/src/extension/spark-workflow-run-manager.ts";
 import { JsonStoreFormatError } from "../packages/spark-extension/src/extension/json-store.ts";
 import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
+import type { SparkDaemonDriverControl } from "../packages/spark-extension/src/extension/spark-daemon-driver-client.ts";
 import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
@@ -148,6 +149,9 @@ type SparkHostApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkHostApiForTest["registerTool"]>>[0];
 type SparkToolResult = Awaited<ReturnType<SparkToolConfig["execute"]>>;
 type TestNotification = { message: string; level?: "info" | "warning" | "error" | "success" };
+type TestSparkDaemonDriverControl = SparkDaemonDriverControl & {
+  drivers: Map<string, Awaited<ReturnType<SparkDaemonDriverControl["start"]>>["driver"]>;
+};
 
 function executionReadyPlan(objective: string): TaskPlan {
   return {
@@ -664,6 +668,7 @@ test("Spark tool normalizer groups reject invalid explicit parameters instead of
 
 type TestSparkContext = {
   cwd: string;
+  sessionId: string;
   sendUserMessage?: (content: string) => Promise<void>;
   sessionManager: {
     getSessionFile: () => string | undefined;
@@ -766,7 +771,7 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     assert.ok(executeCommand, "missing /implement command");
     await executeCommand.handler("Finish the direct execution task", initializedCtx);
     assert.equal(initializedRun.messages.length, 0);
-    assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
+    assert.equal(activeTestDriver(initializedRun, "implement")?.status, "scheduled");
     assert.deepEqual(initializedCtx.sparkActiveLens, {
       phase: "implement",
       drive: "assist",
@@ -775,7 +780,7 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     initializedCtx.ui.select = async () =>
       assert.fail("/implement should not open a canned implement-strategy ask");
     await executeCommand.handler("keep going until done", initializedCtx);
-    assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-mode-request");
+    assert.match(activeTestDriver(initializedRun, "implement")?.reason ?? "", /implement/u);
     const askedGoalState = JSON.parse(
       await readFile(currentProjectStatePath(initializedDir, initializedCtx), "utf8"),
     ) as { projectRef?: string; executionMode?: unknown };
@@ -794,7 +799,7 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     assert.ok(initializedRun.commands.get("workflow:research"));
     assert.ok(initializedRun.commands.get("workflow:review"));
     await goalCommand.handler("Finish the queue until done", initializedCtx);
-    assert.equal(initializedRun.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.match(activeTestDriver(initializedRun, "goal")?.reason ?? "", /Finish the queue/u);
     const goalSessionStateRaw = await readFile(
       sessionGoalPath(initializedDir, initializedCtx),
       "utf8",
@@ -810,17 +815,13 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     assert.equal(sessionAfterGoal.executionMode, undefined);
 
     await goalCommand.handler("", initializedCtx);
-    const inferredGoalMessage = initializedRun.customMessages.at(-1);
-    assert.equal(inferredGoalMessage?.customType, "spark-goal-request");
-    assert.equal(inferredGoalMessage?.details?.purpose, "foreground-goal-tick");
+    assert.equal(activeTestDriver(initializedRun, "goal")?.status, "scheduled");
     assert.equal(initializedRun.commands.get("workflow:ready"), undefined);
 
     const messagesBeforeLoop = initializedRun.customMessages.length;
     await loopCommand.handler("Continue the queue without completing", initializedCtx);
-    assert.equal(initializedRun.customMessages.length, messagesBeforeLoop + 1);
-    const loopMessage = initializedRun.customMessages.at(-1);
-    assert.equal(loopMessage?.customType, "spark-loop-request");
-    assert.equal(loopMessage?.details?.purpose, "foreground-loop-tick");
+    assert.equal(initializedRun.customMessages.length, messagesBeforeLoop);
+    assert.equal(activeTestDriver(initializedRun, "loop")?.status, "scheduled");
     const activeLoop = await loadSessionLoop(initializedDir, initializedCtx);
     assert.equal(activeLoop?.objective, "Continue the queue without completing");
     assert.equal(activeLoop?.status, "active");
@@ -949,11 +950,12 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     assert.ok(emptyGoalCommand, "missing /goal command");
     assert.equal(emptyRun.commands.get("workflow:goal"), undefined);
     await emptyGoalCommand.handler("", emptyCtx);
-    assert.equal(emptyRun.customMessages.length, 1);
+    assert.equal(emptyRun.customMessages.length, 0);
+    assert.match(activeTestDriver(emptyRun, "goal")?.driverId ?? "", /^goal-infer:/u);
     const emptyWorkflowCommand = emptyRun.commands.get("workflow:research");
     assert.ok(emptyWorkflowCommand, "missing /workflow:research command");
     await emptyWorkflowCommand.handler("Investigate standalone workflow usage", emptyCtx);
-    assert.equal(emptyRun.customMessages.length, 2);
+    assert.equal(emptyRun.customMessages.length, 1);
     assert.equal(emptyRun.customMessages.at(-1)?.customType, "spark-mode-request");
   } finally {
     await rm(existingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
@@ -1004,8 +1006,8 @@ test("/goal dispatches through an externally owned command turn bridge", async (
 
     await goalCommand.handler("Trace the daemon goal bridge", ctx);
 
-    assert.equal(forwarded.length, 1);
-    assert.match(forwarded[0] ?? "", /Trace the daemon goal bridge/u);
+    assert.equal(forwarded.length, 0);
+    assert.match(activeTestDriver(run, "goal")?.reason ?? "", /Trace the daemon goal bridge/u);
     assert.equal(run.customMessages.length, 0);
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.objective, "Trace the daemon goal bridge");
@@ -1552,7 +1554,7 @@ test("/implement continues by prompting for the next ready task without auto-ans
     const executeCommand = run.commands.get("implement");
     assert.ok(executeCommand, "missing /implement command");
     await executeCommand.handler("work through the ready queue", ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
+    assert.equal(activeTestDriver(run, "implement")?.status, "scheduled");
     assert.deepEqual(ctx.sparkActiveLens, {
       phase: "implement",
       drive: "assist",
@@ -1596,11 +1598,7 @@ test("/implement continues by prompting for the next ready task without auto-ans
     );
     assert.equal(await tryConsumeSparkModeContext(run, ctx), undefined);
 
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-mode-request");
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
+    assert.equal(run.eventHandlers.has("agent_end"), false);
     assert.deepEqual(ctx.sparkActiveLens, {
       phase: "implement",
       drive: "assist",
@@ -1636,7 +1634,7 @@ test("/goal sets a durable session goal instead of execute-mode continuation", a
     assert.ok(goalCommand, "missing /goal command");
     assert.equal(run.commands.get("workflow:goal"), undefined);
     await goalCommand.handler("work through the ready queue until done", ctx);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(activeTestDriver(run, "goal")?.status, "scheduled");
     const goalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
       goal?: { objective?: string; status?: string };
     };
@@ -1649,7 +1647,10 @@ test("/goal sets a durable session goal instead of execute-mode continuation", a
     };
     assert.equal(sessionState.executionMode, undefined);
     assert.equal(sessionState.runMode, undefined);
-    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-start");
+    assert.match(
+      activeTestDriver(run, "goal")?.reason ?? "",
+      /work through the ready queue until done/u,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1667,26 +1668,18 @@ test("foreground drivers do not expose selected phases for research-progress obj
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    const goalMessage = run.customMessages.at(-1);
-    assert.equal(goalMessage?.customType, "spark-goal-request");
-    assert.equal(goalMessage?.details?.selectedPhase, undefined);
-    assert.match(goalMessage?.content ?? "", /Goal driver requirements/);
-    assert.match(goalMessage?.content ?? "", /Goal driver guidance/);
-    assert.match(goalMessage?.content ?? "", /never a discoverable fact/);
-    assert.match(goalMessage?.content ?? "", /run a focused probe/);
+    const goalDriver = activeTestDriver(run, "goal");
+    assert.match(goalDriver?.reason ?? "", new RegExp(objective));
     assert.doesNotMatch(
-      goalMessage?.content ?? "",
+      goalDriver?.reason ?? "",
       /Selected Spark phase|selected phase|phase requirements/,
     );
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    const loopMessage = run.customMessages.at(-1);
-    assert.equal(loopMessage?.customType, "spark-loop-request");
-    assert.equal(loopMessage?.details?.selectedPhase, undefined);
-    assert.match(loopMessage?.content ?? "", /Loop driver requirements/);
-    assert.doesNotMatch(loopMessage?.content ?? "", /Selected Spark phase|selected phase/);
+    const loopDriver = activeTestDriver(run, "loop");
+    assert.match(loopDriver?.reason ?? "", /loop started/u);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1704,24 +1697,17 @@ test("foreground drivers keep pure research objectives driver-owned", async () =
     const goalCommand = run.commands.get("goal");
     assert.ok(goalCommand, "missing /goal command");
     await goalCommand.handler(objective, ctx);
-    const goalMessage = run.customMessages.at(-1);
-    assert.equal(goalMessage?.customType, "spark-goal-request");
-    assert.equal(goalMessage?.details?.selectedPhase, undefined);
-    assert.match(goalMessage?.content ?? "", /Goal driver requirements/);
-    assert.match(goalMessage?.content ?? "", /Goal driver guidance/);
+    const goalDriver = activeTestDriver(run, "goal");
+    assert.match(goalDriver?.reason ?? "", new RegExp(objective));
     assert.doesNotMatch(
-      goalMessage?.content ?? "",
+      goalDriver?.reason ?? "",
       /Selected Spark phase|selected phase|phase requirements/,
     );
 
     const loopCommand = run.commands.get("loop");
     assert.ok(loopCommand, "missing /loop command");
     await loopCommand.handler(objective, ctx);
-    const loopMessage = run.customMessages.at(-1);
-    assert.equal(loopMessage?.customType, "spark-loop-request");
-    assert.equal(loopMessage?.details?.selectedPhase, undefined);
-    assert.match(loopMessage?.content ?? "", /Loop driver requirements/);
-    assert.doesNotMatch(loopMessage?.content ?? "", /Selected Spark phase|selected phase/);
+    assert.equal(activeTestDriver(run, "loop")?.status, "scheduled");
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1740,15 +1726,15 @@ test("/goal without objective dispatches an agent infer instruction without writ
 
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal, undefined);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.details?.purpose, "empty-goal-infer");
+    const inferDriver = activeTestDriver(run, "goal");
+    assert.match(inferDriver?.driverId ?? "", /^goal-infer:/u);
+    assert.match(inferDriver?.reason ?? "", /infer goal/u);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
 
-test("goal status surfaces lifecycle actions, usage, review, and retry state", async () => {
+test("goal status surfaces lifecycle actions, usage, and review state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-goal-status-polish-"));
   try {
     await writeEmptySparkProject(dir);
@@ -1770,11 +1756,6 @@ test("goal status surfaces lifecycle actions, usage, review, and retry state", a
         blockers: ["missing action guidance"],
         reviewedAt: "2026-06-10T00:00:00.000Z",
       },
-      retryState: {
-        consecutiveFailures: 1,
-        lastFailureAt: "2026-06-10T00:00:00.000Z",
-        nextDelayMs: 30_000,
-      },
     });
 
     const status = await executeSparkTool(run.tools, "goal", ctx, { action: "status" });
@@ -1786,7 +1767,7 @@ test("goal status surfaces lifecycle actions, usage, review, and retry state", a
     assert.doesNotMatch(statusText, /Usage:/);
     assert.doesNotMatch(statusText, /tokens/);
     assert.match(statusText, /Last review: unrecorded at 2026-06-10T00:00:00.000Z/);
-    assert.match(statusText, /Retry state: 1 failure\(s\), nextDelayMs=30000/);
+    assert.match(statusText, /Cadence and retry state are owned by the Spark daemon driver/);
     assert.match(statusText, /Current project: .* unfinishedTasks=0 readyTasks=0/);
     assert.match(statusText, /Goal\/project relationship: Goal is session-scoped/);
     assert.doesNotMatch(statusText, /project_finish/);
@@ -1838,7 +1819,7 @@ test("/goal restarts without overwriting an existing goal objective", async () =
     const goal = await loadSessionGoal(dir, ctx);
     assert.equal(goal?.status, "active");
     assert.equal(goal?.objective, "finish the original queue");
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
+    assert.equal(activeTestDriver(run, "goal")?.driverId, goal?.goalId);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
@@ -1882,157 +1863,8 @@ test("/goal handles stale inferred project goals after project work has no unfin
     assert.equal(goal?.status, "active");
     assert.equal(goal?.objective, "review 全盘代码进行改进");
     assert.equal(goal?.source, "explicit");
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(activeTestDriver(run, "goal")?.driverId, goal?.goalId);
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("session shutdown clears foreground timers without pausing active goals", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-shutdown-active-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("survive until reload", ctx);
-    assert.equal((await loadSessionGoal(dir, ctx))?.status, "active");
-
-    for (const handler of run.eventHandlers.get("session_shutdown") ?? []) {
-      await handler({ reason: "reload" }, ctx);
-    }
-
-    const reloadedGoal = await loadSessionGoal(dir, ctx);
-    assert.equal(reloadedGoal?.status, "active");
-    assert.equal(reloadedGoal?.pauseReason, undefined);
-    assert.ok(timers.every((timer) => timer.cleared));
-
-    const reloadedRun = registerSparkToolsForTest();
-    const before = timers.length;
-    for (const handler of reloadedRun.eventHandlers.get("session_start") ?? []) {
-      await handler({ reason: "reload" }, ctx);
-    }
-    assert.ok(timers.length > before, "active goals should reschedule after reload");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/loop foreground driver persists, uses loop tool scheduling, and does not call reviewer completion", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-loop-foreground-driver-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => void;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref() {},
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let reviewerCalls = 0;
-    const reviewerRunner: ReviewerRunner = {
-      async review(input: ReviewInput): Promise<ReviewerRunResult> {
-        reviewerCalls += 1;
-        return createApprovingReviewerRunner().review(input);
-      },
-    };
-    const run = registerSparkToolsForTest({ reviewerRunner });
-    await useOnlySparkProject(run.tools, ctx);
-    const loopCommand = run.commands.get("loop");
-    assert.ok(loopCommand, "missing /loop command");
-
-    await loopCommand.handler("Continue without completion review", ctx);
-    const loop = await loadSessionLoop(dir, ctx);
-    assert.equal(loop?.status, "active");
-    assert.equal(loop?.objective, "Continue without completion review");
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-loop-tick");
-    assert.equal(reviewerCalls, 0);
-
-    await executeSparkTool(run.tools, "loop", ctx, {
-      action: "schedule",
-      delayMs: 300_000,
-      reason: "periodic low-urgency follow-up",
-    });
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(reviewerCalls, 0);
-    assert.ok(
-      timers.some(
-        (timer) =>
-          typeof timer.delay === "number" &&
-          timer.delay > 299_000 &&
-          timer.delay <= 300_000 &&
-          !timer.cleared,
-      ),
-    );
-
-    const messageCountBeforeScheduledTick = run.customMessages.length;
-    timers.at(-1)?.callback();
-    await flushAsyncWork();
-    assert.ok(run.customMessages.length > messageCountBeforeScheduledTick);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-    assert.equal(reviewerCalls, 0);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -2054,74 +1886,8 @@ test("/goal start clears an existing foreground loop", async () => {
     await goalCommand.handler("Goal replaces loop", ctx);
     assert.equal(await loadSessionLoop(dir, ctx), undefined);
     assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Goal replaces loop");
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
+    assert.equal(activeTestDriver(run, "goal")?.status, "scheduled");
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("session_start schedules goal instead of loop when both persisted states exist", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-start-mutual-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => void;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref() {},
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(until?: () => boolean): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      if (until?.()) return;
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    await setSessionGoal(dir, ctx, {
-      objective: "Persisted goal wins over loop",
-      source: "explicit",
-      status: "active",
-    });
-    await setSessionLoop(dir, ctx, {
-      objective: "Persisted loop should not schedule",
-      source: "explicit",
-      status: "active",
-    });
-    const run = registerSparkToolsForTest();
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.filter((timer) => !timer.cleared).length, 1);
-    timers[0]?.callback();
-    await flushAsyncWork(() => run.customMessages.at(-1)?.customType === "spark-goal-request");
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-goal-request");
-    for (const handler of run.eventHandlers.get("session_shutdown") ?? []) {
-      await handler({}, ctx);
-    }
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -2169,1787 +1935,6 @@ test("/loop stop aliases clear plain loop state and pause is removed", async () 
     assert.equal(legacyStatus.details?.loop, null);
     assert.equal(await loadSessionLoop(dir, ctx), undefined);
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/loop foreground driver keeps retrying failures with capped backoff", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-loop-retry-budget-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => void;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref() {},
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let reviewerCalls = 0;
-    const reviewerRunner: ReviewerRunner = {
-      async review(input: ReviewInput): Promise<ReviewerRunResult> {
-        reviewerCalls += 1;
-        return createApprovingReviewerRunner().review(input);
-      },
-    };
-    const run = registerSparkToolsForTest({ reviewerRunner });
-    await useOnlySparkProject(run.tools, ctx);
-    const loopCommand = run.commands.get("loop");
-    assert.ok(loopCommand, "missing /loop command");
-    await loopCommand.handler("Retry failing loop turn", ctx);
-
-    const expectedDelays = [30_000, 60_000, 120_000, 120_000, 120_000, 120_000];
-    for (let attempt = 1; attempt <= expectedDelays.length; attempt += 1) {
-      for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-        await handler({ errorMessage: `loop failure ${attempt}`, messages: [] }, ctx);
-      }
-      const loop = await loadSessionLoop(dir, ctx);
-      assert.equal(reviewerCalls, 0);
-      assert.equal(loop?.status, "active");
-      assert.equal(loop?.retryState?.consecutiveFailures, attempt);
-      assert.equal(timers.at(-1)?.delay, expectedDelays[attempt - 1]);
-      if (attempt < expectedDelays.length) {
-        timers.at(-1)?.callback();
-        await flushAsyncWork();
-        assert.equal(run.customMessages.at(-1)?.customType, "spark-loop-request");
-      }
-    }
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop reschedules active goal on session_start", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-session-start-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  let restartedRun: ReturnType<typeof registerSparkToolsForTest> | undefined;
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const setupRun = registerSparkToolsForTest();
-    await useOnlySparkProject(setupRun.tools, ctx);
-    await executeSparkTool(setupRun.tools, "goal", ctx, {
-      action: "start",
-      objective: "Resume persisted goal after host restart",
-    });
-    assert.equal(timers.length, 0, "starting via goal tool persists state but does not schedule");
-
-    restartedRun = registerSparkToolsForTest();
-    for (const handler of restartedRun.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0]?.delay, 30_000);
-
-    const messageCountBeforeTick = restartedRun.customMessages.length;
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.ok(restartedRun.customMessages.length > messageCountBeforeTick);
-    assert.equal(isForegroundGoalTickMessage(restartedRun.customMessages.at(-1)), true);
-    assert.equal(restartedRun.customMessages.at(-1)?.display, false);
-    assert.equal(restartedRun.customMessages.at(-1)?.options?.deliverAs, "followUp");
-  } finally {
-    if (restartedRun) {
-      const ctx = testSparkContext(dir, "main");
-      for (const handler of restartedRun.eventHandlers.get("session_shutdown") ?? []) {
-        await handler({}, ctx);
-      }
-    }
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop does not duplicate awaiting continuations", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-awaiting-no-duplicate-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Avoid duplicate continuation dispatches",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-
-    timers[0]?.callback();
-    await flushAsyncWork();
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    const messageCountAfterTick = run.customMessages.length;
-
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-
-    assert.equal(
-      run.customMessages.length,
-      messageCountAfterTick,
-      "session_start while awaiting must not dispatch another hidden continuation",
-    );
-    assert.equal(timers.length, 2, "completed awaited turn schedules exactly one next tick");
-    assert.equal(timers[1]?.delay, 30_000);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop cancels scheduled tick when a user turn starts", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-user-turn-cancel-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Wait for actual user idle before ticking",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0]?.cleared, false);
-
-    for (const handler of run.eventHandlers.get("turn_start") ?? []) {
-      await handler({}, ctx);
-    }
-
-    assert.equal(timers[0]?.cleared, true, "user turns clear the scheduled goal tick timer");
-    assert.equal(run.customMessages.some(isForegroundGoalTickMessage), false);
-
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-
-    assert.equal(timers.length, 2, "ordinary completed turns re-arm idle goal ticks");
-    assert.equal(timers[1]?.delay, 30_000);
-    assert.equal(
-      run.customMessages.some(isForegroundGoalTickMessage),
-      false,
-      "re-arming after a user turn must not tick immediately",
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop drops stale tick context after pause", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-drop-stale-tick-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(until?: () => boolean): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      if (until?.()) return;
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Drop stale tick after pause",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork(() => isForegroundGoalTickMessage(run.customMessages.at(-1)));
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-
-    const rejectedPause = await executeSparkTool(run.tools, "goal", ctx, {
-      action: "pause",
-      reason: "stop before hidden tick context is consumed",
-    });
-
-    assert.equal(
-      (rejectedPause.details as { error?: string }).error,
-      "autonomous_goal_pause_forbidden",
-    );
-    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-goal-tick");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop ignores stale awaited-turn completions after replacement", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-ignore-stale-awaiting-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(until?: () => boolean): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      if (until?.()) return;
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Old goal awaiting turn",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork(() => isForegroundGoalTickMessage(run.customMessages.at(-1)));
-    const oldGoal = await loadSessionGoal(dir, ctx);
-    assert.ok(oldGoal);
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "clear",
-    });
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Replacement goal must stay clean",
-    });
-    const replacementGoal = await loadSessionGoal(dir, ctx);
-    assert.ok(replacementGoal);
-    assert.notEqual(replacementGoal.goalId, oldGoal.goalId);
-
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler(
-        {
-          usage: { inputTokens: 100, outputTokens: 200 },
-          messages: [{ role: "assistant", stopReason: "stop" }],
-        },
-        ctx,
-      );
-    }
-
-    const currentGoal = await loadSessionGoal(dir, ctx);
-    assert.equal(currentGoal?.goalId, replacementGoal.goalId);
-    assert.equal(currentGoal?.status, "active");
-    assert.equal(timers.length, 1, "stale completion must not schedule another tick");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop completes active goal when reviewer says achieved", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-review-achieved-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let reviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerCalls += 1;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-    await useOnlySparkProject(run.tools, ctx);
-    await putProjectGoalCompletionEvidence(ctx, "Already verified objective evidence");
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Already verified objective",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-    const messagesBefore = run.customMessages.length;
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerCalls, 1);
-    assert.equal(run.customMessages.length, messagesBefore);
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.ok(goal);
-    assert.equal(goal.status, "complete");
-    const goalReviewArtifactRef = goal.lastReviewArtifactRef;
-    assert.ok(goalReviewArtifactRef);
-    assert.ok(goal.lastReviewedAt);
-    assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
-    const reviewDir = goalReviewDirectory(dir, goal);
-    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
-      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
-    };
-    assert.equal(reviewIndex.reviews[0]?.subjectKind, "goal");
-    assert.equal(reviewIndex.reviews[0]?.subjectRef, goal.goalId);
-    assert.equal(reviewIndex.reviews[0]?.artifactRef, goalReviewArtifactRef);
-    const subjectReview = JSON.parse(
-      await readFile(subjectReviewRecordPath(reviewDir, goalReviewArtifactRef), "utf8"),
-    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
-    assert.equal(subjectReview.subjectKind, "goal");
-    assert.equal(subjectReview.subjectRef, goal.goalId);
-    assert.equal(subjectReview.outcome, "approved");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop includes completed current project evidence", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-completed-project-evidence-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const evidence = await defaultArtifactStore(dir).put({
-      kind: "record",
-      title: "Completed project closure evidence",
-      format: "markdown",
-      body: "All tasks are done and validated.",
-      provenance: { producer: "task" },
-    });
-    let completedProjectRef: ProjectRef | undefined;
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const project = graph.projects()[0];
-      assert.ok(project);
-      completedProjectRef = project.ref;
-      await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
-      await saveCurrentProjectRef(dir, ctx, project.ref);
-      const task = graph.createTask({
-        projectRef: project.ref,
-        name: "completed-evidence-task",
-        title: "Completed evidence task",
-        description: "Produce closure evidence for the project.",
-        status: "done",
-        plan: executionReadyPlan("Completed evidence task"),
-      });
-      graph.attachOutputArtifact(task.ref, evidence.ref);
-    });
-    let reviewerInput: ReviewInput | undefined;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerInput = input;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Complete broad review after project closes",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerInput?.targetKind, "goal");
-    if (reviewerInput?.targetKind !== "goal") assert.fail("expected goal review input");
-    assert.equal(reviewerInput.projectRef, completedProjectRef);
-    assert.equal(reviewerInput.currentProjectSelected, true);
-    assert.equal(reviewerInput.projectEvidenceSource, "current_project");
-    assert.equal(reviewerInput.projectStatus?.taskCounts.total, 1);
-    assert.equal(reviewerInput.projectStatus?.taskCounts.unfinished, 0);
-    assert.deepEqual(reviewerInput.evidenceRefs, [evidence.ref]);
-    assert.equal(reviewerInput.evidencePreviews?.[0]?.ref, evidence.ref);
-    assert.equal(reviewerInput.evidencePreviews?.[0]?.title, "Completed project closure evidence");
-    assert.match(reviewerInput.evidencePreviews?.[0]?.bodyPreview ?? "", /All tasks are done/);
-    const reviewArtifact = await defaultArtifactStore(dir).get(
-      (await defaultArtifactStore(dir).list({ kind: "record" })).at(-1)!.ref,
-    );
-    const reviewBody = reviewArtifact.body as {
-      reviewPacket?: {
-        projectRef?: ProjectRef;
-        currentProjectSelected?: boolean;
-        projectEvidenceSource?: string;
-        evidenceRefs?: string[];
-        evidencePreviews?: Array<{ ref?: string; title?: string; bodyPreview?: string }>;
-      };
-    };
-    assert.equal(reviewBody.reviewPacket?.projectRef, completedProjectRef);
-    assert.equal(reviewBody.reviewPacket?.currentProjectSelected, true);
-    assert.equal(reviewBody.reviewPacket?.projectEvidenceSource, "current_project");
-    assert.deepEqual(reviewBody.reviewPacket?.evidenceRefs, [evidence.ref]);
-    assert.equal(reviewBody.reviewPacket?.evidencePreviews?.[0]?.ref, evidence.ref);
-    assert.match(
-      reviewBody.reviewPacket?.evidencePreviews?.[0]?.bodyPreview ?? "",
-      /All tasks are done/,
-    );
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "complete");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop blocks completion when project tasks remain unfinished", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-unfinished-project-blocker-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let projectRef: ProjectRef | undefined;
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const project = graph.projects()[0];
-      assert.ok(project);
-      projectRef = project.ref;
-      await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
-      await saveCurrentProjectRef(dir, ctx, project.ref);
-      graph.createTask({
-        projectRef: project.ref,
-        name: "unfinished-ready-task",
-        title: "Unfinished ready task",
-        description: "This task remains pending and should block goal completion.",
-        status: "pending",
-        plan: executionReadyPlan("Unfinished ready task"),
-      });
-    });
-    assert.ok(projectRef);
-    let reviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerCalls += 1;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Finish the role model settings project implementation",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "active");
-    assert.ok(goal?.lastReviewedAt);
-    assert.equal(goal?.lastReviewArtifactRef, undefined);
-    assert.equal(reviewerCalls, 0);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop includes project-scoped review artifacts", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-project-review-artifact-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let projectRef: ProjectRef | undefined;
-    await defaultTaskGraphStore(dir).update(async (graph) => {
-      const project = graph.projects()[0];
-      assert.ok(project);
-      projectRef = project.ref;
-      await mkdir(join(dir, ".spark", "sessions"), { recursive: true });
-      await saveCurrentProjectRef(dir, ctx, project.ref);
-    });
-    assert.ok(projectRef);
-    const projectReview = await defaultArtifactStore(dir).put({
-      kind: "record",
-      title: "Project planning readiness review",
-      format: "markdown",
-      body: "The project plan is reviewed and execution-ready.",
-      provenance: { producer: "review", projectRef },
-    });
-    let reviewerInput: ReviewInput | undefined;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerInput = input;
-          return createApprovingReviewerRunner().review(input);
-        },
-      },
-    });
-
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Complete after project-scoped plan review evidence is visible",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerInput?.targetKind, "goal");
-    assert.equal(reviewerInput?.projectRef, projectRef);
-    assert.ok(reviewerInput?.evidenceRefs.includes(projectReview.ref));
-    assert.ok(
-      reviewerInput?.targetKind === "goal" &&
-        reviewerInput.evidencePreviews?.some(
-          (preview) =>
-            preview.ref === projectReview.ref &&
-            /project plan is reviewed/.test(preview.bodyPreview ?? ""),
-        ),
-    );
-    const reviewArtifact = await defaultArtifactStore(dir).get(
-      (await defaultArtifactStore(dir).list({ kind: "record" })).at(-1)!.ref,
-    );
-    const reviewBody = reviewArtifact.body as {
-      reviewPacket?: {
-        evidenceRefs?: string[];
-        evidencePreviews?: Array<{ ref?: string; bodyPreview?: string }>;
-      };
-    };
-    assert.ok(reviewBody.reviewPacket?.evidenceRefs?.includes(projectReview.ref));
-    assert.ok(
-      reviewBody.reviewPacket?.evidencePreviews?.some(
-        (preview) =>
-          preview.ref === projectReview.ref &&
-          /project plan is reviewed/.test(preview.bodyPreview ?? ""),
-      ),
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop records unmet reviewer verdict before continuation", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-review-unmet-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let reviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          reviewerCalls += 1;
-          return createRejectingReviewerRunner("goal needs one more verified task").review(input);
-        },
-      },
-    });
-    await useOnlySparkProject(run.tools, ctx);
-    await putProjectGoalCompletionEvidence(ctx, "Unmet goal reviewer evidence");
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Need more work",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    const messagesBefore = run.customMessages.length;
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(reviewerCalls, 1);
-    assert.ok(run.customMessages.length > messagesBefore);
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    const goal = await loadSessionGoal(dir, ctx);
-    assert.ok(goal);
-    assert.equal(goal.status, "active");
-    const goalReviewArtifactRef = goal.lastReviewArtifactRef;
-    assert.ok(goalReviewArtifactRef);
-    assert.ok(goal.lastReviewedAt);
-    assert.equal((await defaultArtifactStore(dir).list({ kind: "record" })).length, 1);
-    const reviewDir = goalReviewDirectory(dir, goal);
-    const reviewIndex = JSON.parse(await readFile(join(reviewDir, "index.json"), "utf8")) as {
-      reviews: Array<{ subjectKind?: string; subjectRef?: string; artifactRef?: string }>;
-    };
-    assert.equal(reviewIndex.reviews[0]?.subjectKind, "goal");
-    assert.equal(reviewIndex.reviews[0]?.subjectRef, goal.goalId);
-    assert.equal(reviewIndex.reviews[0]?.artifactRef, goalReviewArtifactRef);
-    const subjectReview = JSON.parse(
-      await readFile(subjectReviewRecordPath(reviewDir, goalReviewArtifactRef), "utf8"),
-    ) as { subjectKind?: string; subjectRef?: string; outcome?: string };
-    assert.equal(subjectReview.subjectKind, "goal");
-    assert.equal(subjectReview.subjectRef, goal.goalId);
-    assert.equal(subjectReview.outcome, "needs_changes");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop defers while task finish review is running", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-defers-task-review-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let resolveTaskReview: ((value: ReviewerRunResult) => void) | undefined;
-    let taskReviewerCalls = 0;
-    let goalReviewerCalls = 0;
-    const run = registerSparkToolsForTest({
-      reviewerRunner: {
-        async review(input: ReviewInput): Promise<ReviewerRunResult> {
-          if (input.targetKind === "task") {
-            taskReviewerCalls += 1;
-            return new Promise((resolve) => {
-              resolveTaskReview = resolve;
-            });
-          }
-          goalReviewerCalls += 1;
-          return createRejectingReviewerRunner("goal should wait for task review").review(input);
-        },
-      },
-    });
-    await useOnlySparkProjectInExplicitPlanMode(run.tools, ctx);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Goal waits while task review runs",
-    });
-    await planAndClaimTask(run.tools, ctx, {
-      name: "finish-review-lease",
-      title: "Finish review lease",
-      description: "Task finish reviewer should hold the shared reviewer lease.",
-      plan: executionReadyPlan("Finish review lease"),
-      todos: ["Run finish review reviewer flow"],
-    });
-    await executeSparkTool(run.tools, "impl_update_task_plan_items", ctx, {
-      ops: [
-        { op: "init", items: ["Run finish review reviewer flow"] },
-        { op: "done", item: "Run finish review reviewer flow" },
-      ],
-    });
-
-    const finishPromise = executeSparkTool(run.tools, "impl_finish_task", ctx, {
-      summary: "Complete after task review resolves.",
-    });
-    await flushAsyncWork();
-    assert.equal(taskReviewerCalls, 1);
-    assert.equal(goalReviewerCalls, 0);
-
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(goalReviewerCalls, 0);
-    assert.equal(timers.length, 2, "goal tick should reschedule instead of starting reviewer");
-    resolveTaskReview?.(
-      await createApprovingReviewerRunner().review({
-        targetKind: "task",
-        cwd: dir,
-        projectRef: "proj:test" as ProjectRef,
-        task: (await defaultTaskGraphStore(dir).load())!.tasks()[0]!,
-        requestedStatus: "done",
-        evidenceRefs: [],
-      }),
-    );
-    const finished = await finishPromise;
-    assert.match(toolText(finished), /Finished Spark task/);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("goal reviewer state machine covers restart, idle review, and task finish gates", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-reviewer-state-machine-e2e-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function waitForAsyncState(
-    until: () => boolean | Promise<boolean>,
-    description: string,
-    timeoutMs = 5_000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await until()) return;
-      await new Promise((resolve) => originalSetTimeout(resolve, 10));
-    }
-    assert.fail(`Timed out waiting for ${description}.`);
-  }
-
-  async function waitForGoalStatus(status: "active" | "complete") {
-    let goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
-    await waitForAsyncState(async () => {
-      goal = await loadSessionGoal(dir, testSparkContext(dir, "main"));
-      return goal?.status === status;
-    }, `the session goal to reach status ${status}`);
-    return goal;
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const goalOutcomes: Array<"unmet" | "achieved"> = ["unmet", "achieved"];
-    let rejectTaskFinish = true;
-    let goalReviewerCalls = 0;
-    let taskReviewerCalls = 0;
-    const reviewerRunner: ReviewerRunner = {
-      async review(input: ReviewInput): Promise<ReviewerRunResult> {
-        if (input.targetKind === "goal") {
-          if (input.requestedStatus === "paused")
-            return createApprovingReviewerRunner().review(input);
-          goalReviewerCalls += 1;
-          const outcome = goalOutcomes.shift() ?? "achieved";
-          return outcome === "achieved"
-            ? createApprovingReviewerRunner().review(input)
-            : createRejectingReviewerRunner("project goal still needs one task").review(input);
-        }
-        taskReviewerCalls += 1;
-        return rejectTaskFinish
-          ? createRejectingReviewerRunner("task finish needs revision").review(input)
-          : createApprovingReviewerRunner().review(input);
-      },
-    };
-
-    const run = registerSparkToolsForTest({ reviewerRunner });
-    await useOnlySparkProjectInExplicitPlanMode(run.tools, ctx);
-    await putProjectGoalCompletionEvidence(ctx, "Goal reviewer state-machine evidence");
-
-    const sessionStarted = await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Session goal for state-machine e2e",
-    });
-    assert.match(toolText(sessionStarted), /Spark session goal active/);
-
-    const restarted = registerSparkToolsForTest({ reviewerRunner });
-    for (const handler of restarted.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0]?.delay, 30_000);
-
-    const messagesBeforeUnmet = restarted.customMessages.length;
-    timers[0]?.callback();
-    await waitForAsyncState(
-      () => goalReviewerCalls === 1 && restarted.customMessages.length > messagesBeforeUnmet,
-      "the unmet goal review to persist and queue its follow-up",
-    );
-    assert.equal(goalReviewerCalls, 1);
-    assert.ok(restarted.customMessages.length > messagesBeforeUnmet);
-    assert.equal(restarted.customMessages.at(-1)?.display, false);
-    assert.equal(restarted.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    let goal = await loadSessionGoal(dir, ctx);
-    assert.equal(goal?.status, "active");
-    assert.ok(goal?.lastReviewArtifactRef);
-    assert.ok(goal?.lastReviewedAt);
-
-    for (const handler of restarted.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 2);
-    const messagesBeforeAchieved = restarted.customMessages.length;
-    timers[1]?.callback();
-    goal = await waitForGoalStatus("complete");
-    assert.equal(goalReviewerCalls, 2);
-    assert.equal(restarted.customMessages.length, messagesBeforeAchieved);
-    assert.equal(goal?.status, "complete");
-    assert.ok(goal?.lastReviewArtifactRef);
-
-    await planAndClaimTask(run.tools, ctx, {
-      name: "e2e-task-finish-gate",
-      title: "E2E task finish gate",
-      description: "Task finish should reject then approve through the reviewer gate.",
-      plan: executionReadyPlan("E2E task finish gate"),
-      todos: ["Validate task finish reviewer gate"],
-    });
-    await executeSparkTool(run.tools, "impl_update_task_plan_items", ctx, {
-      ops: [
-        { op: "init", items: ["Validate task finish reviewer gate"] },
-        { op: "done", item: "Validate task finish reviewer gate" },
-      ],
-    });
-    const rejected = await executeSparkTool(run.tools, "impl_finish_task", ctx, {
-      summary: "First finish attempt should be rejected.",
-    });
-    assert.equal((rejected.details as { error?: string }).error, "task_review_failed");
-    assert.match(toolText(rejected), /task finish needs revision/);
-
-    rejectTaskFinish = false;
-    const finished = await executeSparkTool(run.tools, "impl_finish_task", ctx, {
-      summary: "Second finish attempt is approved.",
-    });
-    assert.match(toolText(finished), /Finished Spark task: \[done\]/);
-    assert.equal((finished.details?.task as { status?: string } | undefined)?.status, "done");
-    assert.equal(taskReviewerCalls, 2);
-
-    const reviews = await defaultArtifactStore(dir).list({ kind: "record" });
-    assert.equal(
-      reviews.length,
-      3,
-      "one rolling goal review artifact and two task finish reviews are persisted",
-    );
-    const goalReview = reviews.find((review) => review.ref.startsWith("artifact:goal-review-"));
-    assert.ok(goalReview, "goal reviews should use a stable rolling artifact ref");
-    const goalReviewArtifact = await defaultArtifactStore(dir).get(goalReview.ref);
-    assert.equal(
-      (goalReviewArtifact.body as { reviews?: unknown[] }).reviews?.length,
-      2,
-      "rolling goal review artifact keeps both goal review entries",
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop keeps retrying with capped backoff", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-retry-budget-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("retry bounded goal", ctx);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 1);
-
-    const expectedDelays = [30_000, 60_000, 120_000, 120_000, 120_000];
-    for (let failureIndex = 0; failureIndex < 5; failureIndex += 1) {
-      timers.at(-1)?.callback();
-      await flushAsyncWork();
-      for (const handler of run.eventHandlers.get("turn_end") ?? []) {
-        await handler(
-          {
-            message: {
-              role: "assistant",
-              stopReason: "error",
-              errorMessage: `transient failure ${failureIndex + 1}`,
-            },
-          },
-          ctx,
-        );
-      }
-      for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-        await handler(
-          {
-            messages: [
-              {
-                role: "assistant",
-                stopReason: "error",
-                errorMessage: `transient failure ${failureIndex + 1}`,
-              },
-            ],
-          },
-          ctx,
-        );
-      }
-      assert.equal(timers.at(-1)?.delay, expectedDelays[failureIndex]);
-    }
-
-    const goalStatePath = sessionGoalPath(dir, ctx);
-    await waitFor(async () => {
-      const state = JSON.parse(await readFile(goalStatePath, "utf8")) as {
-        goal?: { status?: string; retryState?: { consecutiveFailures?: number } };
-      };
-      return state.goal?.status === "active" && state.goal.retryState?.consecutiveFailures === 5;
-    });
-    const failedGoalState = JSON.parse(await readFile(goalStatePath, "utf8")) as {
-      goal?: {
-        status?: string;
-        pauseReason?: string;
-        retryState?: { consecutiveFailures?: number; exhaustedAt?: string };
-      };
-    };
-    assert.equal(failedGoalState.goal?.status, "active");
-    assert.equal(failedGoalState.goal?.pauseReason, undefined);
-    assert.equal(failedGoalState.goal?.retryState?.consecutiveFailures, 5);
-    assert.equal(failedGoalState.goal?.retryState?.exhaustedAt, undefined);
-    assert.equal(
-      ctx.notifications.some((notification) => /retry 1\/5/.test(notification.message)),
-      false,
-    );
-    assert.equal(
-      ctx.notifications.some((notification) =>
-        /retry budget exhausted|多次失败|已暂停/.test(notification.message),
-      ),
-      false,
-    );
-    assert.equal(timers.length, 6);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop pauses without retry after manual abort", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-manual-abort-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("abort should not retry", ctx);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 1);
-
-    timers[0]?.callback();
-    await flushAsyncWork();
-    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
-      await handler(
-        {
-          message: { role: "assistant", stopReason: "aborted", errorMessage: "Operation aborted" },
-        },
-        ctx,
-      );
-    }
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler(
-        {
-          messages: [
-            { role: "assistant", stopReason: "aborted", errorMessage: "Operation aborted" },
-          ],
-        },
-        ctx,
-      );
-    }
-
-    const abortedGoalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
-      goal?: {
-        status?: string;
-        pauseReason?: string;
-        retryState?: { consecutiveFailures?: number };
-      };
-    };
-    assert.equal(abortedGoalState.goal?.status, "paused");
-    assert.match(abortedGoalState.goal?.pauseReason ?? "", /manual abort/);
-    assert.equal(abortedGoalState.goal?.retryState, undefined);
-    assert.equal(
-      ctx.notifications.some((notification) => /retry \d\/5/.test(notification.message)),
-      false,
-    );
-    assert.equal(timers.length, 1, "manual abort must not schedule a retry timer");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop clears retry state after successful turn", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-retry-reset-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("retry reset goal", ctx);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-
-    timers[0]?.callback();
-    await flushAsyncWork();
-    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
-      await handler(
-        {
-          message: {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "first transient failure",
-          },
-        },
-        ctx,
-      );
-    }
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler(
-        {
-          messages: [
-            { role: "assistant", stopReason: "error", errorMessage: "first transient failure" },
-          ],
-        },
-        ctx,
-      );
-    }
-    const retryGoalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
-      goal?: { retryState?: { consecutiveFailures?: number } };
-    };
-    assert.equal(retryGoalState.goal?.retryState?.consecutiveFailures, 1);
-
-    timers[1]?.callback();
-    await flushAsyncWork();
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    const resetGoalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
-      goal?: { status?: string; retryState?: unknown };
-    };
-    assert.equal(resetGoalState.goal?.status, "active");
-    assert.equal(resetGoalState.goal?.retryState, undefined);
-    assert.equal(timers.at(-1)?.delay, 30_000);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop waits for idle and stops after pause", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-tick-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    let idleWaits = 0;
-    ctx.waitForIdle = async () => {
-      idleWaits += 1;
-    };
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("finish active goal work", ctx);
-    assert.equal(timers.length, 0);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 1);
-    assert.equal(timers[0]?.delay, 30_000);
-
-    const messageCountBeforeTick = run.customMessages.length;
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(idleWaits, 1);
-    assert.equal(run.customMessages.length, messageCountBeforeTick);
-    assert.equal(timers.length, 2);
-    assert.equal(timers[1]?.delay, 30_000);
-
-    timers[1]?.callback();
-    await flushAsyncWork();
-    assert.ok(run.customMessages.length > messageCountBeforeTick);
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.equal(timers.length, 2);
-
-    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
-      await handler({ message: { role: "assistant", stopReason: "stop" } }, ctx);
-    }
-    assert.equal(timers.length, 2);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 3);
-    assert.equal(timers[2]?.delay, 30_000);
-
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "pause",
-      reason: "waiting for review",
-    });
-    for (const handler of run.eventHandlers.get("tool_execution_end") ?? []) {
-      await handler({ toolName: "goal", params: { action: "pause" } }, ctx);
-    }
-    assert.equal(timers[2]?.cleared, true);
-    const messageCountAfterPause = run.customMessages.length;
-    timers[2]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(run.customMessages.length, messageCountAfterPause);
-    assert.equal(idleWaits, 1);
-    assert.equal(timers.length, 3);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 3);
-
-    await goalCommand.handler("finish failed goal work", ctx);
-    assert.equal(timers.length, 3);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 4);
-    timers[3]?.callback();
-    await flushAsyncWork();
-    assert.equal(idleWaits, 2);
-    assert.equal(timers.length, 5);
-    timers[4]?.callback();
-    await flushAsyncWork();
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    for (const handler of run.eventHandlers.get("turn_end") ?? []) {
-      await handler(
-        {
-          message: {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "Context overflow recovery failed: invalidated oauth token",
-          },
-        },
-        ctx,
-      );
-    }
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler(
-        {
-          messages: [
-            {
-              role: "assistant",
-              stopReason: "error",
-              errorMessage: "Context overflow recovery failed: invalidated oauth token",
-            },
-          ],
-        },
-        ctx,
-      );
-    }
-    const failedGoalState = JSON.parse(await readFile(sessionGoalPath(dir, ctx), "utf8")) as {
-      goal?: { status?: string; lastReview?: unknown; lastReviewedAt?: string };
-    };
-    assert.equal(failedGoalState.goal?.status, "active");
-    assert.equal(failedGoalState.goal?.lastReview, undefined);
-    assert.ok(failedGoalState.goal?.lastReviewedAt);
-    assert.equal(timers.length, 6);
-    assert.equal(timers[5]?.delay, 30_000);
-
-    await goalCommand.handler("finish complete goal work", ctx);
-    assert.equal(timers.length, 6);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 7);
-    assert.equal(timers[5]?.cleared, true);
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "pause",
-      reason: "verified stop after test",
-    });
-    const messageCountAfterComplete = run.customMessages.length;
-    timers[6]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(run.customMessages.length, messageCountAfterComplete);
-    assert.equal(idleWaits, 2);
-    assert.equal(timers.length, 7);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("/goal foreground loop defers ticks while compaction is active", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-compaction-gate-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-    }
-  }
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await useOnlySparkProject(run.tools, ctx);
-    const goalCommand = run.commands.get("goal");
-    assert.ok(goalCommand, "missing /goal command");
-    await goalCommand.handler("avoid compaction overlap", ctx);
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.equal(timers.length, 1);
-
-    const messageCountBeforeCompactionTick = run.customMessages.length;
-    const compactionAbort = new AbortController();
-    for (const handler of run.eventHandlers.get("session_before_compact") ?? []) {
-      await handler({ signal: compactionAbort.signal }, ctx);
-    }
-
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(
-      run.customMessages.length,
-      messageCountBeforeCompactionTick,
-      "goal tick must not dispatch while session compaction is active",
-    );
-    assert.equal(timers.length, 2);
-    assert.equal(timers[1]?.delay, 30_000);
-
-    for (const handler of run.eventHandlers.get("session_compact") ?? []) {
-      await handler({ compactionEntry: { id: "entry:compact" } }, ctx);
-    }
-    assert.equal(timers[1]?.cleared, true);
-    assert.equal(timers.length, 3);
-
-    timers[2]?.callback();
-    await flushAsyncWork();
-
-    assert.ok(run.customMessages.length > messageCountBeforeCompactionTick);
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.display, false);
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -7051,140 +5036,6 @@ test("spark_goal start with objective bootstraps when no project exists", async 
   }
 });
 
-test("spark_goal foreground loop asks agent to bootstrap a project when none exists", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-bootstrap-no-project-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1)
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-  }
-
-  try {
-    const ctx = testSparkContext(dir, "main");
-    const run = registerSparkToolsForTest();
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Bootstrap project from goal loop",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) await handler({}, ctx);
-    assert.equal(timers.length, 1);
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    assert.equal(isForegroundGoalTickMessage(run.customMessages.at(-1)), true);
-    assert.equal(run.customMessages.at(-1)?.details?.selectedPhase, undefined);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Goal driver requirements/);
-    assert.doesNotMatch(
-      run.customMessages.at(-1)?.content ?? "",
-      /Selected Spark phase|selected phase|phase requirements/,
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("spark_goal foreground loop hides internal artifact validation errors from UI", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-goal-loop-safe-error-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  const originalWarn = console.warn;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => FakeTimer;
-  };
-  const timers: FakeTimer[] = [];
-  const warnings: string[] = [];
-  globalThis.setTimeout = ((
-    callback: Parameters<typeof setTimeout>[0],
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback(...args);
-      },
-      delay,
-      cleared: false,
-      unref: () => timer,
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-  console.warn = ((...args: unknown[]) => {
-    warnings.push(args.map(String).join(" "));
-  }) as typeof console.warn;
-  async function flushAsyncWork(): Promise<void> {
-    for (let index = 0; index < 100; index += 1)
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-  }
-
-  try {
-    const ctx = testSparkContext(dir, "main");
-    ctx.waitForIdle = async () => {
-      throw new Error(
-        `${join(dir, ".spark/artifacts/002487e2-a5e5-4f07-8b52-d12772fe33d2.json")}: kind must be a valid artifact kind`,
-      );
-    };
-    const run = registerSparkToolsForTest();
-    await executeSparkTool(run.tools, "goal", ctx, {
-      action: "start",
-      objective: "Keep running the foreground goal loop",
-    });
-    for (const handler of run.eventHandlers.get("session_start") ?? []) await handler({}, ctx);
-    assert.equal(timers.length, 1);
-    timers[0]?.callback();
-    await flushAsyncWork();
-
-    const notification = ctx.notifications.at(-1);
-    assert.equal(notification?.level, "warning");
-    assert.match(notification?.message ?? "", /Spark foreground goal loop hit an internal error/);
-    assert.doesNotMatch(notification?.message ?? "", /\.spark\/artifacts/u);
-    assert.doesNotMatch(notification?.message ?? "", /kind must be a valid artifact kind/u);
-    assert.equal(warnings.join("\n"), "");
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    console.warn = originalWarn;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
 test("spark_goal start ignores legacy session-scoped TODO snapshots when inferring goals", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-session-goal-ignore-legacy-todos-"));
   try {
@@ -8224,14 +6075,12 @@ test("/repro command starts, reports, and stops the repro drive", async () => {
     assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
     assert.equal(ctx.askWaitTimeoutMs, 15 * 60_000);
     assert.equal(ctx.askAutoAnswer, undefined);
-    assert.equal(run.customMessages.at(-1)?.customType, "spark-repro-request");
-    assert.equal(run.customMessages.at(-1)?.details?.purpose, "foreground-repro-tick");
-    assert.equal(run.customMessages.at(-1)?.options?.deliverAs, "followUp");
-    assert.equal(run.customMessages.at(-1)?.options?.triggerTurn, true);
-    assert.match(run.customMessages.at(-1)?.content ?? "", /Spark repro drive tick/);
+    const driver = activeTestDriver(run, "repro");
+    assert.equal(driver?.driverId, repro?.reproId);
+    assert.equal(driver?.status, "scheduled");
 
     await reproCommand.handler("status", ctx);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro active/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro scheduled/);
 
     await reproCommand.handler("stop", ctx);
     assert.equal(await readSessionRepro(dir, ctx), undefined);
@@ -8257,10 +6106,7 @@ test("/repro command treats non-action text as the repro objective", async () =>
     assert.equal(repro?.status, "active");
     assert.equal(repro?.objective, objective);
     assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
-    const message = run.customMessages.at(-1);
-    assert.equal(message?.customType, "spark-repro-request");
-    assert.equal(message?.details?.purpose, "foreground-repro-tick");
-    assert.match(message?.content ?? "", new RegExp(`Repro objective: ${objective}`));
+    assert.equal(activeTestDriver(run, "repro")?.driverId, repro?.reproId);
     assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro active:/);
     assert.match(ctx.notifications.at(-1)?.message ?? "", new RegExp(objective));
 
@@ -8408,7 +6254,7 @@ test("foreground driver slash commands share status, stop, and restart grammar",
     await goalCommand.handler("Unify foreground goal grammar", ctx);
     assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Unify foreground goal grammar");
     await goalCommand.handler("status", ctx);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark goal active: Unify/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark goal scheduled: Unify/);
     await goalCommand.handler("restart Replace foreground goal grammar", ctx);
     assert.equal((await loadSessionGoal(dir, ctx))?.objective, "Replace foreground goal grammar");
     await goalCommand.handler("stop", ctx);
@@ -8417,171 +6263,20 @@ test("foreground driver slash commands share status, stop, and restart grammar",
 
     await loopCommand.handler("Unify foreground loop grammar", ctx);
     assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Unify foreground loop grammar");
+    assert.equal(activeTestDriver(run, "loop")?.continuity, "session");
     await loopCommand.handler("status", ctx);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark loop active: Unify/);
+    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark loop scheduled: Unify/);
+    await loopCommand.handler("fresh Isolate every loop tick", ctx);
+    assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Isolate every loop tick");
+    assert.equal(activeTestDriver(run, "loop")?.continuity, "fresh");
+    await loopCommand.handler("start --fresh Isolate the explicit start form", ctx);
+    assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Isolate the explicit start form");
+    assert.equal(activeTestDriver(run, "loop")?.continuity, "fresh");
     await loopCommand.handler("restart Replace foreground loop grammar", ctx);
     assert.equal((await loadSessionLoop(dir, ctx))?.objective, "Replace foreground loop grammar");
     await loopCommand.handler("stop", ctx);
     assert.equal(await loadSessionLoop(dir, ctx), undefined);
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("repro foreground driver ticks on session_start, reschedules on agent_end, and stops when complete", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-repro-foreground-driver-"));
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  type FakeTimer = {
-    callback: () => void;
-    delay: number | undefined;
-    cleared: boolean;
-    unref: () => void;
-  };
-  const timers: FakeTimer[] = [];
-  globalThis.setTimeout = ((callback: Parameters<typeof setTimeout>[0], delay?: number) => {
-    const timer: FakeTimer = {
-      callback: () => {
-        if (typeof callback === "function") callback();
-      },
-      delay,
-      cleared: false,
-      unref() {},
-    };
-    timers.push(timer);
-    return timer as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
-    const fake = timer as unknown as FakeTimer | undefined;
-    if (fake) fake.cleared = true;
-  }) as typeof clearTimeout;
-
-  async function flushAsyncWork(predicate?: () => boolean | Promise<boolean>): Promise<void> {
-    for (let index = 0; index < 100; index += 1) {
-      await new Promise((resolve) => originalSetTimeout(resolve, 0));
-      if (predicate && (await predicate())) return;
-    }
-  }
-
-  const isReproTick = (
-    message: ReturnType<typeof registerSparkToolsForTest>["customMessages"][number] | undefined,
-  ): boolean =>
-    message?.customType === "spark-repro-request" &&
-    message?.details?.purpose === "foreground-repro-tick";
-
-  try {
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    const setupRun = registerSparkToolsForTest();
-    await useOnlySparkProject(setupRun.tools, ctx);
-    await executeSparkTool(setupRun.tools, "repro", ctx, { action: "start" });
-    assert.equal((await readSessionRepro(dir, ctx))?.status, "active");
-    assert.equal(timers.length, 0, "starting repro persists state but does not schedule");
-
-    const run = registerSparkToolsForTest();
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    assert.equal(timers.length, 1, "session_start schedules a repro tick when repro is active");
-    assert.equal(timers[0]?.delay, 30_000);
-
-    timers[0]?.callback();
-    await flushAsyncWork(() => isReproTick(run.customMessages.at(-1)));
-    assert.equal(isReproTick(run.customMessages.at(-1)), true);
-    assert.deepEqual(ctx.sparkActiveLens, { phase: "plan", drive: "repro" });
-
-    const messagesAfterTick = run.customMessages.length;
-    for (const handler of run.eventHandlers.get("agent_end") ?? []) {
-      await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-    }
-    assert.ok(
-      timers.filter((timer) => !timer.cleared).length >= 1,
-      "a completed repro turn re-arms the next tick",
-    );
-    assert.equal(
-      run.customMessages.length,
-      messagesAfterTick,
-      "re-arming after a completed turn must not tick immediately",
-    );
-
-    // Drive the evidence-backed repro machine to completion and confirm the driver stops itself.
-    const proofArtifact = await defaultArtifactStore(dir).put({
-      kind: "record",
-      title: "Repro integration proof",
-      format: "json",
-      body: { status: "passed" },
-      provenance: { producer: "spark" },
-    });
-    ctx.selected = "Test";
-    const decisionAsk = await executeSparkTool(run.tools, "ask", ctx, {
-      action: "ask",
-      delivery: "blocking",
-      recordAsEvidence: true,
-      title: "Choose repro integration strategy",
-      mode: "decision",
-      questions: [
-        {
-          id: "strategy",
-          prompt: "Choose strategy",
-          type: "single",
-          options: [{ value: "test", label: "Test" }],
-        },
-      ],
-    });
-    const decisionRef = decisionAsk.details?.askEvidenceRef;
-    assert.equal(typeof decisionRef, "string");
-    let reproState = await readSessionRepro(dir, ctx);
-    assert.ok(reproState);
-    for (let guard = 0; guard < 20; guard += 1) {
-      reproState = await readSessionRepro(dir, ctx);
-      if (!reproState || reproState.status === "complete") break;
-      const stage = reproState.stages[reproState.currentStageIndex];
-      for (const requirement of stage.acceptance) {
-        if (isReproRequirementSatisfied(requirement)) continue;
-        const proof =
-          requirement.kind === "evidence"
-            ? { kind: "evidence", evidenceRefs: [proofArtifact.ref] }
-            : requirement.kind === "decision"
-              ? {
-                  kind: "decision",
-                  decisionRef,
-                  selectedValue: "test",
-                }
-              : {
-                  kind: "validation",
-                  command: "test command",
-                  resultRef: proofArtifact.ref,
-                  passed: true,
-                };
-        await executeSparkTool(run.tools, "repro", ctx, {
-          action: "record",
-          requirementId: requirement.id,
-          proof,
-        });
-      }
-      if (stage.gate) await executeSparkTool(run.tools, "repro", ctx, { action: "evaluate" });
-      await executeSparkTool(run.tools, "repro", ctx, { action: "advance" });
-    }
-    reproState = await readSessionRepro(dir, ctx);
-    // After advancing through every stage, the repro machine is complete (or already cleared).
-    assert.ok(
-      !reproState || reproState.status === "complete",
-      "repro should be complete after all stages advance",
-    );
-
-    // session_start against a complete repro must self-clear and fall back to another driver.
-    for (const handler of run.eventHandlers.get("session_start") ?? []) {
-      await handler({}, ctx);
-    }
-    await flushAsyncWork(async () => (await readSessionRepro(dir, ctx)) === undefined);
-    assert.equal(await readSessionRepro(dir, ctx), undefined);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Spark repro drive complete/);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-    for (const handler of registerSparkToolsForTest().eventHandlers.get("session_shutdown") ?? []) {
-      await handler({}, testSparkContext(dir, "main"));
-    }
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -9911,310 +7606,6 @@ test("impl_state workflow_run_prune defaults to dry-run and does not write workf
   }
 });
 
-test("impl_workflow_runs exposes active child runs and refuses broad kill", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-background-runs-active-"));
-  const previousBindingHome = process.env.SPARK_HOME;
-  const previousPath = process.env.PATH;
-  try {
-    process.env.SPARK_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.runRole = createTestRoleRunner({ waitForCancel: true, inputControl: false });
-    const roleStatuses: Array<{ key: string; text: string | undefined }> = [];
-    const roleWidgets: Array<{ key: string; value: unknown; placement?: string }> = [];
-    ctx.ui.setStatus = (key, text) => {
-      if (key === "spark-role-runs") roleStatuses.push({ key, text });
-    };
-    ctx.ui.setWidget = (key, value, options) => {
-      if (key === "spark-role-runs")
-        roleWidgets.push({ key, value, placement: options?.placement });
-    };
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    graph.createTask({
-      projectRef: project.ref,
-      name: "background-child",
-      title: "Background child task",
-      description: "Run a long-lived fake role-run for background inspection.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Background child task"),
-    });
-    graph.createTask({
-      projectRef: project.ref,
-      name: "background-child-two",
-      title: "Background child task two",
-      description: "Run a second long-lived fake role-run for explicit selector coverage.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Background child task two"),
-    });
-    await store.save(graph);
-    const fakePi = join(dir, "pi");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-
-    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
-    await useOnlySparkProject(tools, ctx);
-    await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
-      dryRun: false,
-      maxConcurrency: 2,
-      timeoutMs: 50,
-    });
-
-    await waitFor(async () => {
-      const status = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-        action: "status",
-      });
-      const background = (
-        status.details as {
-          background?: { childRuns?: Array<{ activeProcess?: boolean; taskName?: string }> };
-        }
-      ).background;
-      const activeTaskNames =
-        background?.childRuns
-          ?.filter((child) => child.activeProcess)
-          .map((child) => child.taskName) ?? [];
-      return (
-        activeTaskNames.includes("background-child") &&
-        activeTaskNames.includes("background-child-two")
-      );
-    }, 5_000);
-
-    const status = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "status",
-    });
-    const statusText = toolText(status);
-    assert.match(statusText, /Background work: running/);
-    assert.match(statusText, /Active children:/);
-    assert.match(statusText, /task=@background-child/);
-    assert.match(statusText, /task=@background-child-two/);
-    assert.match(statusText, /control=kill/);
-    const statusDetails = status.details as {
-      background?: {
-        summary?: { state?: string; activeChildren?: number };
-        childRuns?: Array<{
-          runRef: string;
-          taskName?: string;
-          activeProcess?: boolean;
-          pid?: number;
-          claimKind?: string;
-          inputControl?: string;
-        }>;
-      };
-    };
-    assert.equal(statusDetails.background?.summary?.state, "running");
-    assert.equal(statusDetails.background?.summary?.activeChildren, 2);
-    const activeChildren =
-      statusDetails.background?.childRuns?.filter((entry) => entry.activeProcess) ?? [];
-    const child = activeChildren.find((entry) => entry.taskName === "background-child");
-    const sibling = activeChildren.find((entry) => entry.taskName === "background-child-two");
-    assert.ok(child);
-    assert.ok(child.runRef);
-    assert.ok(sibling);
-    assert.ok(sibling.runRef);
-    assert.notEqual(child.runRef, sibling.runRef);
-    assert.equal(child.claimKind, "role-run");
-    assert.equal(child.pid, undefined);
-    assert.equal(child.inputControl, "none");
-
-    const ambiguousReply = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "reply",
-      message: "continue whichever role is ready",
-    });
-    assert.match(toolText(ambiguousReply), /control_target_ambiguous/);
-    assert.equal(
-      (ambiguousReply.details as { background?: { error?: string } }).background?.error,
-      "control_target_ambiguous",
-    );
-
-    const inspect = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "inspect",
-      runRef: child.runRef,
-    });
-    assert.match(toolText(inspect), new RegExp(`Background child run: ${child.runRef} active`));
-    assert.match(toolText(inspect), /Task: @background-child/);
-    assert.match(
-      toolText(inspect),
-      /Control: kill available; reply\/steer unavailable \(no input control channel\)/,
-    );
-
-    const replied = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "reply",
-      runRef: child.runRef,
-      message: "continue with the visible task",
-    });
-    assert.match(
-      toolText(replied),
-      new RegExp(`Spark background role-run reply: not delivered to ${child.runRef}`),
-    );
-    assert.match(toolText(replied), /Control artifact: artifact:/);
-    const replyDetails = replied.details as {
-      controlArtifactRef?: string;
-      sent?: Array<{
-        delivered?: boolean;
-        bytes?: number;
-        runRef?: string;
-        inputControl?: string;
-        errorMessage?: string;
-      }>;
-      background?: {
-        roleRunRegistry?: {
-          entries?: Array<{
-            runRef?: string;
-            events?: Array<{ type?: string; message?: string; artifactRefs?: string[] }>;
-          }>;
-        };
-      };
-    };
-    assert.match(replyDetails.controlArtifactRef ?? "", /^artifact:/);
-    assert.equal(replyDetails.sent?.[0]?.runRef, child.runRef);
-    assert.equal(replyDetails.sent?.[0]?.delivered, false);
-    assert.equal(replyDetails.sent?.[0]?.inputControl, "none");
-    assert.ok((replyDetails.sent?.[0]?.bytes ?? 0) > 0);
-    assert.match(replyDetails.sent?.[0]?.errorMessage ?? "", /input control channel/);
-    assert.match(roleStatuses.at(-1)?.text ?? "", /roles:/);
-    assert.equal(roleWidgets.at(-1)?.key, "spark-role-runs");
-    assert.equal(roleWidgets.at(-1)?.placement, "belowEditor");
-    const replyEntry = replyDetails.background?.roleRunRegistry?.entries?.find(
-      (entry) => entry.runRef === child.runRef,
-    );
-    assert.deepEqual(
-      replyEntry?.events
-        ?.filter((event) => event.type === "waiting_for_user" || event.type === "replied")
-        .map((event) => event.type),
-      [],
-    );
-    assert.deepEqual(
-      replyEntry?.events?.filter((event) => event.type === "replied").map((event) => event.message),
-      [],
-    );
-    assert.deepEqual(
-      replyEntry?.events
-        ?.filter((event) => event.type === "replied")
-        .flatMap((event) => event.artifactRefs ?? []),
-      [],
-    );
-
-    const steered = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "steer",
-      taskRef: "background-child",
-      message: "prioritize tests",
-    });
-    assert.match(
-      toolText(steered),
-      new RegExp(`Spark background role-run steer: not delivered to ${child.runRef}`),
-    );
-    assert.match(toolText(steered), /Control artifact: artifact:/);
-    const steerDetails = steered.details as {
-      sent?: Array<{
-        delivered?: boolean;
-        runRef?: string;
-        inputControl?: string;
-        errorMessage?: string;
-      }>;
-      background?: {
-        roleRunRegistry?: {
-          entries?: Array<{ runRef?: string; events?: Array<{ type?: string; message?: string }> }>;
-        };
-      };
-    };
-    assert.equal(steerDetails.sent?.[0]?.runRef, child.runRef);
-    assert.equal(steerDetails.sent?.[0]?.delivered, false);
-    assert.equal(steerDetails.sent?.[0]?.inputControl, "none");
-    assert.match(steerDetails.sent?.[0]?.errorMessage ?? "", /input control channel/);
-    const steerEntry = steerDetails.background?.roleRunRegistry?.entries?.find(
-      (entry) => entry.runRef === child.runRef,
-    );
-    assert.deepEqual(
-      steerEntry?.events
-        ?.filter((event) => event.type === "message_activity")
-        .map((event) => event.message),
-      [],
-    );
-
-    const refused = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "kill",
-    });
-    assert.match(toolText(refused), /kill_requires_target/);
-    assert.equal(
-      (refused.details as { background?: { error?: string } }).background?.error,
-      "kill_requires_target",
-    );
-
-    const roleStatusCountBeforeKill = roleStatuses.length;
-    const roleWidgetCountBeforeKill = roleWidgets.length;
-    const killed = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "kill",
-      runRef: child.runRef,
-      forceAfterMs: 0,
-    });
-    assert.match(toolText(killed), /Stopped background child runs: 1/);
-    assert.equal(
-      ((killed.details as { background?: { killed?: unknown[] } }).background?.killed ?? []).length,
-      1,
-    );
-    assert.ok(roleStatuses.length > roleStatusCountBeforeKill);
-    assert.ok(roleWidgets.length > roleWidgetCountBeforeKill);
-    assert.match(roleStatuses.at(-1)?.text ?? "", /roles:/);
-    assert.equal(roleWidgets.at(-1)?.key, "spark-role-runs");
-    const roleStatusCountBeforeKillActive = roleStatuses.length;
-    const roleWidgetCountBeforeKillActive = roleWidgets.length;
-    const killedSibling = await executeSparkTool(tools, "impl_workflow_runs", ctx, {
-      action: "kill_active",
-      runRef: sibling.runRef,
-      forceAfterMs: 0,
-    });
-    assert.match(toolText(killedSibling), /Stopped background child runs: 1/);
-    assert.equal(
-      ((killedSibling.details as { background?: { killed?: unknown[] } }).background?.killed ?? [])
-        .length,
-      1,
-    );
-    assert.ok(roleStatuses.length > roleStatusCountBeforeKillActive);
-    assert.ok(roleWidgets.length > roleWidgetCountBeforeKillActive);
-    assert.match(roleStatuses.at(-1)?.text ?? "", /roles:/);
-    assert.equal(roleWidgets.at(-1)?.key, "spark-role-runs");
-    await waitFor(async () => {
-      const reloaded = await defaultTaskGraphStore(dir).load();
-      return !reloaded?.tasks(project.ref).some((task) => task.status === "running");
-    }, 5_000);
-    await waitFor(async () => (await defaultWorkflowRunStore(dir).status()).running === 0, 5_000);
-  } finally {
-    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
-    if (existsSync(join(dir, ".spark", "workflow-runs.json"))) {
-      await waitFor(async () => {
-        const reloaded = await defaultTaskGraphStore(dir).load();
-        return !reloaded?.tasks().some((task) => task.status === "running");
-      }, 5_000).catch(() => undefined);
-      await waitFor(
-        async () => (await defaultWorkflowRunStore(dir).status()).running === 0,
-        5_000,
-      ).catch(() => undefined);
-    }
-    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
-    else process.env.SPARK_HOME = previousBindingHome;
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
 test("impl_workflow_runs reply records failed delivery without successful activity transition", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-workflow-runs-reply-failed-delivery-"));
   const previousBindingHome = process.env.SPARK_HOME;
@@ -10954,88 +8345,6 @@ test("legacy /run commands are not registered", () => {
   assert.equal(commands.get("run-parallel"), undefined);
 });
 
-test("impl_run_ready_tasks preflights current ready frontier with configured Pi command", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-frontier-preflight-"));
-  const previousBindingHome = process.env.SPARK_HOME;
-  const previousPath = process.env.PATH;
-  try {
-    process.env.SPARK_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    graph.createTask({
-      projectRef: project.ref,
-      name: "ready-worker",
-      title: "Ready worker task",
-      description: "Only this ready frontier task should be preflighted.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Ready worker task"),
-    });
-    graph.createTask({
-      projectRef: project.ref,
-      name: "blocked-reviewer",
-      title: "Blocked reviewer task",
-      description: "This future task must not block current frontier dispatch.",
-      kind: "review",
-      status: "blocked",
-      plan: executionReadyPlan("Blocked reviewer task"),
-    });
-    await store.save(graph);
-    const emptyPathDir = join(dir, "empty-path");
-    await mkdir(emptyPathDir);
-    const fakePi = join(dir, "custom-pi");
-    await writeFile(
-      fakePi,
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--list-models" ] && [ "$2" = "test/model" ]; then exit 0; fi',
-        'if [ "$1" = "--list-models" ]; then printf "No models matching %s\\n" "$2"; exit 0; fi',
-        `printf '%s\\n' '${JSON.stringify({ type: "done" })}'`,
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = emptyPathDir;
-
-    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
-    await useOnlySparkProject(tools, ctx);
-    const result = await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
-      dryRun: false,
-      maxConcurrency: 1,
-      timeoutMs: 123,
-    });
-
-    assert.match(toolText(result), /Spark workflow-run scheduler started/);
-    assert.deepEqual((result.details as { policy?: unknown }).policy, {
-      maxConcurrency: 1,
-      timeoutMs: 123,
-    });
-    const runControl = await defaultWorkflowRunStore(dir).loadControl();
-    assert.equal(runControl?.policy.maxConcurrency, 1);
-    assert.equal(runControl?.policy.timeoutMs, 123);
-    const settingsFile = JSON.parse(
-      await readFile(join(dir, "role-model-settings.json"), "utf8"),
-    ) as { roleModels: Record<string, string> };
-    assert.deepEqual(settingsFile.roleModels, { "role:builtin-worker": "test/model" });
-    await waitFor(async () => {
-      const dagStatus = await defaultWorkflowRunStore(dir).status();
-      return dagStatus.succeeded === 1 || dagStatus.failed > 0;
-    }, 10_000);
-  } finally {
-    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
-    else process.env.SPARK_HOME = previousBindingHome;
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
 test("workflow-run manager preflights role models with configured Pi command", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-manager-pi-command-"));
   const previousBindingHome = process.env.SPARK_HOME;
@@ -11110,296 +8419,6 @@ test("workflow-run manager preflights role models with configured Pi command", a
   }
 });
 
-test("impl_run_ready_tasks scheduler exposes native reply control on active children", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-native-reply-"));
-  const previousBindingHome = process.env.SPARK_HOME;
-  const previousPath = process.env.PATH;
-  const deliveredInputs: string[] = [];
-  try {
-    process.env.SPARK_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.runRole = createTestRoleRunner({ waitForCancel: true, deliveredInputs });
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    graph.createTask({
-      projectRef: project.ref,
-      name: "scheduler-native-child",
-      title: "Scheduler native child task",
-      description: "Run a long-lived native child through the workflow-run scheduler.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Scheduler native child task"),
-    });
-    await store.save(graph);
-    const fakePi = join(dir, "pi");
-    await writeFile(
-      fakePi,
-      [
-        "#!/usr/bin/env node",
-        "const args = process.argv.slice(2);",
-        "if (args[0] === '--list-models' && args[1] === 'test/model') process.exit(0);",
-        "if (args[0] === '--list-models') { process.stdout.write('No models matching ' + args[1] + '\\n'); process.exit(0); }",
-        "process.exit(0);",
-      ].join("\n"),
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-
-    const { tools } = registerSparkToolsForTest({ piCommand: fakePi });
-    await useOnlySparkProject(tools, ctx);
-    const started = await executeSparkTool(tools, "impl_run_ready_tasks", ctx, {
-      dryRun: false,
-      maxConcurrency: 1,
-      timeoutMs: 10_000,
-    });
-    assert.match(toolText(started), /Spark workflow-run scheduler started/);
-
-    let child:
-      | {
-          runRef: string;
-          taskName?: string;
-          activeProcess?: boolean;
-          inputControl?: string;
-        }
-      | undefined;
-    await waitFor(async () => {
-      const status = await executeSparkTool(tools, "task_read", ctx, {
-        action: "run_status",
-        runAction: "status",
-      });
-      const background = (
-        status.details as {
-          background?: {
-            childRuns?: Array<{
-              runRef: string;
-              taskName?: string;
-              activeProcess?: boolean;
-              inputControl?: string;
-            }>;
-          };
-        }
-      ).background;
-      child = background?.childRuns?.find(
-        (entry) =>
-          entry.taskName === "scheduler-native-child" &&
-          entry.activeProcess &&
-          entry.inputControl === "native",
-      );
-      return Boolean(child);
-    }, 5_000);
-    assert.ok(child);
-
-    const status = await executeSparkTool(tools, "task_read", ctx, {
-      action: "run_status",
-      runAction: "status",
-    });
-    assert.match(toolText(status), /control=kill\/reply\/steer/);
-
-    const inspect = await executeSparkTool(tools, "task_read", ctx, {
-      action: "run_status",
-      runAction: "inspect",
-      runRef: child.runRef,
-    });
-    assert.match(toolText(inspect), /Control: kill\/reply\/steer available/);
-
-    const message = "continue through scheduler native input";
-    const replied = await executeSparkTool(tools, "task_read", ctx, {
-      action: "run_status",
-      runAction: "reply",
-      runRef: child.runRef,
-      message,
-    });
-    assert.match(
-      toolText(replied),
-      new RegExp(`Spark background role-run reply: sent to ${child.runRef}`),
-    );
-    assert.deepEqual(deliveredInputs, [`${message}\n`]);
-    const details = replied.details as {
-      sent?: Array<{ delivered?: boolean; runRef?: string; inputControl?: string }>;
-      background?: {
-        roleRunRegistry?: {
-          entries?: Array<{
-            runRef?: string;
-            events?: Array<{ type?: string; message?: string }>;
-          }>;
-        };
-      };
-    };
-    assert.equal(details.sent?.[0]?.runRef, child.runRef);
-    assert.equal(details.sent?.[0]?.delivered, true);
-    assert.equal(details.sent?.[0]?.inputControl, "native");
-    const entry = details.background?.roleRunRegistry?.entries?.find(
-      (candidate) => candidate.runRef === child?.runRef,
-    );
-    assert.deepEqual(
-      (entry?.events ?? [])
-        .filter((event) => event.type === "waiting_for_user" || event.type === "replied")
-        .map((event) => event.type),
-      ["waiting_for_user", "replied"],
-    );
-    assert.deepEqual(
-      (entry?.events ?? [])
-        .filter((event) => event.type === "replied")
-        .map((event) => event.message),
-      [message],
-    );
-
-    await executeSparkTool(tools, "task_read", ctx, {
-      action: "run_status",
-      runAction: "kill",
-      runRef: child.runRef,
-      forceAfterMs: 0,
-    });
-    await waitFor(
-      () => !listActiveSparkRoleRunProcesses().some((process) => process.runRef === child?.runRef),
-      5_000,
-    );
-  } finally {
-    await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
-    await waitFor(
-      () => !listActiveSparkRoleRunProcesses().some((process) => process.cwd === dir),
-      5_000,
-    ).catch(() => undefined);
-    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
-    else process.env.SPARK_HOME = previousBindingHome;
-    process.env.PATH = previousPath;
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("impl_run_ready_tasks reports workflow-run completion without queuing a follow-up user message", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-followup-"));
-  const previousBindingHome = process.env.SPARK_HOME;
-  try {
-    process.env.SPARK_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.runRole = createTestRoleRunner({
-      stdout: `${JSON.stringify({ type: "done" })}\n`,
-      jsonEvents: [{ type: "done" }],
-    });
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    const otherProject = graph.createProject({
-      title: "Other DAG project",
-      description: "Must not be scheduled by sessions DAG execution.",
-    });
-    const otherTask = graph.createTask({
-      projectRef: otherProject.ref,
-      name: "other-ready-role",
-      title: "Other ready role task",
-      description: "This task is ready but belongs to another project.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Other ready role task"),
-    });
-    graph.createTask({
-      projectRef: project.ref,
-      name: "ready-role-one",
-      title: "Ready role task one",
-      description: "Run the first quick fake role-run.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Ready role task one"),
-    });
-    graph.createTask({
-      projectRef: project.ref,
-      name: "ready-role-two",
-      title: "Ready role task two",
-      description: "Run the second quick fake role-run.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Ready role task two"),
-    });
-    await store.save(graph);
-    const fakePi = join(dir, "pi");
-    await writeFile(
-      fakePi,
-      "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ type: 'done' }) + '\\n');\nprocess.exit(0);\n",
-      "utf8",
-    );
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-
-    const extension = registerSparkToolsForTest({ piCommand: fakePi });
-    const { tools, messages } = extension;
-    await useOnlySparkProject(tools, ctx);
-    await executeSparkTool(tools, "impl_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(async () => {
-      const status = await defaultWorkflowRunStore(dir).status();
-      return status.succeeded === 1 || status.failed > 0;
-    }, 10_000);
-    await waitFor(
-      () => Boolean(ctx.notifications.at(-1)?.message.includes("Workflow run:")),
-      10_000,
-    );
-
-    const dagStatus = await defaultWorkflowRunStore(dir).status();
-    assert.equal(dagStatus.succeeded, 1);
-    assert.equal(dagStatus.lastRun?.projectRef, project.ref);
-    const reloadedGraph = await defaultTaskGraphStore(dir).load();
-    assert.equal(reloadedGraph?.getTask(otherTask.ref).status, "pending");
-    assert.doesNotMatch(messages.join("\n"), /Workflow run:/);
-    assert.equal(ctx.notifications.at(-1)?.level, "info");
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Workflow run:/);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /scheduled 2, completed \d/);
-    assert.match(ctx.notifications.at(-1)?.message ?? "", /Digest:/);
-    assert.equal(dagStatus.lastRun?.completionDigest.length, 2);
-    assert.equal(
-      dagStatus.lastRun?.completionDigest.every((summary) => summary.status === "succeeded"),
-      true,
-    );
-    assert.equal(
-      dagStatus.lastRun?.completionDigest.every((summary) => summary.artifactRefs.length === 1),
-      true,
-    );
-    assert.equal(
-      dagStatus.lastRun?.completionDigest.every((summary) => /type.*done/.test(summary.summary)),
-      true,
-    );
-
-    const status = await executeSparkTool(tools, "impl_status", ctx, {});
-    const statusText = toolText(status);
-    assert.match(statusText, /Recent role-run completions:/);
-    assert.equal((statusText.match(/\[succeeded\] task=task:/gu) ?? []).length, 2);
-    assert.equal((statusText.match(/artifacts=artifact:/gu) ?? []).length, 2);
-    const statusDetails = status.details as {
-      recentRoleRunCompletions?: Array<{ status?: string; artifactRefs?: string[] }>;
-    };
-    assert.equal(statusDetails.recentRoleRunCompletions?.length, 2);
-    assert.equal(
-      statusDetails.recentRoleRunCompletions?.every(
-        (summary) => summary.status === "succeeded" && summary.artifactRefs?.length === 1,
-      ),
-      true,
-    );
-
-    const hiddenInbox = await consumeSparkRoleRunInbox(extension, ctx);
-    assert.match(hiddenInbox, /Recent unread background role-run results:/);
-    assert.equal((hiddenInbox.match(/\[succeeded\] task=task:/gu) ?? []).length, 2);
-    assert.equal((hiddenInbox.match(/artifacts=artifact:/gu) ?? []).length, 2);
-    assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
-  } finally {
-    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
-    else process.env.SPARK_HOME = previousBindingHome;
-    await waitFor(
-      () => listActiveSparkRoleRunProcesses().every((process) => process.cwd !== dir),
-      5_000,
-    ).catch(() => undefined);
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
 test("impl_status renders legacy large role-run artifacts by refs without artifact body", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-status-large-role-run-artifact-"));
   try {
@@ -11464,76 +8483,6 @@ test("impl_status renders legacy large role-run artifacts by refs without artifa
     assert.doesNotMatch(text, new RegExp(legacyBodyMarker));
     assert.doesNotMatch(JSON.stringify(status.details), new RegExp(legacyBodyMarker));
   } finally {
-    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
-  }
-});
-
-test("impl_run_ready_tasks marks Spark workflow-run scheduler failed when child role-run fails", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-tool-dag-child-failed-"));
-  const previousBindingHome = process.env.SPARK_HOME;
-  try {
-    process.env.SPARK_HOME = dir;
-    await writeEmptySparkProject(dir);
-    const ctx = testSparkContext(dir, "main");
-    ctx.runRole = createTestRoleRunner();
-    ctx.inputValue = "test/model";
-    const store = defaultTaskGraphStore(dir);
-    const graph = await store.load();
-    assert.ok(graph);
-    const [project] = graph.projects();
-    assert.ok(project);
-    graph.createTask({
-      projectRef: project.ref,
-      name: "empty-role",
-      title: "Empty role task",
-      description: "Run a fake role-run that produces no evidence.",
-      kind: "implement",
-      status: "pending",
-      plan: executionReadyPlan("Empty role task"),
-    });
-    await store.save(graph);
-    const fakePi = join(dir, "pi");
-    await writeFile(fakePi, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
-    await chmod(fakePi, 0o755);
-    process.env.PATH = `${dir}:${process.env.PATH ?? ""}`;
-
-    const extension = registerSparkToolsForTest();
-    const { tools, messages } = extension;
-    await useOnlySparkProject(tools, ctx);
-    await executeSparkTool(tools, "impl_run_ready_tasks", ctx, { dryRun: false });
-    await waitFor(async () => {
-      const status = await defaultWorkflowRunStore(dir).status();
-      return status.failed === 1;
-    }, 3_000);
-    await waitFor(
-      () => Boolean(ctx.notifications.at(-1)?.message.includes("Workflow run:")),
-      3_000,
-    );
-
-    const dagStatus = await defaultWorkflowRunStore(dir).status();
-    assert.equal(dagStatus.succeeded, 0);
-    assert.equal(dagStatus.failed, 1);
-    assert.equal(dagStatus.lastRun?.status, "failed");
-    assert.doesNotMatch(messages.join("\n"), /Workflow run: .* failed: scheduled 1, completed 1/);
-    assert.equal(ctx.notifications.at(-1)?.level, "error");
-    assert.match(
-      ctx.notifications.at(-1)?.message ?? "",
-      /Workflow run: .* failed: scheduled 1, completed 1/,
-    );
-    assert.match(
-      ctx.notifications.at(-1)?.message ?? "",
-      /failed: inspect task_read\(\{ action: "run_status"/,
-    );
-    const hiddenInbox = await consumeSparkRoleRunInbox(extension, ctx);
-    assert.match(hiddenInbox, /Recent unread background role-run results:/);
-    assert.match(hiddenInbox, /\[failed\] task=task:/);
-    assert.match(hiddenInbox, /next=inspect with task_read\(\{ action: "run_status"/);
-    assert.doesNotMatch(hiddenInbox, /transcript body/i);
-    assert.equal(await tryConsumeSparkModeContext(extension, ctx), undefined);
-    assert.equal(existsSync(join(dir, ".spark", "todos")), false);
-  } finally {
-    if (previousBindingHome === undefined) delete process.env.SPARK_HOME;
-    else process.env.SPARK_HOME = previousBindingHome;
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
   }
 });
@@ -13153,6 +10102,7 @@ function registerSparkToolsForTest(
   getActiveToolNames: () => string[];
   registerActiveTool: (name: string) => void;
   setActiveTools: (names: string[]) => void;
+  driverControl: TestSparkDaemonDriverControl;
 } {
   const tools = new Map<string, SparkToolConfig>();
   const activeToolNames = new Set<string>();
@@ -13173,13 +10123,16 @@ function registerSparkToolsForTest(
     string,
     Array<(event: unknown, ctx: TestSparkContext) => unknown>
   >();
+  const driverControl = createTestDriverControl();
   const pi: SparkHostApiForTest & {
+    driverControl: TestSparkDaemonDriverControl;
     getActiveTools: () => string[];
     getAllTools: () => Array<{ name: string }>;
     setActiveTools: (names: string[]) => void;
     createReviewerRunner: NonNullable<SparkHostApiForTest["createReviewerRunner"]>;
     getPiCommand?: () => string | undefined;
   } = {
+    driverControl,
     registerCommand: (name, config) => {
       commands.set(name, config);
     },
@@ -13261,15 +10214,16 @@ function registerSparkToolsForTest(
       activeToolNames.add(name);
     },
     setActiveTools: (names: string[]) => pi.setActiveTools(names),
+    driverControl,
   };
 }
 
-function isForegroundGoalTickMessage(
-  message: ReturnType<typeof registerSparkToolsForTest>["customMessages"][number] | undefined,
-): boolean {
-  return (
-    message?.customType === "spark-goal-request" &&
-    message.details?.purpose === "foreground-goal-tick"
+function activeTestDriver(
+  run: ReturnType<typeof registerSparkToolsForTest>,
+  kind: Awaited<ReturnType<SparkDaemonDriverControl["start"]>>["driver"]["kind"],
+) {
+  return [...run.driverControl.drivers.values()].find(
+    (driver) => driver.kind === kind && driver.status !== "stopped",
   );
 }
 
@@ -13403,6 +10357,7 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
   const sessionFile = join(cwd, ".pi-sessions", `${sessionName}.json`);
   const context: TestSparkContext = {
     cwd,
+    sessionId: `session:${stableId(sessionFile)}`,
     sessionManager: {
       getSessionFile: () => sessionFile,
       getLeafId: () => `${sessionName}-leaf`,
@@ -13424,6 +10379,102 @@ function testSparkContext(cwd: string, sessionName: string): TestSparkContext {
     },
   };
   return context;
+}
+
+function createTestDriverControl(): TestSparkDaemonDriverControl {
+  const drivers = new Map<
+    string,
+    Awaited<ReturnType<SparkDaemonDriverControl["start"]>>["driver"]
+  >();
+  const observedAt = () => new Date().toISOString();
+  const requireDriver = (driverId: string) => {
+    const driver = drivers.get(driverId);
+    assert.ok(driver, `missing test daemon driver ${driverId}`);
+    return driver;
+  };
+  return {
+    drivers,
+    async start(input) {
+      for (const [driverId, driver] of drivers) {
+        if (
+          driver.ownerSessionId === input.ownerSessionId &&
+          driver.kind !== "workflow" &&
+          driver.kind !== "session_todo" &&
+          driverId !== input.driverId
+        ) {
+          drivers.set(driverId, { ...driver, status: "stopped", dueAt: undefined });
+        }
+      }
+      const driver = {
+        driverId: input.driverId ?? `driver:${drivers.size + 1}`,
+        kind: input.kind,
+        ownerSessionId: input.ownerSessionId,
+        status: "scheduled" as const,
+        continuity: input.continuity ?? ("session" as const),
+        dueAt: input.dueAt ?? observedAt(),
+        attempt: 0,
+        reason: input.reason,
+      };
+      drivers.set(driver.driverId, driver);
+      return { driver, observedAt: observedAt() };
+    },
+    async list(input) {
+      return {
+        drivers: [...drivers.values()].filter(
+          (driver) =>
+            (!input.driverId || driver.driverId === input.driverId) &&
+            (!input.ownerSessionId || driver.ownerSessionId === input.ownerSessionId) &&
+            (input.includeStopped || driver.status !== "stopped"),
+        ),
+        observedAt: observedAt(),
+      };
+    },
+    async stop(input) {
+      const current = requireDriver(input.driverId);
+      const driver = {
+        ...current,
+        status: "stopped" as const,
+        dueAt: undefined,
+        reason: input.reason,
+      };
+      drivers.set(driver.driverId, driver);
+      return { driver, observedAt: observedAt() };
+    },
+    async restart(input) {
+      const current = requireDriver(input.driverId);
+      const driver = {
+        ...current,
+        status: "scheduled" as const,
+        dueAt: observedAt(),
+        attempt: 0,
+        reason: input.reason,
+      };
+      drivers.set(driver.driverId, driver);
+      return { driver, observedAt: observedAt() };
+    },
+    async wake(input) {
+      const current = requireDriver(input.driverId);
+      const driver = {
+        ...current,
+        status: "scheduled" as const,
+        dueAt: observedAt(),
+        reason: input.reason,
+      };
+      drivers.set(driver.driverId, driver);
+      return { driver, observedAt: observedAt() };
+    },
+    async schedule(input) {
+      const current = requireDriver(input.driverId);
+      const driver = {
+        ...current,
+        status: "scheduled" as const,
+        dueAt: input.dueAt ?? new Date(Date.now() + Math.max(0, input.delayMs ?? 0)).toISOString(),
+        reason: input.reason,
+      };
+      drivers.set(driver.driverId, driver);
+      return { driver, observedAt: observedAt() };
+    },
+  };
 }
 
 function installTimedOutAskInteraction(ctx: TestSparkContext): void {

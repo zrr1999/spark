@@ -2,6 +2,7 @@ import type { CommandMetadata } from "@zendev-lab/spark-core";
 import type { ReviewerRunner } from "./reviewer-runner.ts";
 import type { SparkEntryApplicationDeps } from "./spark-entry-application.ts";
 import type { SparkToolContext } from "./spark-tool-registration.ts";
+import type { SparkDaemonDriverControl } from "./spark-daemon-driver-client.ts";
 
 export type SparkGoalLoopContext = SparkToolContext & {
   waitForIdle?: () => Promise<void>;
@@ -48,46 +49,11 @@ export interface SparkCommandApi {
 }
 
 export interface SparkCommandRegistrationDeps extends SparkEntryApplicationDeps {
+  driverControl: SparkDaemonDriverControl;
   createReviewerRunner?: (
     cwd: string,
     ctx: SparkToolContext,
   ) => ReviewerRunner | Promise<ReviewerRunner>;
-}
-
-export interface ForegroundGoalAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  goalId: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-export interface ForegroundLoopAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  loopId: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-export interface ForegroundReproAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  reproId: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
-}
-
-export interface ForegroundImplementAwaitingTurn {
-  piApi: SparkCommandApi;
-  ctx: SparkGoalLoopContext;
-  focus?: string;
-  generation: number;
-  startedAtMs: number;
-  failure?: string;
 }
 
 export type ForegroundDriverErrorScope = "driver" | "goal loop" | "loop" | "repro";

@@ -6,7 +6,7 @@ This file names stable agent-facing capabilities. Schemas and result types live 
 
 - `/plan` researches and creates/refines verifiable tasks without executing them.
 - `/implement` claims and completes ready work.
-- `/loop` runs recurring ticks and must schedule each next tick; it has no completion gate.
+- `/loop` starts a daemon-owned recurring driver and must schedule each next tick; `/loop fresh <objective>` resets the hidden execution session for every tick while keeping the logical owner's state.
 - `/goal` uses reviewer-backed decisions and reviewer-gated completion.
 - `/workflow` executes a selected saved workflow; `/ultracode` explicitly opts into approval-gated fan-out.
 - `/btw` opens and controls the daemon-owned, read-only Side Thread associated with the current parent session.
@@ -39,6 +39,11 @@ TUI and Cockpit use the same daemon-owned Side Thread contract; presentation sta
 - `workflow` lists/reads controlled selectors; `workflow_run` executes a saved selector or trusted metadata-first script.
 
 Direct role/session calls do not create task attribution.
+
+These foreground commands and their tools send `driver.*` controls to the
+daemon. TUI, Cockpit, and compatible extension hosts never own their timer,
+generation, retry, or next-turn continuation. The full runtime contract is in
+[`daemon-autonomous-drivers.md`](./daemon-autonomous-drivers.md).
 
 ## Deliberation
 

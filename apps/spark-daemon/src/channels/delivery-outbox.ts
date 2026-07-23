@@ -195,14 +195,15 @@ export function completeInvocationWithChannelDelivery(
   task: SparkDaemonTask,
   completion: CompleteSparkInvocationInput,
 ): SparkInvocationRecord {
-  const delivery = completionSuppressesCompetingChannelDelivery(completion)
-    ? undefined
-    : channelReplyDeliveryForCompletion(
-        task,
-        invocation.invocationId,
-        completion.status === "succeeded" ? "final" : "failure",
-        completion.result,
-      );
+  const delivery =
+    completionSuppressesCompetingChannelDelivery(completion) || task.type === "driver.tick"
+      ? undefined
+      : channelReplyDeliveryForCompletion(
+          task,
+          invocation.invocationId,
+          completion.status === "succeeded" ? "final" : "failure",
+          completion.result,
+        );
   if (!delivery) {
     return deps.invocations.complete(invocation.invocationId, completion);
   }

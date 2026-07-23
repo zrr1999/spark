@@ -259,7 +259,6 @@ export async function requestGoalCompletionReview(
     const updated = await updateSessionGoalStatus(ctx.cwd, ctx, "complete", {
       reason: reviewSummary.reason,
       review: reviewSummary,
-      retryState: null,
       expectedGoalId: active.goal.goalId,
     });
     await deps.refreshSparkWidget(ctx.cwd, ctx);

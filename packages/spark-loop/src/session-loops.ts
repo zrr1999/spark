@@ -12,20 +12,6 @@ import { sparkSessionOwnerKey, type SparkSessionContext } from "./session-identi
 export type SparkSessionLoopStatus = "active" | "paused";
 export type SparkSessionLoopSource = "explicit" | "inferred";
 
-export interface SparkSessionLoopRetryState {
-  consecutiveFailures: number;
-  lastFailureAt?: string;
-  nextDelayMs?: number;
-  exhaustedAt?: string;
-}
-
-export interface SparkSessionLoopScheduleState {
-  nextRunAt: string;
-  delayMs: number;
-  scheduledAt: string;
-  reason?: string;
-}
-
 export interface SparkSessionLoop {
   version: 1;
   loopId: string;
@@ -34,8 +20,6 @@ export interface SparkSessionLoop {
   status: SparkSessionLoopStatus;
   source: SparkSessionLoopSource;
   pauseReason?: string;
-  retryState?: SparkSessionLoopRetryState;
-  schedule?: SparkSessionLoopScheduleState;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,8 +85,6 @@ export async function updateSessionLoopStatus(
   status: SparkSessionLoopStatus,
   options: {
     reason?: string;
-    retryState?: SparkSessionLoopRetryState | null;
-    schedule?: SparkSessionLoopScheduleState | null;
     expectedLoopId?: string;
   } = {},
 ): Promise<SparkSessionLoop | undefined> {
@@ -114,59 +96,8 @@ export async function updateSessionLoopStatus(
     ...existing,
     status,
     pauseReason: status === "paused" ? normalizeOptionalReason(options.reason) : undefined,
-    retryState:
-      options.retryState === undefined ? existing.retryState : (options.retryState ?? undefined),
-    schedule:
-      status === "paused"
-        ? undefined
-        : options.schedule === undefined
-          ? existing.schedule
-          : (options.schedule ?? undefined),
     updatedAt: nowIso(),
   };
-  await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
-  return loop;
-}
-
-export async function scheduleSessionLoopTick(
-  cwd: string,
-  ctx: SparkSessionContext | undefined,
-  input: { delayMs: number; reason?: string; expectedLoopId?: string },
-): Promise<SparkSessionLoop | undefined> {
-  const snapshot = await loadSessionLoopSnapshot(cwd, ctx);
-  const existing = snapshot.loop;
-  if (!existing) return undefined;
-  if (input.expectedLoopId && existing.loopId !== input.expectedLoopId) return undefined;
-  const delayMs = normalizeLoopDelayMs(input.delayMs);
-  const scheduledAtMs = Date.now();
-  const schedule: SparkSessionLoopScheduleState = {
-    delayMs,
-    scheduledAt: new Date(scheduledAtMs).toISOString(),
-    nextRunAt: new Date(scheduledAtMs + delayMs).toISOString(),
-    reason: normalizeOptionalReason(input.reason),
-  };
-  const loop: SparkSessionLoop = {
-    ...existing,
-    status: "active",
-    pauseReason: undefined,
-    schedule,
-    updatedAt: nowIso(),
-  };
-  await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
-  return loop;
-}
-
-export async function clearSessionLoopSchedule(
-  cwd: string,
-  ctx: SparkSessionContext | undefined,
-  options: { expectedLoopId?: string } = {},
-): Promise<SparkSessionLoop | undefined> {
-  const snapshot = await loadSessionLoopSnapshot(cwd, ctx);
-  const existing = snapshot.loop;
-  if (!existing) return undefined;
-  if (options.expectedLoopId && existing.loopId !== options.expectedLoopId) return undefined;
-  if (!existing.schedule) return existing;
-  const loop: SparkSessionLoop = { ...existing, schedule: undefined, updatedAt: nowIso() };
   await saveSessionLoopSnapshot(cwd, ctx, { version: 1, loop });
   return loop;
 }
@@ -224,7 +155,8 @@ async function saveSessionLoopSnapshot(
   ctx: SparkSessionContext | undefined,
   snapshot: SparkSessionLoopSnapshot,
 ): Promise<void> {
-  await writeJsonFileAtomic(sessionLoopStorePath(cwd, ctx), snapshot);
+  const loop = snapshot.loop ? withoutLoopRuntimeState(snapshot.loop) : undefined;
+  await writeJsonFileAtomic(sessionLoopStorePath(cwd, ctx), { version: 1, loop });
   await rebuildSessionIndex(cwd, ctx);
 }
 
@@ -246,17 +178,21 @@ function normalizeSessionLoop(
     status: normalizeLoopStatus(value.status, filePath),
     source: normalizeLoopSource(value.source, filePath),
     pauseReason: optionalString(value.pauseReason, filePath, "loop.pauseReason"),
-    retryState:
-      value.retryState === undefined
-        ? undefined
-        : normalizeLoopRetryState(value.retryState, filePath),
-    schedule:
-      value.schedule === undefined
-        ? undefined
-        : normalizeLoopScheduleState(value.schedule, filePath),
     createdAt: requireString(value.createdAt, filePath, "loop.createdAt"),
     updatedAt: requireString(value.updatedAt, filePath, "loop.updatedAt"),
   };
+}
+
+function withoutLoopRuntimeState(loop: SparkSessionLoop): SparkSessionLoop {
+  const {
+    retryState: _retryState,
+    schedule: _schedule,
+    ...canonical
+  } = loop as SparkSessionLoop & {
+    retryState?: unknown;
+    schedule?: unknown;
+  };
+  return canonical;
 }
 
 function normalizeLoopStatus(value: unknown, filePath: string): SparkSessionLoopStatus {
@@ -267,33 +203,6 @@ function normalizeLoopStatus(value: unknown, filePath: string): SparkSessionLoop
 function normalizeLoopSource(value: unknown, filePath: string): SparkSessionLoopSource {
   if (value === "explicit" || value === "inferred") return value;
   throw new JsonStoreFormatError(filePath, "loop.source must be explicit or inferred");
-}
-
-function normalizeLoopRetryState(value: unknown, filePath: string): SparkSessionLoopRetryState {
-  if (!isRecord(value)) throw new JsonStoreFormatError(filePath, "loop.retryState must be object");
-  return {
-    consecutiveFailures: requireNumber(
-      value.consecutiveFailures,
-      filePath,
-      "loop.retryState.consecutiveFailures",
-    ),
-    lastFailureAt: optionalString(value.lastFailureAt, filePath, "loop.retryState.lastFailureAt"),
-    nextDelayMs: optionalNumber(value.nextDelayMs, filePath, "loop.retryState.nextDelayMs"),
-    exhaustedAt: optionalString(value.exhaustedAt, filePath, "loop.retryState.exhaustedAt"),
-  };
-}
-
-function normalizeLoopScheduleState(
-  value: unknown,
-  filePath: string,
-): SparkSessionLoopScheduleState {
-  if (!isRecord(value)) throw new JsonStoreFormatError(filePath, "loop.schedule must be object");
-  return {
-    nextRunAt: requireString(value.nextRunAt, filePath, "loop.schedule.nextRunAt"),
-    delayMs: normalizeLoopDelayMs(value.delayMs),
-    scheduledAt: requireString(value.scheduledAt, filePath, "loop.schedule.scheduledAt"),
-    reason: optionalString(value.reason, filePath, "loop.schedule.reason"),
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -309,14 +218,4 @@ function optionalString(value: unknown, filePath: string, field: string): string
   if (value === undefined) return undefined;
   if (typeof value === "string") return value;
   throw new JsonStoreFormatError(filePath, `${field} must be a string when present`);
-}
-
-function requireNumber(value: unknown, filePath: string, field: string): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  throw new JsonStoreFormatError(filePath, `${field} must be a finite number`);
-}
-
-function optionalNumber(value: unknown, filePath: string, field: string): number | undefined {
-  if (value === undefined) return undefined;
-  return requireNumber(value, filePath, field);
 }

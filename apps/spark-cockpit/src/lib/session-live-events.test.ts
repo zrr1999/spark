@@ -34,6 +34,56 @@ function event(
 }
 
 describe("session live events", () => {
+  it("replays driver updates into the selected session projection", () => {
+    const state = createSessionLiveEventState({
+      sessionId: "sess_current",
+      workspaceId: "ws_spore",
+      view: parseSparkSessionView({
+        sessionId: "sess_current",
+        status: "idle",
+        drivers: [],
+      }),
+    });
+
+    const result = applySessionLiveEvent(
+      state,
+      event({
+        id: "evt_driver",
+        kind: "daemon.view_event",
+        payload: {
+          version: 1,
+          type: "daemon.view_event",
+          source: "daemon",
+          emittedAt: "2026-07-13T08:00:01.000Z",
+          sessionId: "sess_current",
+          view: {
+            version: 1,
+            type: "driver.update",
+            sessionId: "sess_current",
+            driver: {
+              driverId: "loop-one",
+              kind: "loop",
+              ownerSessionId: "sess_current",
+              status: "scheduled",
+              continuity: "fresh",
+              dueAt: "2026-07-13T08:00:30.000Z",
+              attempt: 0,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result).toEqual({ changed: true, refreshActivity: false });
+    expect(state.view?.drivers).toEqual([
+      expect.objectContaining({
+        driverId: "loop-one",
+        status: "scheduled",
+        continuity: "fresh",
+      }),
+    ]);
+  });
+
   it("applies a post-commit session title event and requests a sidebar refresh", () => {
     const state = createSessionLiveEventState({
       sessionId: "sess_current",

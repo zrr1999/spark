@@ -18,7 +18,7 @@ export interface SparkSessionHeader {
   /** Internal transcripts are addressable only by their owning subsystem. */
   visibility?: "internal";
   /** Diagnostic purpose for an internal transcript; never a public session kind. */
-  purpose?: "side_thread";
+  purpose?: "side_thread" | "driver_tick";
 }
 
 export interface SparkSessionEntryBase {
@@ -152,5 +152,5 @@ export interface NewSparkSessionOptions {
   parentSession?: string;
   timestamp?: string;
   visibility?: "internal";
-  purpose?: "side_thread";
+  purpose?: "side_thread" | "driver_tick";
 }

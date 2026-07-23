@@ -82,6 +82,7 @@ export async function startLocalRpcServer(options: {
     sessionRegistry,
     mailStore,
     notificationDeliveryQueue,
+    ...(options.eventBus ? { eventBus: options.eventBus } : {}),
     ...(options.channelIngress ? { channelIngress: options.channelIngress } : {}),
     ...(options.modelControl ? { modelControl: options.modelControl } : {}),
     ...(options.humanWaits ? { humanWaits: options.humanWaits } : {}),

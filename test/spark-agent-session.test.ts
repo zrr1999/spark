@@ -232,6 +232,35 @@ test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   }
 });
 
+test("SparkAgentSession keeps daemon driver transcripts out of public history", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-driver-hidden-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    const services = await makeFakeServices({ cwd, sparkHome });
+    const result = await new SparkAgentSession(services).run({
+      sessionId: "driver_loop-hidden_1",
+      prompt: "hidden tick",
+      reset: true,
+      sessionVisibility: "internal",
+      sessionPurpose: "driver_tick",
+    });
+
+    const record = await services.sessionStore.load(result.sessionPath);
+    assert.equal(record.header.visibility, "internal");
+    assert.equal(record.header.purpose, "driver_tick");
+    assert.deepEqual(await services.sessionStore.list(), []);
+    assert.equal(await services.sessionStore.findById("driver_loop-hidden_1"), undefined);
+    await assert.rejects(
+      services.sessionStore.loadByRef(result.sessionPath),
+      /Spark session not found/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("SparkAgentSession follows the authoritative transcript path across same-id generations", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-generation-"));
   try {

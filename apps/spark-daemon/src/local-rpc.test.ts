@@ -18,6 +18,7 @@ import {
 } from "@zendev-lab/spark-daemon-client/local-rpc";
 import {
   createDaemonSessionRegistry,
+  createSparkDaemonLocalEventBus,
   handleLocalRpcLine,
   parseSparkDaemonLifecycleSnapshot,
   requestDaemonStatus,
@@ -45,6 +46,98 @@ import type {
 } from "./channels/ingress.ts";
 
 describe("Spark daemon local RPC", () => {
+  it("owns the complete driver control plane and publishes reconnectable projections", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-driver-"));
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sessionRegistry = createDaemonSessionRegistry(join(root, ".spark"), {
+      daemonId: "driver-rpc-test",
+      daemonCwd: root,
+    });
+    await sessionRegistry.create({
+      sessionId: "session:driver-owner",
+      scope: { kind: "daemon" },
+    });
+    const eventBus = createSparkDaemonLocalEventBus();
+    const events: unknown[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    const request = async (id: string, method: string, params: Record<string, unknown>) =>
+      await handleLocalRpcLine(JSON.stringify({ id, method, params }), paths, db, undefined, {
+        sessionRegistry,
+        eventBus,
+      });
+
+    try {
+      const started = await request("driver_start", "driver.start", {
+        driverId: "goal-rpc",
+        kind: "goal",
+        ownerSessionId: "session:driver-owner",
+        continuity: "fresh",
+        cwd: root,
+        prompt: "advance the goal",
+        dueAt: "2026-07-23T00:00:00.000Z",
+      });
+      expect(started).toMatchObject({
+        ok: true,
+        result: {
+          driver: {
+            driverId: "goal-rpc",
+            status: "scheduled",
+            continuity: "fresh",
+          },
+        },
+      });
+      expect(
+        await request("driver_status", "driver.status", {
+          ownerSessionId: "session:driver-owner",
+          includeStopped: false,
+        }),
+      ).toMatchObject({
+        ok: true,
+        result: { drivers: [{ driverId: "goal-rpc", kind: "goal" }] },
+      });
+      expect(
+        await request("driver_stop", "driver.stop", {
+          driverId: "goal-rpc",
+          reason: "pause",
+        }),
+      ).toMatchObject({ ok: true, result: { driver: { status: "stopped" } } });
+      expect(
+        await request("driver_restart", "driver.restart", {
+          driverId: "goal-rpc",
+        }),
+      ).toMatchObject({ ok: true, result: { driver: { status: "scheduled" } } });
+      expect(
+        await request("driver_wake", "driver.wake", {
+          driverId: "goal-rpc",
+          prompt: "one-shot override",
+        }),
+      ).toMatchObject({ ok: true, result: { driver: { status: "scheduled" } } });
+      expect(events).toHaveLength(4);
+      expect(events.at(-1)).toMatchObject({
+        type: "daemon.view_event",
+        view: {
+          type: "driver.update",
+          sessionId: "session:driver-owner",
+          driver: { driverId: "goal-rpc" },
+        },
+      });
+    } finally {
+      unsubscribe();
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves Cockpit binding ids across workspace.list RPC serialization", async () => {
     const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-binding-"));
     const workspacePath = join(root, "workspace");

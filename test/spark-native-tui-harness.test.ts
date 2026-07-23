@@ -7,6 +7,7 @@ import { test } from "vitest";
 import {
   SPARK_PROTOCOL_VERSION,
   sparkSlashActionBarForInput,
+  type SparkDriverStartRequest,
   type SparkInteractionRequest,
   type SparkThinkingLevel,
 } from "../packages/spark-protocol/src/index.ts";
@@ -30,6 +31,7 @@ import type { SparkDaemonModelAuthClient } from "../apps/spark-tui/src/cli/model
 import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
 import { createSparkTuiActionBarComponent } from "../apps/spark-tui/src/tui/action-bar.ts";
 import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import type { SparkDaemonDriverControl } from "../packages/spark-extension/src/extension/spark-daemon-driver-client.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 const ESC = String.fromCharCode(27);
@@ -46,6 +48,43 @@ function firstMarkerIndex(lines: string[], pattern: RegExp): number {
   const index = markerIndexes(lines, pattern).at(0);
   assert.notEqual(index, undefined, `missing marker ${pattern}`);
   return index!;
+}
+
+function recordingDriverControl(starts: SparkDriverStartRequest[]): SparkDaemonDriverControl {
+  return {
+    async start(input) {
+      starts.push(input);
+      const observedAt = new Date().toISOString();
+      return {
+        driver: {
+          driverId: input.driverId ?? `${input.kind}:${input.ownerSessionId}`,
+          kind: input.kind,
+          ownerSessionId: input.ownerSessionId,
+          status: "scheduled",
+          continuity: input.continuity,
+          dueAt: input.dueAt ?? observedAt,
+          attempt: 0,
+          reason: input.reason,
+        },
+        observedAt,
+      };
+    },
+    async list() {
+      return { drivers: [], observedAt: new Date().toISOString() };
+    },
+    async stop() {
+      throw new Error("unexpected driver.stop");
+    },
+    async restart() {
+      throw new Error("unexpected driver.restart");
+    },
+    async wake() {
+      throw new Error("unexpected driver.wake");
+    },
+    async schedule() {
+      throw new Error("unexpected driver.schedule");
+    },
+  };
 }
 
 test("native TUI kernel slash commands are minimal and resource slash is extension-owned", async () => {
@@ -924,13 +963,15 @@ test("native /plan reaches the daemon-managed responder instead of the local run
   }
 });
 
-test("native /goal reaches the daemon-managed responder instead of the local runtime outbox", async () => {
+test("native /goal starts the daemon-owned driver instead of entering the local runtime", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "spark-native-goal-daemon-bridge-"));
   try {
     await mkdir(join(cwd, ".git"));
     await writeFile(join(cwd, "README.md"), "# Existing project\n", "utf8");
     const host = new SparkHostRuntime({ cwd, hasUI: true });
     host.setSessionId("sess_goal_bridge");
+    const driverStarts: SparkDriverStartRequest[] = [];
+    Object.assign(host, { driverControl: recordingDriverControl(driverStarts) });
     sparkExtension(host as never);
     const forwarded: string[] = [];
     const responderInputs: string[] = [];
@@ -953,16 +994,20 @@ test("native /goal reaches the daemon-managed responder instead of the local run
 
     await submitEditorText(harness, "/goal Ship the daemon goal bridge");
     await waitForNativeCondition(
-      () => forwarded.length === 1,
-      "the native /goal command to reach the daemon-managed responder",
+      () => driverStarts.length === 1,
+      "the native /goal command to start the daemon-owned driver",
     );
     await harness.flush();
 
-    assert.equal(forwarded.length, 1);
-    assert.deepEqual(responderInputs, forwarded);
-    assert.match(forwarded[0] ?? "", /Ship the daemon goal bridge/u);
+    assert.equal(driverStarts.length, 1);
+    assert.equal(driverStarts[0]?.kind, "goal");
+    assert.equal(driverStarts[0]?.ownerSessionId, "sess_goal_bridge");
+    assert.equal(driverStarts[0]?.continuity, "session");
+    assert.match(driverStarts[0]?.prompt ?? "", /Ship the daemon goal bridge/u);
+    assert.deepEqual(forwarded, []);
+    assert.deepEqual(responderInputs, []);
     assert.equal(host.peekOutbox().length, 0);
-    assert.match(stripAnsi(harness.render()), /daemon-visible-goal-response/u);
+    assert.match(stripAnsi(harness.render()), /Ship the daemon goal bridge/u);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

@@ -2,206 +2,105 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
 import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 import { defaultTaskTodoStore } from "@zendev-lab/spark-tasks";
-import { describe, expect, it, vi } from "vitest";
-
-import {
-  reconcileIdleSessionTodos,
-  SESSION_TODO_AUTO_SOURCE_KIND,
-  sessionTodoStateDigest,
-} from "./session-todo-auto-runner.ts";
+import { describe, expect, it } from "vitest";
+import type { SparkDaemonDriverTickTask } from "./core/types.ts";
+import { reconcileIdleSessionTodos, sessionTodoStateDigest } from "./session-todo-auto-runner.ts";
+import { SparkDriverStore } from "./store/drivers.ts";
 import { SparkInvocationStore } from "./store/invocations.ts";
 import { migrateSparkDaemonDatabase } from "./store/schema.ts";
 
-describe("idle session TODO reconciliation", () => {
-  it("queues one durable continuation for an idle session and freezes model defaults", async () => {
+describe("daemon session TODO drivers", () => {
+  it("creates one fallback wake and becomes dormant without progress", async () => {
     const harness = createHarness();
     const session = localSession("sess_todo", harness.cwd);
-    await saveTodos(harness.cwd, session.sessionId, [
-      { id: "todo-a", displayNumber: 4, content: "Implement the fix", status: "in_progress" },
-      { id: "todo-b", displayNumber: 5, content: "Run verification", status: "pending" },
-    ]);
-    const recordTurnQueued = vi.fn(async () => session);
-    const modelControl = {
-      effectiveModel: vi.fn(async () => ({ providerName: "provider", modelId: "model" })),
-      effectiveThinkingLevel: vi.fn(async () => "high" as const),
-      prepareModel: vi.fn(async () => undefined),
-    };
-
-    try {
-      await expect(
-        reconcileIdleSessionTodos({
-          invocationStore: harness.store,
-          sessionRegistry: { list: async () => [session], recordTurnQueued },
-          modelControl,
-        }),
-      ).resolves.toEqual({ examined: 1, submitted: 1, errors: [] });
-
-      const [invocation] = harness.store.listPendingForSession(session.sessionId);
-      expect(invocation).toMatchObject({
-        status: "queued",
-        sourceKind: SESSION_TODO_AUTO_SOURCE_KIND,
-        task: {
-          type: "session.run",
-          sessionId: session.sessionId,
-          cwd: harness.cwd,
-          model: "provider/model",
-          thinkingLevel: "high",
-          actor: "spark-daemon-session-todo",
-          messageMetadata: {
-            sessionTodo: { mode: "auto", itemIds: ["todo-a", "todo-b"] },
-          },
-        },
-      });
-      expect(invocation?.prompt).toContain("#4 [in_progress] Implement the fix");
-      expect(invocation?.prompt).toContain("#5 [pending] Run verification");
-      expect(recordTurnQueued).toHaveBeenCalledWith(session.sessionId);
-      expect(modelControl.prepareModel).toHaveBeenCalledWith({
-        providerName: "provider",
-        modelId: "model",
-      });
-    } finally {
-      harness.close();
-    }
-  });
-
-  it("does not spin when an automatic turn leaves the TODO state unchanged", async () => {
-    const harness = createHarness();
-    const session = localSession("sess_stable", harness.cwd);
     const todos = [
-      { id: "todo-a", content: "Finish durable work", status: "in_progress" as const },
+      { id: "todo-a", content: "Implement the fix", status: "in_progress" as const },
+      { id: "todo-b", content: "Verify it", status: "pending" as const },
     ];
     await saveTodos(harness.cwd, session.sessionId, todos);
-    const sessionRegistry = {
-      list: async () => [session],
-      recordTurnQueued: async () => session,
-    };
+    const sessionRegistry = { list: async () => [session] };
 
     try {
-      await reconcileIdleSessionTodos({
-        invocationStore: harness.store,
-        sessionRegistry,
+      await expect(
+        reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry }),
+      ).resolves.toEqual({ examined: 1, submitted: 1, errors: [] });
+      const driver = harness.drivers.get(`session-todo:${session.sessionId}`);
+      expect(driver).toMatchObject({
+        kind: "session_todo",
+        lane: "fallback",
+        status: "scheduled",
+        domainStateDigest: sessionTodoStateDigest(session.sessionId, todos),
       });
-      const [first] = harness.store.listPendingForSession(session.sessionId);
-      expect(first).toBeDefined();
-      harness.store.claimNext("worker", "2026-07-20T00:00:01.000Z");
-      harness.store.complete(first!.invocationId, {
+      expect(driver?.prompt).toContain("[in_progress] Implement the fix");
+
+      const invocation = harness.drivers.materializeDue();
+      const running = harness.invocations.claimNext("worker");
+      expect(running?.invocationId).toBe(invocation?.invocationId);
+      harness.drivers.completeTick(running!, running!.task as SparkDaemonDriverTickTask, {
         status: "succeeded",
-        now: "2026-07-20T00:00:02.000Z",
       });
+      expect(harness.drivers.get(driver!.driverId)?.status).toBe("dormant");
 
       await expect(
-        reconcileIdleSessionTodos({ invocationStore: harness.store, sessionRegistry }),
+        reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry }),
       ).resolves.toEqual({ examined: 1, submitted: 0, errors: [] });
-      expect(harness.store.listPage({ sessionId: session.sessionId }).total).toBe(1);
-      expect(first?.idempotencyKey).toBe(
-        `session.todo:${sessionTodoStateDigest(session.sessionId, todos)}`,
-      );
+      expect(harness.invocations.listPage({ sessionId: session.sessionId }).total).toBe(1);
     } finally {
       harness.close();
     }
   });
 
-  it("queues the next continuation only after the checklist makes state progress", async () => {
+  it("rearms only after the TODO digest changes and yields to an explicit driver", async () => {
     const harness = createHarness();
     const session = localSession("sess_progress", harness.cwd);
-    const sessionRegistry = {
-      list: async () => [session],
-      recordTurnQueued: async () => session,
-    };
+    const sessionRegistry = { list: async () => [session] };
     await saveTodos(harness.cwd, session.sessionId, [
       { id: "todo-a", content: "First", status: "in_progress" },
-      { id: "todo-b", content: "Second", status: "pending" },
     ]);
 
     try {
-      await reconcileIdleSessionTodos({ invocationStore: harness.store, sessionRegistry });
-      const [first] = harness.store.listPendingForSession(session.sessionId);
-      harness.store.claimNext("worker", "2026-07-20T00:00:01.000Z");
-      harness.store.complete(first!.invocationId, {
-        status: "succeeded",
-        now: "2026-07-20T00:00:02.000Z",
-      });
+      await reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry });
+      const first = harness.drivers.require(`session-todo:${session.sessionId}`);
+      harness.drivers.stop(first.driverId, "test settled");
       await saveTodos(harness.cwd, session.sessionId, [
         { id: "todo-a", content: "First", status: "done" },
         { id: "todo-b", content: "Second", status: "in_progress" },
       ]);
-
-      await expect(
-        reconcileIdleSessionTodos({ invocationStore: harness.store, sessionRegistry }),
-      ).resolves.toEqual({ examined: 1, submitted: 1, errors: [] });
-      expect(harness.store.listPage({ sessionId: session.sessionId }).total).toBe(2);
-      expect(harness.store.listPendingForSession(session.sessionId)[0]?.prompt).toContain(
-        "[in_progress] Second",
-      );
-    } finally {
-      harness.close();
-    }
-  });
-
-  it("skips busy, blocked-only, and fenced sessions while continuing channel TODOs", async () => {
-    const harness = createHarness();
-    const busy = localSession("sess_busy", harness.cwd);
-    const blocked = localSession("sess_blocked", harness.cwd);
-    const channel: SparkSessionRegistryRecord = {
-      ...localSession("sess_channel", harness.cwd),
-      bindings: [
-        {
-          kind: "channel",
-          adapter: "qqbot",
-          externalKey: "qqbot:user:123",
-          boundAt: "2026-07-20T00:00:00.000Z",
-        },
-      ],
-    };
-    await saveTodos(harness.cwd, busy.sessionId, [
-      { id: "todo-busy", content: "Wait for current turn", status: "in_progress" },
-    ]);
-    await saveTodos(harness.cwd, blocked.sessionId, [
-      { id: "todo-blocked", content: "Needs input", status: "blocked" },
-    ]);
-    await saveTodos(harness.cwd, channel.sessionId, [
-      { id: "todo-channel", content: "Owned by channel", status: "in_progress" },
-    ]);
-    harness.store.submit({
-      sessionId: busy.sessionId,
-      prompt: "user turn",
-      task: { type: "session.run", sessionId: busy.sessionId, prompt: "user turn" },
-    });
-    const recordTurnQueued = vi.fn(async () => busy);
-
-    try {
-      await expect(
-        reconcileIdleSessionTodos({
-          invocationStore: harness.store,
-          sessionRegistry: {
-            list: async () => [busy, blocked, channel],
-            recordTurnQueued,
-          },
-        }),
-      ).resolves.toEqual({ examined: 3, submitted: 1, errors: [] });
-      expect(recordTurnQueued).toHaveBeenCalledOnce();
-      expect(recordTurnQueued).toHaveBeenCalledWith(channel.sessionId);
-      expect(harness.store.listPendingForSession(channel.sessionId)[0]).toMatchObject({
-        sourceKind: SESSION_TODO_AUTO_SOURCE_KIND,
-        task: {
-          sessionId: channel.sessionId,
-          messageMetadata: { origin: { host: "daemon" } },
-        },
+      await reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry });
+      expect(harness.drivers.require(first.driverId)).toMatchObject({
+        status: "scheduled",
       });
-      expect(harness.store.listPendingForSession(channel.sessionId)[0]?.task).not.toHaveProperty(
-        "channelReply",
-      );
 
-      await expect(
-        reconcileIdleSessionTodos({
-          invocationStore: harness.store,
-          sessionRegistry: { list: async () => [blocked], recordTurnQueued },
-          canAdmit: () => false,
-        }),
-      ).resolves.toEqual({ examined: 1, submitted: 0, errors: [] });
+      harness.drivers.start({
+        driverId: "goal-explicit",
+        kind: "goal",
+        ownerSessionId: session.sessionId,
+        cwd: harness.cwd,
+        prompt: "goal",
+      });
+      await reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry });
+      expect(harness.drivers.require(first.driverId).status).toBe("stopped");
+
+      harness.drivers.materializeDue();
+      const goalInvocation = harness.invocations.claimNext("goal-worker")!;
+      harness.drivers.completeTick(
+        goalInvocation,
+        goalInvocation.task as SparkDaemonDriverTickTask,
+        {
+          status: "cancelled",
+          cancelReason: "manual abort",
+        },
+      );
+      expect(harness.drivers.require("goal-explicit").status).toBe("blocked");
+      await saveTodos(harness.cwd, session.sessionId, [
+        { id: "todo-a", content: "First", status: "done" },
+        { id: "todo-b", content: "Second", status: "done" },
+        { id: "todo-c", content: "Third", status: "in_progress" },
+      ]);
+      await reconcileIdleSessionTodos({ driverStore: harness.drivers, sessionRegistry });
+      expect(harness.drivers.require(first.driverId).status).toBe("stopped");
     } finally {
       harness.close();
     }
@@ -209,13 +108,15 @@ describe("idle session TODO reconciliation", () => {
 });
 
 function createHarness() {
-  const cwd = mkdtempSync(join(tmpdir(), "spark-session-todo-auto-"));
+  const cwd = mkdtempSync(join(tmpdir(), "spark-session-todo-driver-"));
   const db = new DatabaseSync(":memory:");
   migrateSparkDaemonDatabase(db);
+  const invocations = new SparkInvocationStore(db);
   return {
     cwd,
     db,
-    store: new SparkInvocationStore(db),
+    invocations,
+    drivers: new SparkDriverStore(db, invocations),
     close() {
       db.close();
       rmSync(cwd, { recursive: true, force: true });
@@ -226,10 +127,10 @@ function createHarness() {
 function localSession(sessionId: string, cwd: string): SparkSessionRegistryRecord {
   return {
     sessionId,
-    scope: { kind: "workspace", workspaceId: "workspace-test" },
-    workspaceId: "workspace-test",
-    cwd,
     status: "ready",
+    cwd,
+    scope: { kind: "workspace", workspaceId: "workspace-one" },
+    workspaceId: "workspace-one",
     bindings: [],
     createdAt: "2026-07-20T00:00:00.000Z",
     updatedAt: "2026-07-20T00:00:00.000Z",
@@ -239,7 +140,12 @@ function localSession(sessionId: string, cwd: string): SparkSessionRegistryRecor
 async function saveTodos(
   cwd: string,
   sessionId: string,
-  todos: Parameters<ReturnType<typeof defaultTaskTodoStore>["saveSessionTodos"]>[1],
-) {
-  await defaultTaskTodoStore(cwd).saveSessionTodos(`session:${sessionId}`, todos);
+  todos: Array<{
+    id: string;
+    content: string;
+    status: "pending" | "in_progress" | "done";
+  }>,
+): Promise<void> {
+  const ownerRef = sessionId.startsWith("session:") ? sessionId : `session:${sessionId}`;
+  await defaultTaskTodoStore(cwd).saveSessionTodos(ownerRef, todos);
 }

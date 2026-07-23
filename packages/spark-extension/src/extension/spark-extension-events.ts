@@ -30,7 +30,7 @@ interface SparkExtensionEventApi extends SparkModeMessageApi {
 
 export interface SparkExtensionEventDeps {
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
-  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => void;
+  ensureWorkflowRunManager: (cwd: string, ctx: SparkToolContext) => Promise<void>;
   createAskAutoAnswerResolver?: (
     ctx: SparkToolContext,
   ) =>

@@ -9,6 +9,7 @@ import {
   type SparkSessionSendRequest,
 } from "@zendev-lab/spark-protocol";
 import { executeSparkDaemonSessionControl } from "../../session-control.ts";
+import { SparkDriverStore } from "../../store/drivers.ts";
 import {
   deliverSessionNotificationFromLocalRpc,
   projectSessionMailbox,
@@ -79,7 +80,28 @@ export async function handleSessionRequest(
         },
       );
       const snapshot = parseSparkSessionView(executed.result.snapshot);
-      return { id: request.id, ok: true, result: await projectSessionMailbox(options, snapshot) };
+      const withDrivers = parseSparkSessionView({
+        ...snapshot,
+        drivers: new SparkDriverStore(db)
+          .list({ ownerSessionId: request.params.sessionId })
+          .map((driver) => ({
+            driverId: driver.driverId,
+            kind: driver.kind,
+            ownerSessionId: driver.ownerSessionId,
+            status: driver.status,
+            continuity: driver.continuity,
+            dueAt: driver.dueAt,
+            attempt: driver.attempt,
+            lastInvocationId: driver.lastInvocationId,
+            reason: driver.reason,
+            error: driver.error,
+          })),
+      });
+      return {
+        id: request.id,
+        ok: true,
+        result: await projectSessionMailbox(options, withDrivers),
+      };
     }
     case "session.create": {
       const executed = await executeSparkDaemonSessionControl(

@@ -8,6 +8,7 @@ import {
   type SparkInteractionRequest,
   type SparkInteractionResponse,
 } from "@zendev-lab/spark-protocol";
+import type { SparkHostDriverContext } from "@zendev-lab/spark-core";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 import {
   loadSparkHeadlessSessionModule,
@@ -35,6 +36,7 @@ import type { InfoflowAdapterConfig, QqbotAdapterConfig } from "@zendev-lab/spar
 import { loadDaemonChannelsConfig, type DaemonChannelIngressRuntime } from "../channels/ingress.ts";
 import type {
   SparkDaemonSessionRunTask,
+  SparkDaemonDriverTickTask,
   SparkDaemonTask,
   SparkDaemonTaskExecutionContext,
   SparkDaemonTaskExecutor,
@@ -85,6 +87,13 @@ export interface SparkDaemonTaskExecutorOptions {
   > &
     Partial<Pick<DaemonSessionRegistry, "get" | "setRoleIfMissing">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
+  driverControl?: {
+    schedule(
+      task: SparkDaemonDriverTickTask,
+      input: { delayMs?: number; dueAt?: string; reason?: string; prompt?: string },
+    ): unknown;
+    stop(task: SparkDaemonDriverTickTask, input?: { reason?: string }): unknown;
+  };
   interact?: (
     request: SparkInteractionRequest,
     task: SparkDaemonSessionRunTask,
@@ -125,27 +134,35 @@ export function createSparkDaemonTaskExecutor(
   };
 
   return async (task, context) => {
-    if (task.type === "session.run") {
+    if (task.type === "session.run" || task.type === "driver.tick") {
+      const driverTask = task.type === "driver.tick" ? task : undefined;
+      const sessionTask: SparkDaemonSessionRunTask =
+        task.type === "driver.tick" ? sessionRunTaskFromDriverTick(task) : task;
       let projectedFailure = false;
       const trackedContext: SparkDaemonTaskExecutionContext = {
         ...context,
         emitEvent: (event) => {
           const projected = canonicalSessionFailureEvent(
             event,
-            task.sessionId,
+            sessionTask.sessionId,
             context.invocationId,
           );
-          if (isProjectedSessionFailure(projected, task.sessionId)) projectedFailure = true;
+          if (isProjectedSessionFailure(projected, sessionTask.sessionId)) projectedFailure = true;
           return context.emitEvent?.(projected);
         },
       };
       try {
-        await options.sessionRegistry?.recordTurnQueued(task.sessionId);
-        const effectiveTask = await withEffectiveTaskModel(task, options.modelControl);
-        const result = await executeSparkDaemonSessionRunTask(effectiveTask, trackedContext, {
-          ...options,
-          executeSession: await getSessionExecutor(),
-        });
+        await options.sessionRegistry?.recordTurnQueued(sessionTask.sessionId);
+        const effectiveTask = await withEffectiveTaskModel(sessionTask, options.modelControl);
+        const result = await executeSparkDaemonSessionRunTask(
+          effectiveTask,
+          trackedContext,
+          {
+            ...options,
+            executeSession: await getSessionExecutor(),
+          },
+          driverTask ? driverContextForTask(driverTask, options.driverControl) : undefined,
+        );
         const completed = await recordCompletedSessionRun(
           effectiveTask,
           result,
@@ -160,15 +177,52 @@ export function createSparkDaemonTaskExecutor(
         return completed.result;
       } catch (error) {
         if (!context.signal.aborted && !projectedFailure) {
-          await emitSessionFailure(task, trackedContext, error);
+          await emitSessionFailure(sessionTask, trackedContext, error);
         }
-        await settleFailedSessionRun(task.sessionId, options.sessionRegistry);
+        await settleFailedSessionRun(sessionTask.sessionId, options.sessionRegistry);
         throw error;
       }
     }
     throw new Error(
       `Unsupported Spark daemon invocation task type: ${(task as SparkDaemonTask).type}`,
     );
+  };
+}
+
+function sessionRunTaskFromDriverTick(task: SparkDaemonDriverTickTask): SparkDaemonSessionRunTask {
+  return {
+    type: "session.run",
+    sessionId: task.ownerSessionId,
+    executionSessionId: task.executionSessionId,
+    stateOwnerSessionId: task.stateOwnerSessionId,
+    hiddenExecution: task.continuity === "fresh",
+    prompt: task.prompt,
+    cwd: task.cwd,
+    workspaceBindingId: task.workspaceBindingId,
+    workspaceId: task.workspaceId,
+    projectId: task.projectId,
+    reset: task.reset,
+    resumeFromInterrupt: task.resumeFromInterrupt,
+    actor: "spark-daemon-driver",
+    note: `${task.kind}:${task.driverId}:${task.generation}`,
+  };
+}
+
+function driverContextForTask(
+  task: SparkDaemonDriverTickTask,
+  control: SparkDaemonTaskExecutorOptions["driverControl"],
+): SparkHostDriverContext {
+  if (!control) {
+    throw new Error("driver.tick executor requires daemon driverControl");
+  }
+  return {
+    driverId: task.driverId,
+    kind: task.kind,
+    generation: task.generation,
+    ownerSessionId: task.ownerSessionId,
+    stateOwnerSessionId: task.stateOwnerSessionId,
+    schedule: async (input) => await control.schedule(task, input),
+    stop: async (input) => await control.stop(task, input),
   };
 }
 
@@ -655,6 +709,7 @@ export async function executeSparkDaemonSessionRunTask(
   task: SparkDaemonSessionRunTask,
   context: SparkDaemonTaskExecutionContext,
   options: SparkDaemonTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
+  driver?: SparkHostDriverContext,
 ): Promise<unknown> {
   const sessionContext = await sessionContextForTask(task, options.sessionRegistry);
   const systemPrompt = await systemPromptForSession(
@@ -669,12 +724,20 @@ export async function executeSparkDaemonSessionRunTask(
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
-    sessionId: task.sessionId,
-    ...(sessionContext.sessionPath ? { sessionPath: sessionContext.sessionPath } : {}),
+    sessionId: task.executionSessionId ?? task.sessionId,
+    ...(!task.hiddenExecution && sessionContext.sessionPath
+      ? { sessionPath: sessionContext.sessionPath }
+      : {}),
     prompt: sessionRunPrompt(task),
     ...(task.model ? { model: task.model } : {}),
     ...(task.thinkingLevel ? { thinkingLevel: task.thinkingLevel } : {}),
     reset: task.reset,
+    ...(task.hiddenExecution
+      ? {
+          sessionVisibility: "internal" as const,
+          sessionPurpose: "driver_tick" as const,
+        }
+      : {}),
     ...(task.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),
     signal: context.signal,
     // The daemon scheduler is the single execution-time budget owner. It can
@@ -691,6 +754,8 @@ export async function executeSparkDaemonSessionRunTask(
         }
       : {}),
     invocationId: context.invocationId,
+    ...(task.stateOwnerSessionId ? { stateOwnerSessionId: task.stateOwnerSessionId } : {}),
+    ...(driver ? { driver } : {}),
     ...(sessionQuestionChainForTask(task)
       ? { sessionQuestionChain: sessionQuestionChainForTask(task) }
       : {}),
@@ -1015,6 +1080,7 @@ function daemonEventFromHeadlessEvent(
   if (raw.type === "view_event") {
     try {
       const view = parseSparkViewModelEvent(raw.event);
+      if (task.hiddenExecution && view.type === "session.snapshot") return undefined;
       const correlatedView =
         view.type === "session.message" && view.message.role === "user"
           ? {
@@ -1025,6 +1091,9 @@ function daemonEventFromHeadlessEvent(
               },
             }
           : view;
+      const projectedView = task.hiddenExecution
+        ? projectHiddenDriverView(correlatedView, task.sessionId)
+        : correlatedView;
       return {
         version: SPARK_PROTOCOL_VERSION,
         type: "daemon.view_event",
@@ -1035,7 +1104,7 @@ function daemonEventFromHeadlessEvent(
         metadata: daemonTaskRouteMetadata(task),
         sessionId: task.sessionId,
         invocationId,
-        view: correlatedView,
+        view: projectedView,
       };
     } catch {
       return undefined;
@@ -1044,16 +1113,34 @@ function daemonEventFromHeadlessEvent(
   if (raw.type === "daemon_event") {
     try {
       const event = parseSparkDaemonEvent(raw.event);
+      if (
+        task.hiddenExecution &&
+        event.type === "daemon.view_event" &&
+        event.view.type === "session.snapshot"
+      ) {
+        return undefined;
+      }
+      const projectedEvent =
+        task.hiddenExecution && event.type === "daemon.view_event"
+          ? {
+              ...event,
+              view: projectHiddenDriverView(event.view, task.sessionId),
+            }
+          : event;
       return {
-        ...event,
-        emittedAt: event.emittedAt ?? new Date().toISOString(),
-        ...(task.workspaceId && !event.workspaceId ? { workspaceId: task.workspaceId } : {}),
-        ...(task.projectId && !event.projectId ? { projectId: task.projectId } : {}),
-        sessionId: event.sessionId ?? task.sessionId,
-        invocationId: event.invocationId ?? invocationId,
+        ...projectedEvent,
+        emittedAt: projectedEvent.emittedAt ?? new Date().toISOString(),
+        ...(task.workspaceId && !projectedEvent.workspaceId
+          ? { workspaceId: task.workspaceId }
+          : {}),
+        ...(task.projectId && !projectedEvent.projectId ? { projectId: task.projectId } : {}),
+        sessionId: task.hiddenExecution
+          ? task.sessionId
+          : (projectedEvent.sessionId ?? task.sessionId),
+        invocationId: projectedEvent.invocationId ?? invocationId,
         metadata: {
           ...daemonTaskRouteMetadata(task),
-          ...event.metadata,
+          ...projectedEvent.metadata,
         },
       };
     } catch {
@@ -1063,12 +1150,43 @@ function daemonEventFromHeadlessEvent(
   return undefined;
 }
 
+function projectHiddenDriverView(
+  view: ReturnType<typeof parseSparkViewModelEvent>,
+  ownerSessionId: string,
+): ReturnType<typeof parseSparkViewModelEvent> {
+  if (view.type === "session.message") {
+    return {
+      ...view,
+      sessionId: ownerSessionId,
+      message: {
+        ...view.message,
+        metadata: {
+          ...view.message.metadata,
+          driverExecution: true,
+          stateOwnerSessionId: ownerSessionId,
+        },
+      },
+    };
+  }
+  if (view.type === "run.update") {
+    return { ...view, sessionId: ownerSessionId };
+  }
+  if (view.type === "driver.update") {
+    return { ...view, sessionId: ownerSessionId };
+  }
+  return view;
+}
+
 async function recordCompletedSessionRun(
   task: SparkDaemonSessionRunTask,
   result: unknown,
   registry: Pick<DaemonSessionRegistry, "recordRun" | "recordTurnSettled"> | undefined,
 ): Promise<{ result: unknown; indexed: boolean }> {
   if (!registry) return { result, indexed: false };
+  if (task.hiddenExecution) {
+    await registry.recordTurnSettled(task.sessionId);
+    return { result, indexed: false };
+  }
   const sessionPath =
     isRecord(result) && typeof result.sessionPath === "string" && result.sessionPath.trim()
       ? result.sessionPath.trim()

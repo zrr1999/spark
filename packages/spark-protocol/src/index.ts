@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 import { sparkSessionPendingTurnSchema } from "./session-assignment.ts";
+import { sparkDriverViewSchema } from "./driver.ts";
 
 export * from "./action-bars.ts";
 export * from "./ask-semantics.ts";
@@ -9,6 +10,7 @@ export * from "./command-delivery.ts";
 export * from "./command-events.ts";
 export * from "./command-sources.ts";
 export * from "./display-error.ts";
+export * from "./driver.ts";
 export * from "./errors.ts";
 export * from "./host-events.ts";
 export * from "./human-interaction.ts";
@@ -342,6 +344,7 @@ export const sparkSessionViewSchema = z.object({
   messages: z.array(sparkMessageViewSchema).default([]),
   tools: z.array(sparkToolCallViewSchema).default([]),
   runs: z.array(sparkRunViewSchema).default([]),
+  drivers: z.array(sparkDriverViewSchema).optional(),
   tasks: z.array(sparkTaskViewSchema).default([]),
   artifacts: z.array(sparkArtifactViewSchema).default([]),
   /** Agent-internal evidence ledger projections; product deliverables stay in `artifacts`. */
@@ -588,6 +591,12 @@ export const sparkViewModelEventSchema = z.discriminatedUnion("type", [
     type: z.literal("run.update"),
     sessionId: z.string().min(1).optional(),
     run: sparkRunViewSchema,
+  }),
+  z.object({
+    version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),
+    type: z.literal("driver.update"),
+    sessionId: z.string().min(1),
+    driver: sparkDriverViewSchema,
   }),
   z.object({
     version: sparkProtocolVersionSchema.default(SPARK_PROTOCOL_VERSION),

@@ -13,7 +13,6 @@ export {
 } from "@zendev-lab/spark-loop";
 export type {
   SparkSessionGoal,
-  SparkSessionGoalRetryState,
   SparkSessionGoalReviewSummary,
   SparkSessionGoalSource,
   SparkSessionGoalStatus,

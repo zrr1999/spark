@@ -31,8 +31,10 @@
     "@zendev-lab/spark-daemon-client": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-loop": "workspace:^",
     "@zendev-lab/spark-modes": "workspace:^",
     "@zendev-lab/spark-protocol": "workspace:^",
+    "@zendev-lab/spark-repro": "workspace:^",
     "@zendev-lab/spark-retry": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",
     "@zendev-lab/spark-runtime": "workspace:^",
@@ -40,6 +42,7 @@
     "@zendev-lab/spark-system": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^",
     "@zendev-lab/spark-turn": "workspace:^",
+    "@zendev-lab/spark-workflows": "workspace:^",
     "ws": "catalog:"
   },
   "devDependencies": {

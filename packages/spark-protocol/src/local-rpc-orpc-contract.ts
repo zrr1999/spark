@@ -12,6 +12,13 @@ import { z } from "zod";
 import { sparkModelControlSnapshotSchema } from "./model-control.ts";
 import { isoDateTimeSchema } from "./refs.ts";
 import {
+  sparkDriverMutationRequestSchema,
+  sparkDriverScheduleRequestSchema,
+  sparkDriverStartRequestSchema,
+  sparkDriverStatusRequestSchema,
+  sparkDriverWakeRequestSchema,
+} from "./driver.ts";
+import {
   sparkSideThreadConfigureRequestSchema,
   sparkSideThreadErrorCodeOptions,
   sparkSideThreadEnsureRequestSchema,
@@ -179,6 +186,14 @@ export const sparkLocalRpcOrpcContract = {
         }),
       ),
     },
+  },
+  driver: {
+    start: procedure("POST", "/driver/start", sparkDriverStartRequestSchema),
+    status: procedure("GET", "/driver/status", sparkDriverStatusRequestSchema),
+    stop: procedure("POST", "/driver/stop", sparkDriverMutationRequestSchema),
+    restart: procedure("POST", "/driver/restart", sparkDriverMutationRequestSchema),
+    wake: procedure("POST", "/driver/wake", sparkDriverWakeRequestSchema),
+    schedule: procedure("POST", "/driver/schedule", sparkDriverScheduleRequestSchema),
   },
   workspace: {
     list: procedure(
@@ -412,6 +427,12 @@ export const sparkLocalRpcOrpcMethodPaths = {
   "invocation.list": ["invocation", "list"],
   "invocation.retry": ["invocation", "retry"],
   "invocation.retention.preview": ["invocation", "retention", "preview"],
+  "driver.start": ["driver", "start"],
+  "driver.status": ["driver", "status"],
+  "driver.stop": ["driver", "stop"],
+  "driver.restart": ["driver", "restart"],
+  "driver.wake": ["driver", "wake"],
+  "driver.schedule": ["driver", "schedule"],
   "workspace.list": ["workspace", "list"],
   "workspace.register": ["workspace", "register"],
   "workspace.relocate": ["workspace", "relocate"],

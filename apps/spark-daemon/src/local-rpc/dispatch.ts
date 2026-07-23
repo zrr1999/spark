@@ -7,6 +7,7 @@ import {
 } from "../registration.js";
 import { handleChannelRequest } from "./handlers/channel.ts";
 import { handleDaemonRequest } from "./handlers/daemon.ts";
+import { handleDriverRequest } from "./handlers/driver.ts";
 import { handleHumanRequest } from "./handlers/human.ts";
 import { handleModelRequest } from "./handlers/model.ts";
 import { handleSessionRequest } from "./handlers/session.ts";
@@ -89,6 +90,13 @@ export async function handleLocalRpcLine(
       case "invocation.retry":
       case "invocation.retention.preview":
         return await handleTurnRequest(ctx, request);
+      case "driver.start":
+      case "driver.status":
+      case "driver.stop":
+      case "driver.restart":
+      case "driver.wake":
+      case "driver.schedule":
+        return await handleDriverRequest(ctx, request);
       case "uplink.park":
       case "uplink.unpark":
       case "uplink.prefer":

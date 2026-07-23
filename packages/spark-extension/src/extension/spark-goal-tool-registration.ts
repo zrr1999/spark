@@ -29,6 +29,7 @@ import type {
 } from "./reviewer-runner.ts";
 import { withSparkReviewerLease } from "./spark-reviewer-lease.ts";
 import { recordGoalSubjectReview } from "./subject-review-store.ts";
+import { type SparkDaemonDriverControl } from "./spark-daemon-driver-client.ts";
 
 export type SparkGoalToolAction =
   | "status"
@@ -41,6 +42,7 @@ export type SparkGoalToolAction =
   | "complete";
 
 interface SparkGoalToolDeps {
+  driverControl: SparkDaemonDriverControl;
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
   syncAskAutoAnswerPolicy?: (ctx: SparkToolContext) => Promise<void>;
   createReviewerRunner?: (
@@ -140,6 +142,7 @@ export function registerSparkGoalTool(
           source,
           status: "active",
         });
+        await startGoalDriver(ctx, deps.driverControl, goal, "goal activated by tool");
         await refreshGoalRuntimeState(cwd, ctx, deps);
         return goalResult(goal, action, renderGoalActivationResult(goal, graph, project));
       }
@@ -167,10 +170,24 @@ export function registerSparkGoalTool(
           },
         );
         await deps.syncAskAutoAnswerPolicy?.(ctx);
+        if (completion.outcome === "completed" && ctx.driver) {
+          await ctx.driver.stop({ reason: "goal completion approved by reviewer" });
+        } else if (completion.outcome === "completed") {
+          await deps.driverControl.stop({
+            driverId: existingGoal.goalId,
+            reason: "goal completion approved by reviewer",
+          });
+        }
         return goalCompletionResult(existingGoal, action, completion);
       }
       if (action === "clear") {
         await clearSessionGoal(cwd, ctx);
+        if (ctx.driver) await ctx.driver.stop({ reason: "goal cleared" });
+        else
+          await deps.driverControl.stop({
+            driverId: existingGoal.goalId,
+            reason: "goal cleared",
+          });
         await refreshGoalRuntimeState(cwd, ctx, deps);
         return {
           content: [
@@ -193,7 +210,13 @@ export function registerSparkGoalTool(
             ],
             details: { found: true, action, error: "goal_already_complete", goal: existingGoal },
           };
-        const resumed = await updateSessionGoalStatus(cwd, ctx, "active", { retryState: null });
+        const resumed = await updateSessionGoalStatus(cwd, ctx, "active");
+        await startGoalDriver(
+          ctx,
+          deps.driverControl,
+          resumed ?? existingGoal,
+          "goal resumed by tool",
+        );
         await refreshGoalRuntimeState(cwd, ctx, deps);
         const relationship = describeGoalProjectRelationship(
           resumed ?? existingGoal,
@@ -275,6 +298,12 @@ export function registerSparkGoalTool(
           },
         };
       const relationship = describeGoalProjectRelationship(pauseResult.goal, graph, project);
+      if (ctx.driver) await ctx.driver.stop({ reason: "goal paused after reviewer approval" });
+      else
+        await deps.driverControl.stop({
+          driverId: pauseResult.goal.goalId,
+          reason: "goal paused after reviewer approval",
+        });
       return goalResult(
         pauseResult.goal,
         action,
@@ -282,6 +311,29 @@ export function registerSparkGoalTool(
         { goalProjectRelationship: relationship },
       );
     },
+  });
+}
+
+async function startGoalDriver(
+  ctx: SparkToolContext,
+  driverControl: SparkDaemonDriverControl,
+  goal: SparkSessionGoal,
+  reason: string,
+): Promise<void> {
+  const ownerSessionId = ctx.sessionId?.trim();
+  if (!ownerSessionId) throw new Error("Spark goal driver requires a daemon-owned session");
+  await driverControl.start({
+    driverId: goal.goalId,
+    kind: "goal",
+    ownerSessionId,
+    continuity: "session",
+    cwd: ctx.cwd,
+    prompt: [
+      "Continue the daemon-owned Spark goal by one concrete turn.",
+      `Goal: ${goal.objective}`,
+      'When fully verified, call goal({ action: "complete", reason, requirements, validationRuns, unresolved }) for reviewer gating.',
+    ].join("\n"),
+    reason,
   });
 }
 
@@ -866,10 +918,8 @@ function renderGoalStatus(
     lines.push(
       `Last review: ${goal.lastReviewRef ?? "unrecorded"}${goal.lastReviewArtifactRef ? ` artifact=${goal.lastReviewArtifactRef}` : ""}${goal.lastReviewedAt ? ` at ${goal.lastReviewedAt}` : ""}`,
     );
-  if (goal.retryState?.consecutiveFailures)
-    lines.push(
-      `Retry state: ${goal.retryState.consecutiveFailures} failure(s), nextDelayMs=${goal.retryState.nextDelayMs ?? "unknown"}.`,
-    );
+  if (goal.status === "active")
+    lines.push("Cadence and retry state are owned by the Spark daemon driver.");
   if (relationship.currentProject) {
     const project = relationship.currentProject;
     lines.push(

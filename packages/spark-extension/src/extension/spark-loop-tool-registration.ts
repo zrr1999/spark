@@ -3,14 +3,15 @@ import {
   clearSessionLoop,
   loadSessionLoop,
   normalizeLoopDelayMs,
-  scheduleSessionLoopTick,
   type SparkSessionLoop,
 } from "./spark-session-loops.ts";
 import type { SparkToolContext, SparkToolRegistrar } from "./spark-tool-registration.ts";
+import type { SparkDaemonDriverControl } from "./spark-daemon-driver-client.ts";
 
 export type SparkLoopToolAction = "status" | "schedule" | "clear";
 
 interface SparkLoopToolDeps {
+  driverControl: SparkDaemonDriverControl;
   refreshSparkWidget: (cwd: string, ctx?: SparkToolContext) => Promise<void>;
 }
 
@@ -71,6 +72,16 @@ export function registerSparkLoopTool(
 
       if (action === "clear") {
         await clearSessionLoop(cwd, ctx);
+        if (ctx.driver) {
+          await ctx.driver.stop({
+            reason: normalizeOptionalString(params.reason) ?? "loop cleared",
+          });
+        } else {
+          await deps.driverControl.stop({
+            driverId: existing.loopId,
+            reason: normalizeOptionalString(params.reason) ?? "loop cleared",
+          });
+        }
         await deps.refreshSparkWidget(cwd, ctx);
         return {
           content: [
@@ -91,18 +102,25 @@ export function registerSparkLoopTool(
           isError: true,
         };
       }
-      const scheduled = await scheduleSessionLoopTick(cwd, ctx, {
-        delayMs: delayResult.delayMs,
-        reason: normalizeOptionalString(params.reason),
-        expectedLoopId: existing.loopId,
-      });
+      if (!ctx.driver) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Spark daemon driver context is unavailable; loop scheduling was not persisted.",
+            },
+          ],
+          details: { found: true, action, error: "daemon_driver_unavailable", loop: existing },
+          isError: true,
+        };
+      }
+      const reason = normalizeOptionalString(params.reason);
+      await ctx.driver.schedule({ delayMs: delayResult.delayMs, reason });
       await deps.refreshSparkWidget(cwd, ctx);
       return loopToolResult(
-        scheduled ?? existing,
+        existing,
         action,
-        scheduled
-          ? `Scheduled Spark loop next tick in ${formatDuration(delayResult.delayMs)} at ${scheduled.schedule?.nextRunAt}. Reason: ${scheduled.schedule?.reason ?? "not specified"}.`
-          : "Spark loop schedule was not updated because the active loop changed.",
+        `Scheduled Spark loop next tick in ${formatDuration(delayResult.delayMs)} through the daemon. Reason: ${reason ?? "not specified"}.`,
       );
     },
   });
@@ -146,12 +164,7 @@ function renderLoopStatus(loop: SparkSessionLoop | undefined): string {
   const lines = [
     `Spark loop ${loop.status}.`,
     `Objective: ${oneLine(loop.objective)}`,
-    loop.schedule
-      ? `Next tick: ${loop.schedule.nextRunAt} (${formatDuration(loop.schedule.delayMs)}; reason: ${loop.schedule.reason ?? "not specified"})`
-      : 'Next tick: not scheduled. Active /loop turns should call loop({ action: "schedule", delayMs, reason }).',
-    loop.retryState?.consecutiveFailures
-      ? `Retry state: ${loop.retryState.consecutiveFailures} failure(s), nextDelayMs=${loop.retryState.nextDelayMs ?? "none"}`
-      : undefined,
+    "Cadence and retry state are owned by the Spark daemon; inspect the driver projection for dueAt and attempt.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }

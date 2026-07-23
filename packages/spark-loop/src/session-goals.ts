@@ -24,13 +24,6 @@ export interface SparkSessionGoalReviewSummary {
   reviewedAt: string;
 }
 
-export interface SparkSessionGoalRetryState {
-  consecutiveFailures: number;
-  lastFailureAt?: string;
-  nextDelayMs?: number;
-  exhaustedAt?: string;
-}
-
 export interface SparkSessionGoal {
   version: 1;
   goalId: string;
@@ -45,7 +38,6 @@ export interface SparkSessionGoal {
   lastReviewRef?: string;
   lastReviewArtifactRef?: ArtifactRef;
   lastReviewedAt?: string;
-  retryState?: SparkSessionGoalRetryState;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,7 +121,6 @@ export async function editSessionGoalObjective(
     lastReviewRef: undefined,
     lastReviewArtifactRef: undefined,
     lastReviewedAt: undefined,
-    retryState: undefined,
     updatedAt: nowIso(),
   };
   await saveSessionGoalSnapshot(cwd, ctx, { version: 1, goal });
@@ -143,7 +134,6 @@ export async function updateSessionGoalStatus(
   options: {
     reason?: string;
     review?: SparkSessionGoalReviewSummary;
-    retryState?: SparkSessionGoalRetryState | null;
     expectedGoalId?: string;
   } = {},
 ): Promise<SparkSessionGoal | undefined> {
@@ -158,8 +148,6 @@ export async function updateSessionGoalStatus(
     pauseReason: status === "paused" ? normalizeOptionalReason(options.reason) : undefined,
     completedReason: status === "complete" ? normalizeOptionalReason(options.reason) : undefined,
     ...reviewPointer,
-    retryState:
-      options.retryState === undefined ? existing.retryState : (options.retryState ?? undefined),
     updatedAt: nowIso(),
   };
   await saveSessionGoalSnapshot(cwd, ctx, { version: 1, goal });
@@ -243,7 +231,8 @@ async function saveSessionGoalSnapshot(
   ctx: SparkSessionContext | undefined,
   snapshot: SparkSessionGoalSnapshot,
 ): Promise<void> {
-  await writeJsonFileAtomic(sessionGoalStorePath(cwd, ctx), snapshot);
+  const goal = snapshot.goal ? withoutGoalRuntimeState(snapshot.goal) : undefined;
+  await writeJsonFileAtomic(sessionGoalStorePath(cwd, ctx), { version: 1, goal });
   await rebuildSessionIndex(cwd, ctx);
 }
 
@@ -272,13 +261,16 @@ function normalizeSessionGoal(
     pauseReason: optionalString(value.pauseReason, filePath, "goal.pauseReason"),
     completedReason: optionalString(value.completedReason, filePath, "goal.completedReason"),
     ...normalizeGoalReviewPointer(value, filePath),
-    retryState:
-      value.retryState === undefined
-        ? undefined
-        : normalizeGoalRetryState(value.retryState, filePath),
     createdAt: requireString(value.createdAt, filePath, "goal.createdAt"),
     updatedAt: requireString(value.updatedAt, filePath, "goal.updatedAt"),
   };
+}
+
+function withoutGoalRuntimeState(goal: SparkSessionGoal): SparkSessionGoal {
+  const { retryState: _retryState, ...canonical } = goal as SparkSessionGoal & {
+    retryState?: unknown;
+  };
+  return canonical;
 }
 
 function goalReviewPointerFields(
@@ -323,24 +315,6 @@ function normalizeGoalReviewPointer(
   };
 }
 
-function normalizeGoalRetryState(value: unknown, filePath: string): SparkSessionGoalRetryState {
-  if (!isRecord(value))
-    throw new JsonStoreFormatError(filePath, "goal.retryState must be an object");
-  return {
-    consecutiveFailures: requireNonNegativeInteger(
-      value.consecutiveFailures,
-      filePath,
-      "goal.retryState.consecutiveFailures",
-    ),
-    lastFailureAt: optionalString(value.lastFailureAt, filePath, "goal.retryState.lastFailureAt"),
-    nextDelayMs:
-      value.nextDelayMs === undefined
-        ? undefined
-        : requireNonNegativeInteger(value.nextDelayMs, filePath, "goal.retryState.nextDelayMs"),
-    exhaustedAt: optionalString(value.exhaustedAt, filePath, "goal.retryState.exhaustedAt"),
-  };
-}
-
 function normalizeGoalStatus(value: unknown, filePath: string): SparkSessionGoalStatus {
   if (value === "active" || value === "paused" || value === "complete") return value;
   throw new JsonStoreFormatError(filePath, "goal.status must be active, paused, or complete");
@@ -353,12 +327,6 @@ function normalizeGoalSource(value: unknown, filePath: string): SparkSessionGoal
     filePath,
     "goal.source must be explicit, inferred, agent, or reviewer",
   );
-}
-
-function requireNonNegativeInteger(value: unknown, filePath: string, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0)
-    throw new JsonStoreFormatError(filePath, `${path} must be a non-negative integer`);
-  return value;
 }
 
 function requireString(value: unknown, filePath: string, path: string): string {
