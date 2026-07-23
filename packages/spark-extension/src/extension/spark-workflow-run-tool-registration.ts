@@ -694,7 +694,9 @@ function countRegexMatches(value: string, pattern: RegExp): number {
 }
 
 function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 async function resolveWorkflowScriptSource(
