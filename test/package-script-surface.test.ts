@@ -7,6 +7,8 @@ const canonicalRootScripts = [
   "audit",
   "build",
   "check",
+  "check:test-quality",
+  "check:test-quality:update",
   "fix",
   "prepare",
   "preview",
@@ -14,6 +16,7 @@ const canonicalRootScripts = [
   "report:hygiene",
   "smoke",
   "test",
+  "test:browser:cockpit",
   "test:mutation",
   "typecheck",
 ];
@@ -35,6 +38,15 @@ test("root package exposes one compact validation and release surface", async ()
   assert.deepEqual(Object.keys(scripts).toSorted(), canonicalRootScripts.toSorted());
   assert.equal(scripts.smoke, "node scripts/smoke-npm-product.mjs");
   assert.equal(scripts.test, "vp test run --config vitest.root.config.ts");
+  assert.equal(scripts["check:test-quality"], "node scripts/check-test-quality.mjs");
+  assert.equal(
+    scripts["check:test-quality:update"],
+    "node scripts/check-test-quality.mjs --update",
+  );
+  assert.equal(
+    scripts["test:browser:cockpit"],
+    "pnpm --filter @zendev-lab/spark-cockpit run test:browser",
+  );
   assert.match(
     scripts.check ?? "",
     /^pnpm --filter @zendev-lab\/spark-cockpit exec svelte-kit sync/u,
@@ -47,6 +59,7 @@ test("root package exposes one compact validation and release surface", async ()
     "node scripts/check-architecture-ratchets.mjs",
     "node scripts/check-npm-product.mjs",
     "depcruise --config .dependency-cruiser.cjs apps packages test",
+    "pnpm run check:test-quality",
     "node scripts/check-doc-terminology.mjs",
     "vp fmt . --check",
     "vp lint --quiet",
@@ -133,6 +146,7 @@ test("CI and prek consume the canonical package scripts", async () => {
 
   assert.match(verifyWorkflow, /pnpm run check/u);
   assert.match(verifyWorkflow, /pnpm run smoke/u);
+  assert.match(verifyWorkflow, /pnpm run test:browser:cockpit/u);
   assert.doesNotMatch(verifyWorkflow, /test:npm-product/u);
   assert.match(hygieneWorkflow, /pnpm run report:hygiene/u);
   assert.doesNotMatch(hygieneWorkflow, /pnpm exec (?:knip|jscpd)/u);

@@ -1,0 +1,31 @@
+{
+  "$schema": "./test-quality-baseline.schema.json",
+  "sourceMirrorAssertions": {
+    "apps/spark-cockpit/src/lib/access-page.test.ts": 7,
+    "apps/spark-cockpit/src/lib/AskQuestionField.test.ts": 11,
+    "apps/spark-cockpit/src/lib/channel-settings-page.test.ts": 21,
+    "apps/spark-cockpit/src/lib/ChannelSessionIcon.test.ts": 12,
+    "apps/spark-cockpit/src/lib/components/conversation/ArtifactPart.test.ts": 5,
+    "apps/spark-cockpit/src/lib/components/conversation/ConversationTurnRail.test.ts": 8,
+    "apps/spark-cockpit/src/lib/components/conversation/ConversationViewport.test.ts": 35,
+    "apps/spark-cockpit/src/lib/components/conversation/Message.test.ts": 15,
+    "apps/spark-cockpit/src/lib/components/conversation/SessionQueue.test.ts": 20,
+    "apps/spark-cockpit/src/lib/components/conversation/source-boundary.test.ts": 4,
+    "apps/spark-cockpit/src/lib/components/conversation/ToolCallPart.test.ts": 6,
+    "apps/spark-cockpit/src/lib/components/model-selector/source-boundary.test.ts": 12,
+    "apps/spark-cockpit/src/lib/components/response/Response.test.ts": 15,
+    "apps/spark-cockpit/src/lib/console-layout.test.ts": 3,
+    "apps/spark-cockpit/src/lib/ProjectTaskBoard.test.ts": 9,
+    "apps/spark-cockpit/src/lib/registration-page.test.ts": 14,
+    "apps/spark-cockpit/src/lib/server/package-boundaries.test.ts": 8,
+    "apps/spark-cockpit/src/lib/session-i18n-boundary.test.ts": 7,
+    "apps/spark-cockpit/src/lib/SessionAskPanel.test.ts": 8,
+    "apps/spark-cockpit/src/lib/settings-page.test.ts": 5,
+    "apps/spark-cockpit/src/lib/shell/cockpit-search.test.ts": 3,
+    "apps/spark-cockpit/src/lib/workbench-home.test.ts": 16,
+    "apps/spark-cockpit/src/lib/WorkbenchSessionRail.test.ts": 27,
+    "apps/spark-daemon/src/command-transport-contract.test.ts": 3,
+    "test/check-boundaries.test.ts": 3,
+    "test/spark-extension-loader.test.ts": 5
+  }
+}

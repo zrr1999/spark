@@ -37,3 +37,25 @@ jobs:
 
       - name: Npm product smoke
         run: pnpm run smoke
+
+  cockpit-browser:
+    name: cockpit-browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm --filter @zendev-lab/spark-cockpit exec playwright install --with-deps chromium
+
+      - run: pnpm run test:browser:cockpit

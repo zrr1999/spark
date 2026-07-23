@@ -1,161 +1,98 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { compile } from "svelte/compiler";
 import { render } from "svelte/server";
 import { describe, expect, it } from "vitest";
 
 import SessionInspector from "./SessionInspector.svelte";
-import type {
-  SessionInspectorLabels,
-  SessionWorkbenchSessionTodo,
-  SessionWorkbenchView,
-} from "./session-workbench";
+import {
+  sessionInspectorLabels as labels,
+  sessionWorkbenchView,
+} from "./SessionInspector.test-fixtures";
+import type { SessionInspectorTab, SessionWorkbenchView } from "./session-workbench";
 
-const componentPath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionInspector.svelte");
-const workspacePath = resolve(dirname(fileURLToPath(import.meta.url)), "SessionsWorkspace.svelte");
-
-const labels: SessionInspectorLabels = {
-  ariaLabel: "SESSION_INSPECTOR",
-  tabs: {
-    summary: "SUMMARY_TAB",
-    artifacts: "ARTIFACTS_TAB",
-    changes: "CHANGES_TAB",
-    tasks: "TASKS_TAB",
-    messages: "MESSAGES_TAB",
-  },
-  summaryHeading: "SUMMARY_HEADING",
-  artifactsHeading: "ARTIFACTS_HEADING",
-  tasksHeading: "TASKS_HEADING",
-  changesHeading: "CHANGES_HEADING",
-  messagesHeading: "MESSAGES_HEADING",
-  noTasksTitle: "NO_TASKS",
-  noTasksBody: "NO_TASKS_BODY",
-  noArtifactsTitle: "NO_ARTIFACTS",
-  noArtifactsBody: "NO_ARTIFACTS_BODY",
-  noChangesTitle: "NO_CHANGES",
-  noChangesBody: "NO_CHANGES_BODY",
-  noMessagesTitle: "NO_MESSAGES",
-  noMessagesBody: "NO_MESSAGES_BODY",
-  noSessionTodoTitle: "NO_SESSION_TODO",
-  noSessionTodoBody: "NO_SESSION_TODO_BODY",
-  noActiveSessionTodo: "NO_ACTIVE_SESSION_TODO",
-  unassignedProject: "UNASSIGNED_PROJECT",
-  progress: "PROGRESS",
-  todoList: "SESSION_TODO_LIST",
-  sessionTodoHeading: "SESSION_TODO_HEADING",
-  openSessionTodo: "OPEN_SESSION_TODO",
-  sessionTodoPending: "TODO_WAITING",
-  sessionTodoInProgress: "TODO_IN_PROGRESS",
-  messageFrom: "FROM",
-  messageRequest: "REQUEST",
-  messageQuestion: "QUESTION",
-  messageNotification: "NOTIFICATION",
-  messageUnread: "UNREAD",
-  messageRead: "READ",
-  messageAcknowledged: "ACKNOWLEDGED",
-  messageDeliveryPending: "DELIVERY_PENDING",
-  messageDeliveryDelivered: "DELIVERY_DELIVERED",
-  messageDeliveryFailed: "DELIVERY_FAILED",
-  messageDeliveryUncertain: "DELIVERY_UNCERTAIN",
-  sessionId: "SESSION_ID",
-  sessionStatus: "SESSION_STATUS",
-  workingDirectory: "WORKING_DIRECTORY",
-  model: "MODEL",
-  createdAt: "CREATED_AT",
-  updatedAt: "UPDATED_AT",
-  unavailable: "UNAVAILABLE",
-};
-
-function workbenchView(sessionTodo: SessionWorkbenchSessionTodo | null): SessionWorkbenchView {
-  return {
-    runs: [],
-    tasks: [],
-    artifacts: [],
-    changes: [],
-    evidence: [],
-    messages: [],
-    sessionTodo,
-    context: {
-      sessionId: "sess-inspector",
-      title: "Inspector test",
-      status: "idle",
-      cwd: "/workspace/spark",
-      model: null,
-      createdAt: null,
-      updatedAt: null,
+function renderInspector(
+  view: SessionWorkbenchView,
+  options: {
+    instanceId?: string;
+    initialTab?: SessionInspectorTab;
+    statusLabel?: (status: string) => string;
+  } = {},
+): string {
+  return render(SessionInspector, {
+    props: {
+      view,
+      labels,
+      instanceId: options.instanceId ?? "inspector-test",
+      initialTab: options.initialTab,
+      statusLabel: options.statusLabel,
     },
-  };
+  }).body;
 }
 
-describe("SessionInspector component contract", () => {
-  it("compiles as a Svelte component", () => {
-    const source = readFileSync(componentPath, "utf8");
+describe("SessionInspector rendered contract", () => {
+  it("renders the canonical five tabs and instance-scoped summary relationships", () => {
+    const body = renderInspector(
+      sessionWorkbenchView({
+        context: {
+          sessionId: "sess-summary",
+          title: "Summary",
+          status: "running",
+          cwd: "/workspace/spark",
+          model: {
+            providerName: "fixture",
+            providerLabel: "Fixture",
+            modelId: "model",
+            modelLabel: "Model",
+            displayLabel: "Fixture / Model",
+          },
+          createdAt: "2026-07-23T08:04:00.000Z",
+          updatedAt: "2026-07-23T09:05:00.000Z",
+        },
+      }),
+      {
+        instanceId: "inspector-summary",
+        statusLabel: (status) => `STATUS_${status}`,
+      },
+    );
 
-    expect(() => compile(source, { filename: componentPath, generate: "server" })).not.toThrow();
+    expect(body.match(/role="tab"/gu)).toHaveLength(5);
+    for (const label of Object.values(labels.tabs)) expect(body).toContain(label);
+    expect(body).toContain('id="inspector-summary-summary-tab"');
+    expect(body).toContain('aria-controls="inspector-summary-summary-panel"');
+    expect(body).toContain('id="inspector-summary-summary-panel"');
+    expect(body).toContain('aria-labelledby="inspector-summary-summary-tab"');
+    expect(body).toContain('aria-selected="true"');
+    expect(body).toContain("SUMMARY_HEADING");
+    expect(body).toContain("STATUS_running");
+    expect(body).toContain("/workspace/spark");
+    expect(body).toContain("Fixture / Model");
+    expect(body).toContain("sess-summary");
+    expect(body).toContain("2026-07-23 08:04");
+    expect(body).toContain("2026-07-23 09:05");
   });
 
-  it("renders the focused coding-session tabs with TODO pinned above", () => {
-    const source = readFileSync(componentPath, "utf8");
+  it.each([
+    ["artifacts", "NO_ARTIFACTS", "NO_ARTIFACTS_BODY"],
+    ["changes", "NO_CHANGES", "NO_CHANGES_BODY"],
+    ["tasks", "NO_TASKS", "NO_TASKS_BODY"],
+    ["messages", "NO_MESSAGES", "NO_MESSAGES_BODY"],
+  ] as const)(
+    "renders the %s empty state selected by the initial tab",
+    (initialTab, title, body) => {
+      const html = renderInspector(sessionWorkbenchView(), {
+        initialTab,
+        instanceId: `inspector-${initialTab}`,
+      });
 
-    expect(source).toContain('role="tablist"');
-    expect(source).toContain('role="tab"');
-    expect(source).toContain('id: "summary"');
-    expect(source).toContain('id: "changes"');
-    expect(source).not.toContain('id: "todos"');
-    expect(source).toContain('id: "tasks"');
-    expect(source).toContain('id: "artifacts"');
-    expect(source).toContain('id: "messages"');
-    expect(source).toContain('class="session-todo-rail"');
-    expect(source).not.toContain('id: "mailbox"');
-    expect(source).not.toContain('id: "evidence"');
-    expect(source).not.toContain('id: "context"');
-    expect(source).not.toContain("view.runs");
-    expect(source).not.toContain("labels.noRunsTitle");
-    expect(source).not.toContain("labels.noRunsBody");
-    expect(source).not.toContain("labels.runsHeading");
-    expect(source).toContain("view.tasks");
-    expect(source).toContain("view.changes");
-    expect(source).toContain("view.sessionTodo");
-    expect(source).toContain("view.artifacts");
-    expect(source).toContain("view.messages");
-    expect(source).toContain("view.context");
-    expect(source).toContain("labels.noTasksTitle");
-    expect(source).toContain("labels.noTasksBody");
-    expect(source).toContain("labels.noArtifactsTitle");
-    expect(source).toContain("labels.noArtifactsBody");
-    expect(source).toContain("labels.noChangesTitle");
-    expect(source).toContain("labels.noChangesBody");
-    expect(source).toContain("labels.noMessagesTitle");
-    expect(source).toContain("labels.noMessagesBody");
-    expect(source).toContain("justify-content: center");
-  });
+      expect(html).toContain(`id="inspector-${initialTab}-${initialTab}-panel"`);
+      expect(html).toContain(title);
+      expect(html).toContain(body);
+      expect(html).not.toContain("SUMMARY_HEADING");
+    },
+  );
 
-  it("does not expose invented Git or terminal controls", () => {
-    const source = readFileSync(componentPath, "utf8");
-
-    expect(source).not.toContain("git status");
-    expect(source).not.toContain("terminal.write");
-    expect(source).not.toContain("<form");
-  });
-
-  it("groups only canonical task project references without inventing project metadata", () => {
-    const source = readFileSync(componentPath, "utf8");
-
-    expect(source).toContain("groupTasksByProject(view.tasks)");
-    expect(source).toContain("task.projectRef ??");
-    expect(source).toContain("labels.unassignedProject");
-    expect(source).toContain("task.todos as todo");
-    expect(source).toContain("todo.content");
-    expect(source).toContain("statusLabel(todo.status)");
-    expect(source).not.toContain("project.title");
-    expect(source).not.toContain("project.status");
-  });
-
-  it("renders the latest session TODO snapshot above the inspector tabs", () => {
-    const body = render(SessionInspector, {
-      props: {
-        view: workbenchView({
+  it("renders the latest session TODO above the selected inspector tab", () => {
+    const body = renderInspector(
+      sessionWorkbenchView({
+        sessionTodo: {
           anchor: "message:todo-message",
           summary: "Session TODOs: 2 active.",
           items: [
@@ -169,16 +106,16 @@ describe("SessionInspector component contract", () => {
             { id: "todo-c", content: "Verify waiting copy", status: "pending", notes: [] },
           ],
           updatedAt: "2026-07-13T08:04:00.000Z",
-        }),
-        labels,
-        instanceId: "inspector-test",
-        statusLabel: (status: string) => `STATUS_${status}`,
+        },
+      }),
+      {
+        instanceId: "inspector-todo",
+        initialTab: "tasks",
+        statusLabel: (status) => `STATUS_${status}`,
       },
-    }).body;
+    );
 
-    expect(body).toContain('class="session-todo-rail');
-    expect(body).not.toContain('id="inspector-test-todos-tab"');
-    expect(body).toContain('aria-labelledby="inspector-test-session-todo-heading"');
+    expect(body).toContain('aria-labelledby="inspector-todo-session-todo-heading"');
     expect(body).toContain("SESSION_TODO_HEADING");
     expect(body).toContain("Session TODOs: 2 active.");
     expect(body).toContain("Inspect projection");
@@ -190,13 +127,9 @@ describe("SessionInspector component contract", () => {
   });
 
   it("renders a restrained TODO empty state without an invented execution link", () => {
-    const body = render(SessionInspector, {
-      props: {
-        view: workbenchView(null),
-        labels,
-        instanceId: "inspector-empty",
-      },
-    }).body;
+    const body = renderInspector(sessionWorkbenchView(), {
+      instanceId: "inspector-empty",
+    });
 
     expect(body).toContain("NO_SESSION_TODO");
     expect(body).toContain("NO_SESSION_TODO_BODY");
@@ -204,69 +137,168 @@ describe("SessionInspector component contract", () => {
     expect(body).not.toContain('href="#message:');
   });
 
-  it("renders channel delivery separately from message read state", () => {
-    const view = workbenchView(null);
-    view.messages = [
+  it("groups tasks by canonical project reference and renders real TODO progress", () => {
+    const body = renderInspector(
+      sessionWorkbenchView({
+        tasks: [
+          {
+            id: "task-project",
+            ref: "task:project",
+            projectRef: "project:alpha",
+            source: "session",
+            title: "Project task",
+            description: "Owned by a canonical project ref",
+            status: "in_progress",
+            owner: "session:worker",
+            todoDone: 1,
+            todoTotal: 2,
+            todos: [
+              { id: "todo-1", content: "Completed item", status: "done", notes: [] },
+              { id: "todo-2", content: "Active item", status: "in_progress", notes: [] },
+            ],
+            runRefs: [],
+            artifactRefs: [],
+          },
+          {
+            id: "task-unassigned",
+            ref: null,
+            projectRef: null,
+            source: "activity",
+            title: "Unassigned task",
+            description: null,
+            status: "pending",
+            owner: null,
+            todoDone: 0,
+            todoTotal: 0,
+            todos: [],
+            runRefs: [],
+            artifactRefs: [],
+          },
+        ],
+      }),
       {
-        id: "mail:uncertain",
-        fromSessionId: "sess-worker",
-        kind: "notification",
-        intent: "research.complete",
-        subject: "Research result",
-        body: "The provider did not confirm delivery.",
-        createdAt: "2026-07-20T03:00:00.000Z",
-        status: "unread",
-        channelDelivery: {
-          status: "uncertain",
-          total: 1,
-          pending: 0,
-          delivered: 0,
-          failed: 0,
-          uncertain: 1,
-        },
+        initialTab: "tasks",
+        statusLabel: (status) => `STATUS_${status}`,
       },
-    ];
+    );
 
-    const body = render(SessionInspector, {
-      props: {
-        view,
-        labels,
-        instanceId: "inspector-mail-delivery",
+    expect(body).toContain("project:alpha");
+    expect(body).toContain("Project task");
+    expect(body).toContain("session:worker");
+    expect(body).toContain("Completed item");
+    expect(body).toContain("Active item");
+    expect(body).toContain('max="2"');
+    expect(body).toContain('value="1"');
+    expect(body).toContain("1/2");
+    expect(body).toContain("UNASSIGNED_PROJECT");
+    expect(body).toContain("Unassigned task");
+  });
+
+  it("keeps product artifacts, canonical changes, and internal evidence on separate surfaces", () => {
+    const view = sessionWorkbenchView({
+      artifacts: [
+        {
+          id: "artifact-pr",
+          ref: "artifact:pr",
+          source: "session",
+          title: "Pull request",
+          kind: "pr",
+          format: "markdown",
+          status: "ready",
+          producer: "session:worker",
+          createdAt: null,
+          updatedAt: null,
+          preview: "PR preview",
+          canonicalChange: false,
+        },
+      ],
+      changes: [
+        {
+          id: "artifact-diff",
+          ref: "artifact:diff",
+          source: "session",
+          title: "Working tree",
+          kind: "change",
+          format: "diff",
+          status: null,
+          producer: "session:worker",
+          createdAt: null,
+          updatedAt: null,
+          preview: "+behavioral assertion",
+          canonicalChange: true,
+        },
+      ],
+      evidence: [
+        {
+          id: "evidence-internal",
+          ref: "evidence:internal",
+          source: "session",
+          title: "INTERNAL_EVIDENCE",
+          kind: "log",
+          format: "text",
+          status: null,
+          producer: "session:worker",
+          createdAt: null,
+          updatedAt: null,
+          preview: "must remain internal",
+          canonicalChange: false,
+        },
+      ],
+    });
+
+    const artifacts = renderInspector(view, { initialTab: "artifacts" });
+    expect(artifacts).toContain("Pull request");
+    expect(artifacts).toContain("artifact:pr");
+    expect(artifacts).toContain("PR preview");
+    expect(artifacts).not.toContain("Working tree");
+    expect(artifacts).not.toContain("INTERNAL_EVIDENCE");
+
+    const changes = renderInspector(view, { initialTab: "changes" });
+    expect(changes).toContain("Working tree");
+    expect(changes).toContain("artifact:diff");
+    expect(changes).toContain("+behavioral assertion");
+    expect(changes).not.toContain("Pull request");
+    expect(changes).not.toContain("INTERNAL_EVIDENCE");
+  });
+
+  it("renders channel delivery separately from message read state and counts unread messages", () => {
+    const body = renderInspector(
+      sessionWorkbenchView({
+        messages: [
+          {
+            id: "mail:uncertain",
+            fromSessionId: "sess-worker",
+            kind: "notification",
+            intent: "research.complete",
+            subject: "Research result",
+            body: "The provider did not confirm delivery.",
+            createdAt: "2026-07-20T03:00:00.000Z",
+            status: "unread",
+            channelDelivery: {
+              status: "uncertain",
+              total: 1,
+              pending: 0,
+              delivered: 0,
+              failed: 0,
+              uncertain: 1,
+            },
+          },
+        ],
+      }),
+      {
+        instanceId: "inspector-mail",
         initialTab: "messages",
       },
-    }).body;
+    );
 
+    expect(body).toContain("Research result");
+    expect(body).toContain("NOTIFICATION");
+    expect(body).toContain("FROM");
+    expect(body).toContain("sess-worker");
     expect(body).toContain("DELIVERY_UNCERTAIN");
     expect(body).toContain("UNREAD");
     expect(body).toContain("message-delivery-status uncertain");
     expect(body).toContain("message-read-status unread");
-  });
-
-  it("names tabs, panels, and headings from the inspector instance", () => {
-    const source = readFileSync(componentPath, "utf8");
-
-    expect(source).toContain("instanceId: string");
-    expect(source).toContain("`${instanceId}-${tab}-tab`");
-    expect(source).toContain("`${instanceId}-${tab}-panel`");
-    expect(source).toContain("`${instanceId}-${section}-heading`");
-    expect(source).toContain("`${instanceId}-session-todo-heading`");
-    expect(source).not.toContain('id="session-inspector-runs-heading"');
-
-    const workspace = readFileSync(workspacePath, "utf8");
-    expect(workspace).toContain(
-      'compact ? "session-inspector-mobile" : "session-inspector-desktop"',
-    );
-  });
-
-  it("derives busy presentation from an active invocation instead of stale session flags", () => {
-    const workspace = readFileSync(workspacePath, "utf8");
-
-    expect(workspace).toContain(
-      'let conversationBusy = $derived(sessionActivityState.phase === "running")',
-    );
-    expect(workspace).not.toContain('selected?.status === "running" ||');
-    expect(workspace).toContain(
-      'const effectiveStatus: "running" | "idle" = conversationBusy ? "running" : "idle"',
-    );
+    expect(body).toContain('aria-label="1 UNREAD"');
   });
 });

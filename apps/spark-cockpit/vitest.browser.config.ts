@@ -3,12 +3,18 @@ import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 /**
- * Opt-in browser project for SessionsWorkspace component tests.
+ * Browser project for Cockpit interaction and DOM behavior.
  * Requires: `pnpm exec playwright install chromium`
- * Run: `SPARK_COCKPIT_BROWSER_TESTS=1 pnpm exec vp test run --config vitest.browser.config.ts`
+ * Run from the repository root: `pnpm run test:browser:cockpit`
  */
 export default defineConfig({
   plugins: [sveltekit()],
+  optimizeDeps: {
+    // Lucide publishes Svelte source and its generated bundle maps every icon
+    // to a package-external path. Transform it directly so browser-test logs
+    // are not flooded by one sourcemap warning per icon.
+    exclude: ["@lucide/svelte"],
+  },
   resolve: {
     conditions: ["browser"],
   },
