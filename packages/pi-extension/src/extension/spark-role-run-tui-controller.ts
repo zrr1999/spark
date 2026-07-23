@@ -143,7 +143,9 @@ export class SparkRoleRunTuiController {
             }).entries[0],
           },
         },
-        { deliverAs: "followUp" },
+        // Default: wake the owner session so it can synthesize the result now,
+        // matching async subagent completion behavior in competing hosts.
+        { deliverAs: "followUp", triggerTurn: true },
       );
     }
   }

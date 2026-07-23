@@ -1,11 +1,10 @@
 import { basename } from "node:path";
-
 import {
   SparkSessionStore,
   type SparkSessionEntry,
   type SparkSessionInfo,
   type SparkSessionRecord,
-} from "../host/session-store.ts";
+} from "@zendev-lab/spark-host/session-store";
 import { formatSessionList } from "../host/session-navigation.ts";
 import type { SparkDaemonWorkspace } from "./daemon.ts";
 

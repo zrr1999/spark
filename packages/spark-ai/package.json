@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-ai",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark AI plumbing: model-routing contracts, materialization helpers, provider registry compatibility, and bundled provider plugins over @earendil-works/pi-ai.",
   "license": "MIT",
   "author": "zrr1999",
@@ -17,9 +18,6 @@
     "./openai-codex-provider": "./src/openai-codex-provider.ts",
     "./cursor-provider": "./src/cursor-provider.ts",
     "./models-extension": "./src/models-extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

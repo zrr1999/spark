@@ -212,6 +212,12 @@ export interface SparkTurnOutboxEnvelope {
 export interface SparkTurnHost {
   setTriggerTurnHandler(handler: (() => void | Promise<void>) | undefined): void;
   setSessionId?(sessionId: string | undefined): void;
+  /**
+   * Optional final host-owned admission check. Native hosts use this to
+   * enforce request-scoped policy (for example, read-only Side Threads) at
+   * dispatch time as well as when advertising tool schemas.
+   */
+  isToolDispatchAllowed?(name: string, tool: SparkTurnRegisteredTool): boolean;
   emit(event: string, payload: unknown): Promise<unknown[]>;
   getTool(name: string): SparkTurnRegisteredTool | undefined;
   makeContext(extra?: Partial<SparkHostContext>): SparkHostContext;
@@ -986,6 +992,9 @@ export class SparkAgentLoop {
       if (!this.isToolAvailable(tool)) {
         return errorToolResult(toolCall, this.toolUnavailableMessage(toolCall.name, tool));
       }
+      if (!this.isToolDispatchAllowed(toolCall.name, tool)) {
+        return errorToolResult(toolCall, `tool execution denied by host policy: ${toolCall.name}`);
+      }
 
       const ctx: SparkHostContext = this.host.makeContext({
         model: this.getModel(),
@@ -1001,6 +1010,9 @@ export class SparkAgentLoop {
       }
       if (!this.isToolAvailable(tool)) {
         return errorToolResult(toolCall, this.toolUnavailableMessage(toolCall.name, tool));
+      }
+      if (!this.isToolDispatchAllowed(toolCall.name, tool)) {
+        return errorToolResult(toolCall, `tool execution denied by host policy: ${toolCall.name}`);
       }
 
       const onUpdate = (update: { content: Array<{ type: "text"; text: string }> }): void => {
@@ -1072,7 +1084,12 @@ export class SparkAgentLoop {
   }): Promise<ToolResultRawRecoveryRecord | undefined> {
     if (input.toolCall.name === "artifact" || input.toolCall.name === "evidence") return undefined;
     const evidenceTool = this.host.getTool("evidence") ?? this.host.getTool("artifact");
-    if (!evidenceTool || !this.isToolAvailable(evidenceTool)) return undefined;
+    if (
+      !evidenceTool ||
+      !this.isToolAvailable(evidenceTool) ||
+      !this.isToolDispatchAllowed(evidenceTool.config.name, evidenceTool)
+    )
+      return undefined;
     const rawBody = rawToolResultArtifactBody(input.result.content);
     const artifactAbort = new AbortController();
     const cleanupAbort = relayAbort(input.signal, artifactAbort);
@@ -1241,6 +1258,10 @@ export class SparkAgentLoop {
     return (
       this.currentPhase === undefined || phases.length === 0 || phases.includes(this.currentPhase)
     );
+  }
+
+  private isToolDispatchAllowed(toolName: string, tool: SparkTurnRegisteredTool): boolean {
+    return this.host.isToolDispatchAllowed?.(toolName, tool) ?? true;
   }
 
   private toolUnavailableMessage(toolName: string, tool: SparkTurnRegisteredTool): string {

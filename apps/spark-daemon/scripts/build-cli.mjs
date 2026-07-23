@@ -1,5 +1,11 @@
-import { chmod } from "node:fs/promises";
+import { chmod, cp, rm } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+
+const migrationsSource = fileURLToPath(
+  new URL("../../../packages/spark-cockpit-db/src/migrations/", import.meta.url),
+);
+const migrationsDestination = fileURLToPath(new URL("../dist/migrations/", import.meta.url));
 
 await build({
   banner: {
@@ -22,3 +28,5 @@ await build({
 });
 
 await chmod("dist/cli.js", 0o755);
+await rm(migrationsDestination, { recursive: true, force: true });
+await cp(migrationsSource, migrationsDestination, { recursive: true });

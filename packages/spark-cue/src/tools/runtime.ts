@@ -2,7 +2,6 @@
 
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
-import { spawn } from "node:child_process";
 import { cappedExponentialCeiling, equalJitter } from "@zendev-lab/spark-retry";
 import { cueShellProcessEnvironment } from "../executable-environment.ts";
 import {

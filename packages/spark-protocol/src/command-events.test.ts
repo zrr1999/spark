@@ -75,6 +75,12 @@ describe("SparkCommand vocabulary", () => {
       "session.notification.deliver",
       "session.model.set",
       "session.thinking.set",
+      "side-thread.ensure",
+      "side-thread.snapshot",
+      "side-thread.submit",
+      "side-thread.reset",
+      "side-thread.configure",
+      "side-thread.handoff",
       "model.catalog",
       "model.default.set",
       "provider.auth.api-key.set",
@@ -107,6 +113,12 @@ describe("SparkCommand vocabulary", () => {
     expect(sparkCommandKindForLocalRpcMethod("session.thinking.set")).toBe(
       "session.thinking.set.request",
     );
+    expect(sparkCommandKindForLocalRpcMethod("side-thread.ensure")).toBe(
+      "side-thread.ensure.request",
+    );
+    expect(sparkCommandKindForLocalRpcMethod("side-thread.handoff")).toBe(
+      "side-thread.handoff.request",
+    );
     expect(sparkCommandKindForLocalRpcMethod("model.catalog")).toBe("model.catalog.request");
     expect(sparkCommandKindForLocalRpcMethod("human.interaction.respond")).toBe(
       "human.response.deliver.request",
@@ -137,6 +149,12 @@ describe("SparkCommand vocabulary", () => {
       "turn.stream.subscribe",
       "session.model.set.request",
       "session.thinking.set.request",
+      "side-thread.ensure.request",
+      "side-thread.snapshot.request",
+      "side-thread.submit.request",
+      "side-thread.reset.request",
+      "side-thread.configure.request",
+      "side-thread.handoff.request",
       "model.catalog.request",
       "model.default.set.request",
       "provider.auth.logout.request",

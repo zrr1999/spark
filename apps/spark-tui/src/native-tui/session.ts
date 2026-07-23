@@ -23,7 +23,6 @@ import {
   type SparkNativeAbortResult,
   type SparkNativeCustomMessageInput,
   type SparkNativeMessage,
-  type SparkNativeQueueMode,
   type SparkNativeQueueSummary,
   type SparkNativeQueuedInput,
   type SparkNativeResponder,

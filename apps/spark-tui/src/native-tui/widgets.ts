@@ -5,10 +5,6 @@ import type { SparkHostRenderTheme } from "../host/types.ts";
 import { nativeTuiStrings } from "./strings.ts";
 import { MAX_NATIVE_WIDGET_LINES, type SparkNativeWidgetComponent } from "./types.ts";
 
-function toIterable<T>(value: Iterable<T> | undefined): Iterable<T> {
-  return value ?? [];
-}
-
 export function normalizeNativeWidgetLines(content: unknown): string[] {
   if (content === undefined || content === null || content === false) return [];
   const rawLines = nativeWidgetContentToLines(content);

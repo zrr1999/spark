@@ -18,6 +18,15 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionListRequestSchema,
   sparkSessionSnapshotRequestSchema,
+  sparkSideThreadConfigureRequestSchema,
+  sparkSideThreadEnsureRequestSchema,
+  sparkSideThreadHandoffRequestSchema,
+  sparkSideThreadHandoffResultSchema,
+  sparkSideThreadResetRequestSchema,
+  sparkSideThreadSnapshotRequestSchema,
+  sparkSideThreadSnapshotSchema,
+  sparkSideThreadSubmitRequestSchema,
+  sparkSideThreadSubmitResultSchema,
   sparkProtocolJsonObjectSchema,
   sparkTurnCancelResultSchema,
   sparkTurnStatusResultSchema,
@@ -29,6 +38,9 @@ import {
   type SparkSessionListRequest,
   type SparkSessionRegistryRecord,
   type SparkSessionSnapshotRequest,
+  type SparkSideThreadSnapshot,
+  type SparkSideThreadSubmitResult,
+  type SparkSideThreadHandoffResult,
   type SparkTurnCancelResult,
   type SparkTurnStatusResult,
   type SparkTurnStreamPage,
@@ -76,6 +88,43 @@ export interface CockpitRuntimeSessionClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  /**
+   * Read-only Side Thread projection. Unlike ensure, this never creates a
+   * child session; the Cockpit only asks after its nested panel is opened.
+   */
+  sideThreadSnapshot(
+    parentSessionId: string,
+    options?: { beforeExchangeId?: string; limit?: number },
+  ): Promise<SparkSideThreadSnapshot>;
+  ensureSideThread(input: {
+    parentSessionId: string;
+    mode?: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  submitSideThread(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    prompt: string;
+    idempotencyKey: string;
+  }): Promise<SparkSideThreadSubmitResult>;
+  resetSideThread(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    mode: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  configureSideThread(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    modelOverride?: { providerName: string; modelId: string } | null;
+    thinkingOverride?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  }): Promise<SparkSideThreadSnapshot>;
+  handoffSideThread(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    expectedHeadExchangeId: string;
+    kind: "full" | "summary";
+    instructions?: string;
+    idempotencyKey: string;
+  }): Promise<SparkSideThreadHandoffResult>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -128,6 +177,13 @@ export function createCockpitRuntimeSessionClient(
     get: async (sessionId) => await getSession(database(), sessionId),
     snapshot: async (sessionId, options) =>
       await getSessionSnapshot(database(), sessionId, options),
+    sideThreadSnapshot: async (parentSessionId, options) =>
+      await getSideThreadSnapshot(database(), parentSessionId, options),
+    ensureSideThread: async (input) => await ensureSideThread(database(), input),
+    submitSideThread: async (input) => await submitSideThread(database(), input),
+    resetSideThread: async (input) => await resetSideThread(database(), input),
+    configureSideThread: async (input) => await configureSideThread(database(), input),
+    handoffSideThread: async (input) => await handoffSideThread(database(), input),
     create: async (input) => await createSession(database(), input),
     bind: async (input) => await bindSession(database(), input),
     unbind: async (input) => await unbindSession(database(), input),
@@ -312,6 +368,118 @@ async function getSessionSnapshot(
   // counts and cursors live in the exact command result and must not be rebuilt
   // from an already bounded view.
   return parseSessionSnapshotWindow(result);
+}
+
+async function getSideThreadSnapshot(
+  db: DatabaseSync,
+  parentSessionId: string,
+  options: { beforeExchangeId?: string; limit?: number } = {},
+): Promise<SparkSideThreadSnapshot> {
+  const request = sparkSideThreadSnapshotRequestSchema.parse({
+    parentSessionId,
+    ...options,
+  });
+  const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, request.parentSessionId));
+  const result = await runRuntimeSessionControlCommand(db, {
+    route,
+    sessionId: request.parentSessionId,
+    payload: {
+      kind: "side-thread.snapshot.request",
+      payload: publicJsonObject(request),
+    },
+  });
+  return sparkSideThreadSnapshotSchema.parse(result);
+}
+
+async function ensureSideThread(
+  db: DatabaseSync,
+  input: { parentSessionId: string; mode?: "contextual" | "tangent" },
+): Promise<SparkSideThreadSnapshot> {
+  const request = sparkSideThreadEnsureRequestSchema.parse(input);
+  return sparkSideThreadSnapshotSchema.parse(
+    await runSideThreadCommand(db, "side-thread.ensure.request", request),
+  );
+}
+
+async function resetSideThread(
+  db: DatabaseSync,
+  input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    mode: "contextual" | "tangent";
+  },
+): Promise<SparkSideThreadSnapshot> {
+  const request = sparkSideThreadResetRequestSchema.parse(input);
+  return sparkSideThreadSnapshotSchema.parse(
+    await runSideThreadCommand(db, "side-thread.reset.request", request),
+  );
+}
+
+async function configureSideThread(
+  db: DatabaseSync,
+  input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    modelOverride?: { providerName: string; modelId: string } | null;
+    thinkingOverride?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  },
+): Promise<SparkSideThreadSnapshot> {
+  const request = sparkSideThreadConfigureRequestSchema.parse(input);
+  return sparkSideThreadSnapshotSchema.parse(
+    await runSideThreadCommand(db, "side-thread.configure.request", request),
+  );
+}
+
+async function submitSideThread(
+  db: DatabaseSync,
+  input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    prompt: string;
+    idempotencyKey: string;
+  },
+): Promise<SparkSideThreadSubmitResult> {
+  const request = sparkSideThreadSubmitRequestSchema.parse(input);
+  const result = await runSideThreadCommand(db, "side-thread.submit.request", request);
+  return sparkSideThreadSubmitResultSchema.parse(result);
+}
+
+async function handoffSideThread(
+  db: DatabaseSync,
+  input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    expectedHeadExchangeId: string;
+    kind: "full" | "summary";
+    instructions?: string;
+    idempotencyKey: string;
+  },
+): Promise<SparkSideThreadHandoffResult> {
+  const request = sparkSideThreadHandoffRequestSchema.parse(input);
+  const result = await runSideThreadCommand(db, "side-thread.handoff.request", request);
+  return sparkSideThreadHandoffResultSchema.parse(result);
+}
+
+async function runSideThreadCommand(
+  db: DatabaseSync,
+  kind:
+    | "side-thread.ensure.request"
+    | "side-thread.reset.request"
+    | "side-thread.configure.request"
+    | "side-thread.submit.request"
+    | "side-thread.handoff.request",
+  request: Record<string, unknown>,
+): Promise<unknown> {
+  const parentSessionId = String(request.parentSessionId);
+  const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, parentSessionId));
+  return await runRuntimeSessionControlCommand(db, {
+    route,
+    sessionId: parentSessionId,
+    ...("idempotencyKey" in request && typeof request.idempotencyKey === "string"
+      ? { idempotencyKey: request.idempotencyKey }
+      : {}),
+    payload: { kind, payload: publicJsonObject(request) },
+  });
 }
 
 async function createSession(

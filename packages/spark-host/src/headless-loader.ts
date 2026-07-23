@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
+  ToolEffect,
 } from "@zendev-lab/spark-core";
 
 export type SparkHeadlessRoleRunStatus =
@@ -20,6 +21,8 @@ export type SparkHeadlessUserContent =
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
+  /** Daemon-authoritative native transcript path for this session generation. */
+  sessionPath?: string;
   prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;
@@ -40,6 +43,8 @@ export interface SparkHeadlessSessionRunInput {
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
+  /** Host-enforced effect allowlist; unknown tool effects are denied. */
+  allowedToolEffects?: readonly ToolEffect[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
@@ -72,6 +77,9 @@ export interface SparkHeadlessSessionModule {
 export const DEFAULT_SPARK_HEADLESS_EXECUTOR_MODULE =
   "@zendev-lab/spark-tui-app/headless-role-executor" as const;
 
+/** Set by the single-package npm launcher to its compiled executor artifact. */
+export const SPARK_HEADLESS_EXECUTOR_MODULE_ENV = "SPARK_HEADLESS_EXECUTOR_MODULE" as const;
+
 export type SparkHeadlessExecutorModuleSpecifier = typeof DEFAULT_SPARK_HEADLESS_EXECUTOR_MODULE;
 
 /**
@@ -101,7 +109,9 @@ export async function loadSparkHeadlessSessionModule(
   } = {},
 ): Promise<SparkHeadlessSessionModule> {
   const specifier = resolveSparkHeadlessExecutorSpecifier(
-    options.moduleSpecifier ?? DEFAULT_SPARK_HEADLESS_EXECUTOR_MODULE,
+    options.moduleSpecifier ??
+      process.env[SPARK_HEADLESS_EXECUTOR_MODULE_ENV] ??
+      DEFAULT_SPARK_HEADLESS_EXECUTOR_MODULE,
   );
   const importModule =
     options.importModule ??

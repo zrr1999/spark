@@ -3,21 +3,16 @@ import {
   assertCockpitMayWriteScope,
   assertDaemonOwnsScope,
   createId,
-  optionalWireIdempotencyKey,
   type ArtifactProjectionPayload,
   type HumanRequestCreatedPayload,
   type HumanResponseAckPayload,
   type HumanResponseDeliverPayload,
   type HumanResponseRecordedPayload,
-  type ExecutorClientProjection,
   type InvocationLogChunkPayload,
   type InvocationUpdatePayload,
   type RuntimeCommandAckPayload,
   type RuntimeCommandRejectPayload,
-  type ServerCommandPayload,
   type TaskGraphSnapshotPayload,
-  type WorkspaceBorrowedState,
-  type WorkspaceClientProjection,
 } from "@zendev-lab/spark-protocol";
 
 import { appendEvent, nowIso, toJson, withTransaction } from "./workspace.ts";

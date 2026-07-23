@@ -106,6 +106,45 @@ describe("session ownership protocol", () => {
     ).toThrow();
   });
 
+  it("preserves daemon-emitted side-thread relations without accepting them on create", () => {
+    expect(
+      parseSparkSessionRegistryRecord({
+        sessionId: "sess_side",
+        scope: { kind: "workspace", workspaceId: "ws_side" },
+        relation: {
+          kind: "side_thread",
+          parentSessionId: "sess_parent",
+          generation: 3,
+          mode: "tangent",
+        },
+        ...timestamps,
+      }),
+    ).toMatchObject({
+      relation: {
+        kind: "side_thread",
+        parentSessionId: "sess_parent",
+        generation: 3,
+        mode: "tangent",
+      },
+    });
+
+    expect(
+      sparkSessionCreateRequestSchema.parse({
+        scope: { kind: "workspace", workspaceId: "ws_side" },
+        relation: {
+          kind: "side_thread",
+          parentSessionId: "sess_parent",
+          generation: 1,
+          mode: "contextual",
+        },
+      }),
+    ).not.toHaveProperty("relation");
+
+    expect(sparkSessionListRequestSchema.parse({ includeSideThreads: true })).not.toHaveProperty(
+      "includeSideThreads",
+    );
+  });
+
   it("rejects mismatched workspace ids and normalizes list legacy workspaceId", () => {
     expect(() =>
       parseSparkSessionRegistryRecord({

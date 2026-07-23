@@ -423,4 +423,104 @@ describe("SparkSessionRegistry", () => {
     );
     expect(ready).toMatchObject({ status: "ready", updatedAt: "2026-07-10T08:02:00.000Z" });
   });
+
+  it("hides side threads by default, fences generations, and archives them with their parent", async () => {
+    const registry = await tempRegistry();
+    const parent = await registry.create({
+      sessionId: "parent",
+      workspaceId: "ws_side",
+      cwd: "/work",
+    });
+    const child = await registry.ensureSideThread({
+      parentSessionId: parent.sessionId,
+      sessionId: "child",
+      mode: "contextual",
+      sessionPath: "/tmp/child-1.jsonl",
+    });
+    expect(await registry.list()).toEqual([parent]);
+    expect(await registry.list({ includeSideThreads: true })).toHaveLength(2);
+    await expect(
+      registry.resetSideThread({
+        sessionId: child.sessionId,
+        expectedGeneration: 2,
+        sessionPath: "/tmp/child-2.jsonl",
+      }),
+    ).rejects.toMatchObject({ code: "side_thread_generation_conflict" });
+    const reset = await registry.resetSideThread({
+      sessionId: child.sessionId,
+      expectedGeneration: 1,
+      sessionPath: "/tmp/child-2.jsonl",
+    });
+    expect(reset.relation).toMatchObject({ generation: 2 });
+    await registry.archive(parent.sessionId);
+    await expect(registry.get(child.sessionId)).resolves.toMatchObject({ status: "archived" });
+  });
+
+  it("inherits parent scope and refuses nested side-thread relations", async () => {
+    const registry = await tempRegistry();
+    const parent = await registry.create({ sessionId: "parent", workspaceId: "ws_a" });
+    const child = await registry.ensureSideThread({
+      parentSessionId: parent.sessionId,
+      mode: "tangent",
+    });
+    expect(child.scope).toEqual(parent.scope);
+    await expect(
+      registry.ensureSideThread({ parentSessionId: child.sessionId, mode: "tangent" }),
+    ).rejects.toMatchObject({ code: "side_thread_nesting_forbidden" });
+  });
+
+  it("keeps child configuration behind the Side Thread surface", async () => {
+    const registry = await tempRegistry();
+    const parent = await registry.create({ sessionId: "parent", workspaceId: "ws_side" });
+    const child = await registry.ensureSideThread({
+      parentSessionId: parent.sessionId,
+      sessionId: "child",
+      mode: "contextual",
+    });
+
+    await expect(
+      registry.setModel(child.sessionId, { providerName: "provider", modelId: "model" }),
+    ).rejects.toMatchObject({ code: "side_thread_mutation_forbidden" });
+    await expect(registry.setThinkingLevel(child.sessionId, "high")).rejects.toMatchObject({
+      code: "side_thread_mutation_forbidden",
+    });
+    await expect(registry.archive(child.sessionId)).rejects.toMatchObject({
+      code: "side_thread_mutation_forbidden",
+    });
+    await expect(registry.unbind(child.sessionId, "qqbot:c2c:user")).rejects.toMatchObject({
+      code: "side_thread_mutation_forbidden",
+    });
+
+    const configured = await registry.configureSideThread({
+      sessionId: child.sessionId,
+      expectedGeneration: 1,
+      model: { providerName: "provider", modelId: "model" },
+      thinkingLevel: "high",
+    });
+    expect(configured).toMatchObject({
+      model: { providerName: "provider", modelId: "model" },
+      thinkingLevel: "high",
+    });
+    await expect(
+      registry.configureSideThread({
+        sessionId: child.sessionId,
+        expectedGeneration: 2,
+        model: null,
+      }),
+    ).rejects.toMatchObject({ code: "side_thread_generation_conflict" });
+    await expect(
+      registry.configureSideThread({
+        sessionId: child.sessionId,
+        expectedGeneration: 1,
+      }),
+    ).rejects.toMatchObject({ code: "side_thread_config_empty" });
+    await expect(
+      registry.configureSideThread({
+        sessionId: child.sessionId,
+        expectedGeneration: 1,
+        model: null,
+        thinkingLevel: null,
+      }),
+    ).resolves.not.toHaveProperty("model");
+  });
 });

@@ -34,3 +34,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm run check
+
+      - name: Npm product smoke
+        run: pnpm run test:npm-product

@@ -10,6 +10,7 @@ import { handleDaemonRequest } from "./handlers/daemon.ts";
 import { handleHumanRequest } from "./handlers/human.ts";
 import { handleModelRequest } from "./handlers/model.ts";
 import { handleSessionRequest } from "./handlers/session.ts";
+import { handleSideThreadRequest } from "./handlers/side-thread.ts";
 import { handleTurnRequest } from "./handlers/turn.ts";
 import { handleUplinkRequest } from "./handlers/uplink.ts";
 import { handleWorkspaceRequest } from "./handlers/workspace.ts";
@@ -117,6 +118,13 @@ export async function handleLocalRpcLine(
       case "session.model.set":
       case "session.thinking.set":
         return await handleSessionRequest(ctx, request);
+      case "side-thread.ensure":
+      case "side-thread.snapshot":
+      case "side-thread.submit":
+      case "side-thread.reset":
+      case "side-thread.configure":
+      case "side-thread.handoff":
+        return await handleSideThreadRequest(ctx, request);
       case "model.catalog":
       case "model.default.set":
       case "provider.auth.api-key.set":

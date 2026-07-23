@@ -100,6 +100,16 @@ export const DEFAULT_REPRO_STAGES: SparkReproStage[] = [
         "plan",
       ),
       evidenceRequirement(
+        "competitor-baseline-availability-researched",
+        "Runnable competitor/reference baseline availability verified (typically Megatron)",
+        "plan",
+      ),
+      decisionRequirement(
+        "baseline-construction-strategy-approved",
+        "Reuse existing baseline or construction approach approved by the user",
+        "plan",
+      ),
+      evidenceRequirement(
         "implementation-landscape-researched",
         "Reusable implementation and extension boundaries researched",
         "plan",
@@ -121,7 +131,7 @@ export const DEFAULT_REPRO_STAGES: SparkReproStage[] = [
       ),
       validationRequirement(
         "baseline-probe-passed",
-        "Minimum baseline comparison probe passed",
+        "Minimum baseline comparison probe passed against an available or user-approved constructed baseline",
         "plan",
       ),
     ],

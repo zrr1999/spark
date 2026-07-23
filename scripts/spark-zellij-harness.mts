@@ -95,6 +95,11 @@ const ordinaryInput =
 const scenario =
   typeof args.get("scenario") === "string" ? String(args.get("scenario")) : undefined;
 const backend = String(args.get("backend") || process.env.SPARK_TUI_HARNESS_BACKEND || "zellij");
+const sparkCli = resolve(
+  typeof args.get("spark-cli") === "string"
+    ? String(args.get("spark-cli"))
+    : "apps/spark-cli/bin/spark",
+);
 const outputPath =
   typeof args.get("output") === "string"
     ? String(args.get("output"))
@@ -167,15 +172,7 @@ async function sendLine(pane: string, line: string): Promise<CommandResult[]> {
       pane,
       line,
     ]),
-    await run("zellij", [
-      "--session",
-      sessionName,
-      "action",
-      "send-keys",
-      "--pane-id",
-      pane,
-      "Enter",
-    ]),
+    await run("zellij", ["--session", sessionName, "action", "write", "--pane-id", pane, "13"]),
   ];
 }
 
@@ -194,17 +191,7 @@ async function exerciseSparkNativeTui(): Promise<NonNullable<HarnessReport["spar
   ];
   const launch = await run(
     "zellij",
-    [
-      "--session",
-      sessionName,
-      "run",
-      ...paneOptions,
-      "--",
-      "pnpm",
-      "exec",
-      "spark",
-      ...sparkTuiArgs,
-    ],
+    ["--session", sessionName, "run", ...paneOptions, "--", sparkCli, ...sparkTuiArgs],
     20_000,
   );
   const createdPaneId = parseCreatedPaneId(launch);
@@ -554,11 +541,7 @@ async function runZellijSubscribeControlScenario(): Promise<void> {
     "--state",
     "--tab",
   ]);
-  commands.daemonBefore = await run(
-    "pnpm",
-    ["exec", "spark", "daemon", "status", "--json"],
-    20_000,
-  );
+  commands.daemonBefore = await run(sparkCli, ["daemon", "status", "--json"], 20_000);
   const launchArgs = [
     "--session",
     sessionName,
@@ -600,10 +583,10 @@ async function runZellijSubscribeControlScenario(): Promise<void> {
       "--session",
       sessionName,
       "action",
-      "send-keys",
+      "write",
       "--pane-id",
       createdPaneId,
-      "Enter",
+      "13",
     ]);
     await sleep(1_500);
     afterHelpCapture = await subscribeProbe(createdPaneId);
@@ -620,10 +603,10 @@ async function runZellijSubscribeControlScenario(): Promise<void> {
       "--session",
       sessionName,
       "action",
-      "send-keys",
+      "write",
       "--pane-id",
       createdPaneId,
-      "Enter",
+      "13",
     ]);
     await sleep(500);
     cleanup.closePane = await run("zellij", [
@@ -647,7 +630,7 @@ async function runZellijSubscribeControlScenario(): Promise<void> {
     "--state",
     "--tab",
   ]);
-  commands.daemonAfter = await run("pnpm", ["exec", "spark", "daemon", "status", "--json"], 20_000);
+  commands.daemonAfter = await run(sparkCli, ["daemon", "status", "--json"], 20_000);
   const daemonBefore = redactSecrets(parseJson(commands.daemonBefore.stdout));
   const daemonAfter = redactSecrets(parseJson(commands.daemonAfter.stdout));
   const postCleanupPaneStillListed = createdPaneId
@@ -757,11 +740,7 @@ async function main(): Promise<void> {
     commands.zellijVersion = await run("zellij", ["--version"]);
     commands.ensureSession = await run("zellij", ["attach", sessionName, "--create-background"]);
     commands.listSessions = await run("zellij", ["list-sessions", "--short", "--no-formatting"]);
-    commands.daemonBefore = await run(
-      "pnpm",
-      ["exec", "spark", "daemon", "status", "--json"],
-      20_000,
-    );
+    commands.daemonBefore = await run(sparkCli, ["daemon", "status", "--json"], 20_000);
     commands.externalActionListPanes = await run("zellij", [
       "--session",
       sessionName,
@@ -785,11 +764,7 @@ async function main(): Promise<void> {
     commands.subscriptProbe = await run("zellij", ["subscript", "--help"]);
     if (paneId) commands.subscribeProbe = await subscribeProbe(paneId);
     const sparkTuiExercise = exerciseSparkTui ? await exerciseSparkNativeTui() : undefined;
-    commands.daemonAfter = await run(
-      "pnpm",
-      ["exec", "spark", "daemon", "status", "--json"],
-      20_000,
-    );
+    commands.daemonAfter = await run(sparkCli, ["daemon", "status", "--json"], 20_000);
 
     const daemonBefore = redactSecrets(parseJson(commands.daemonBefore.stdout));
     const daemonAfter = redactSecrets(parseJson(commands.daemonAfter.stdout));
@@ -811,11 +786,11 @@ async function main(): Promise<void> {
         "External `zellij --session <name> run ...` is unavailable; pane creation must be performed from inside the session or through a controlled attach workflow.",
       );
     }
-    if (!paneId) {
+    if (!paneId && !exerciseSparkTui) {
       blockers.push(
         "No --pane-id supplied; subscribe capture was not exercised for a concrete pane.",
       );
-    } else if (!subscribeWorks) {
+    } else if (paneId && !subscribeWorks) {
       blockers.push(`Subscribe capture failed for pane ${paneId}.`);
     }
     if (!subscriptExists) {

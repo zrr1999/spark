@@ -1,5 +1,6 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
@@ -299,6 +300,14 @@ export function resolveTargetCommand(target: SparkDispatcherTarget): {
   args: string[];
   label: string;
 } {
+  const product = productTargetCommand(target);
+  if (product) {
+    return {
+      command: process.execPath,
+      args: [product, ...(target === "daemon" ? ["daemon"] : [])],
+      label: targetLabel(target),
+    };
+  }
   const local = localTargetCommand(target);
   if (local && existsSync(local)) {
     return {
@@ -334,6 +343,16 @@ function localTargetCommand(target: SparkDispatcherTarget): string | undefined {
     case "cockpit":
       return fileURLToPath(new URL("../../spark-cockpit/bin/spark-cockpit", import.meta.url));
   }
+}
+
+function productTargetCommand(target: SparkDispatcherTarget): string | undefined {
+  const productDist = process.env.SPARK_PRODUCT_DIST;
+  if (!productDist) return undefined;
+  const productEntry = join(
+    productDist,
+    target === "cockpit" ? "spark-cockpit.js" : "spark-tui.js",
+  );
+  return existsSync(productEntry) ? productEntry : undefined;
 }
 
 function isDirectRun(moduleUrl: string, argvEntry: string | undefined): boolean {

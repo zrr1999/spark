@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-files",
   "version": "0.1.0",
+  "private": true,
   "description": "Working-tree file tools (read/edit/write/grep/find/ls) for Spark extension hosts, with Pi-parity truncation and diff semantics.",
   "keywords": [
     "file-tools",
@@ -18,9 +19,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

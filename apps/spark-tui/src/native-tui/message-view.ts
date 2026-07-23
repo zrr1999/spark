@@ -8,7 +8,7 @@ import {
   type SparkToolCallView,
 } from "@zendev-lab/spark-protocol";
 
-import type { SparkNativeMessage, SparkNativeMessageRole, SparkNativeToolStatus } from "./types.ts";
+import type { SparkNativeMessage, SparkNativeToolStatus } from "./types.ts";
 
 export function nativeMessageToView(message: SparkNativeMessage, index: number): SparkMessageView {
   const toolStatus =

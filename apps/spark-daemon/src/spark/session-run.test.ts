@@ -1060,6 +1060,37 @@ describe("daemon native session execution", () => {
     expect(input?.systemPrompt).not.toContain("You are handling an Infoflow");
   });
 
+  it("does not infer infoflow from channel context when the reply binding is missing", async () => {
+    const executeSession = vi.fn(
+      async (
+        _input: Parameters<typeof executeSparkDaemonSessionRunTask>[2] extends {
+          executeSession: infer T;
+        }
+          ? T extends (input: infer I) => unknown
+            ? I
+            : never
+          : never,
+      ) => ({ assistantText: "done" }),
+    );
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_legacy_context_only",
+      prompt: "legacy context",
+      channelContext: { externalKey: "qqbot:c2c:user-legacy" },
+    };
+
+    await executeSparkDaemonSessionRunTask(task, context(task), { paths, executeSession });
+
+    const input = executeSession.mock.calls[0]?.[0];
+    expect(input?.sessionSource).toBe("channel");
+    expect(input?.messageMetadata).toEqual({
+      invocationId: "invocation-1",
+      origin: { kind: "user", host: "channel", surface: "channel" },
+    });
+    expect(JSON.stringify(input)).not.toContain("infoflow");
+    expect(input).not.toHaveProperty("channelBinding");
+  });
+
   it("passes the exact originating channel binding to the headless session", async () => {
     const executeSession = vi.fn(async () => ({ assistantText: "done" }));
     const task: SparkDaemonSessionRunTask = {
@@ -1235,6 +1266,50 @@ describe("daemon native session execution", () => {
         systemPrompt: expect.stringContaining(
           'kind: "request", toSessionId, intent, message }) to queue work on a local surface=local target',
         ),
+      }),
+    );
+  });
+
+  it("enforces read-only effects and a dedicated prompt for side-thread sessions", async () => {
+    const task: SparkDaemonSessionRunTask = {
+      type: "session.run",
+      sessionId: "sess_side_readonly",
+      prompt: "inspect the current implementation",
+    };
+    const executeSession = vi.fn(async () => ({ assistantText: "findings" }));
+
+    await executeSparkDaemonSessionRunTask(task, context(task), {
+      paths,
+      executeSession,
+      sessionRegistry: {
+        get: vi.fn(async () => ({
+          sessionId: task.sessionId,
+          scope: { kind: "workspace" as const, workspaceId: "workspace-side" },
+          workspaceId: "workspace-side",
+          status: "ready" as const,
+          bindings: [],
+          sessionPath: "/daemon/sessions/sess_side_readonly-generation-2.jsonl",
+          relation: {
+            kind: "side_thread" as const,
+            parentSessionId: "sess_parent",
+            generation: 1,
+            mode: "contextual" as const,
+          },
+          createdAt: "2026-07-22T00:00:00.000Z",
+          updatedAt: "2026-07-22T00:00:00.000Z",
+        })),
+        recordRun: vi.fn(async () => ({}) as never),
+        recordTurnQueued: vi.fn(async () => ({}) as never),
+        recordTurnSettled: vi.fn(async () => ({}) as never),
+      },
+    });
+
+    expect(executeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedToolEffects: ["read"],
+        sessionPath: "/daemon/sessions/sess_side_readonly-generation-2.jsonl",
+        sessionSurface: "local",
+        systemPrompt: expect.stringContaining("always read-only"),
       }),
     );
   });

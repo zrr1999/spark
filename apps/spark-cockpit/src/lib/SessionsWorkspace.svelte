@@ -661,20 +661,22 @@
 
 {#snippet sessionDetails(compact = false)}
   {#if selected}
-    <SessionDetailsPanel
-      {selected}
-      {compact}
-      {messages}
-      statusLabel={statusLabel}
-      sessionScopeLabel={sessionScopeLabel(selected)}
-      {selectedWorkspaceHref}
-      {selectedIsChannelSession}
-      {selectedChannelBindings}
-      {selectedChannelsSettingsHref}
-      {workbenchView}
-      {inspectorLabels}
-      instanceId={compact ? "session-inspector-mobile" : "session-inspector-desktop"}
-    />
+    {#key selected.sessionId}
+      <SessionDetailsPanel
+        {selected}
+        {compact}
+        {messages}
+        statusLabel={statusLabel}
+        sessionScopeLabel={sessionScopeLabel(selected)}
+        {selectedWorkspaceHref}
+        {selectedIsChannelSession}
+        {selectedChannelBindings}
+        {selectedChannelsSettingsHref}
+        {workbenchView}
+        {inspectorLabels}
+        instanceId={compact ? "session-inspector-mobile" : "session-inspector-desktop"}
+      />
+    {/key}
   {/if}
 {/snippet}
 

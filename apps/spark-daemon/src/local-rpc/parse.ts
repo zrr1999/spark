@@ -19,7 +19,12 @@ import {
   sparkSessionListRequestSchema,
   sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
-  type SparkAssignment,
+  sparkSideThreadConfigureRequestSchema,
+  sparkSideThreadEnsureRequestSchema,
+  sparkSideThreadHandoffRequestSchema,
+  sparkSideThreadResetRequestSchema,
+  sparkSideThreadSnapshotRequestSchema,
+  sparkSideThreadSubmitRequestSchema,
   type SparkCommand,
 } from "@zendev-lab/spark-protocol";
 import {
@@ -28,7 +33,6 @@ import {
   type ChannelsConfig,
 } from "@zendev-lab/spark-channels";
 import { sparkCommandFromLocalRpcRequest } from "../command-dispatcher.ts";
-import type { SparkDaemonRelocationRequest } from "../relocation.ts";
 import { isRecord } from "./is-record.ts";
 import { workspaceProfile } from "./results.ts";
 import type {
@@ -294,6 +298,42 @@ export function parseLocalRpcRequest(line: string): LocalRpcRequest {
       params: sparkSessionArchiveRequestSchema.parse(value.params),
     });
   }
+  if (value.method === "side-thread.ensure")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadEnsureRequestSchema.parse(value.params),
+    });
+  if (value.method === "side-thread.snapshot")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadSnapshotRequestSchema.parse(value.params),
+    });
+  if (value.method === "side-thread.submit")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadSubmitRequestSchema.parse(value.params),
+    });
+  if (value.method === "side-thread.reset")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadResetRequestSchema.parse(value.params),
+    });
+  if (value.method === "side-thread.configure")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadConfigureRequestSchema.parse(value.params),
+    });
+  if (value.method === "side-thread.handoff")
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSideThreadHandoffRequestSchema.parse(value.params),
+    });
   if (value.method === "session.model.set") {
     return withSparkCommand({
       id: value.id,

@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { SparkSessionStore as CanonicalSparkSessionStore } from "@zendev-lab/spark-host/session-store";
 
 import {
   CURRENT_SPARK_SESSION_VERSION,
@@ -10,6 +11,10 @@ import {
   parseSparkSessionEntries,
   workspaceSessionHash,
 } from "../apps/spark-tui/src/host/index.ts";
+
+test("TUI session-store exports remain aliases of the canonical host store", () => {
+  assert.equal(SparkSessionStore, CanonicalSparkSessionStore);
+});
 
 test("SparkSessionStore uses ~/.spark-style sessions root and workspace hash, never ~/.pi", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-path-"));
@@ -102,6 +107,29 @@ test("SparkSessionStore resolves session refs and creates parent-linked forks", 
     store.appendMessage(fork, { role: "assistant", content: "child answer" });
     assert.equal(parent.entries.length, 1);
     assert.equal(fork.entries.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("SparkSessionStore keeps internal transcripts out of public history and ref lookup", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-internal-"));
+  try {
+    const store = new SparkSessionStore({ cwd: join(dir, "repo"), sparkHome: join(dir, ".spark") });
+    const internal = store.createSession({
+      id: "side-hidden",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      visibility: "internal",
+      purpose: "side_thread",
+    });
+    store.appendMessage(internal, { role: "user", content: "inherited parent context" });
+    await store.save(internal);
+
+    assert.equal((await store.load(internal.path)).header.purpose, "side_thread");
+    assert.deepEqual(await store.list(), []);
+    assert.equal(await store.findById(internal.header.id), undefined);
+    await assert.rejects(store.loadByRef(internal.header.id), /Spark session not found/u);
+    await assert.rejects(store.loadByRef(internal.path), /Spark session not found/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

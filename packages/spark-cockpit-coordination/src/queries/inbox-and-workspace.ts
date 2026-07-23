@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createId } from "@zendev-lab/spark-protocol";
-import { ensureArtifactPreviewCache, readArtifactPreviewContent } from "../artifact-cache.ts";
-import { loadProjectCockpit } from "../project-cockpit.ts";
-import { loadWorkspaceServerControl } from "../projection-services.ts";
 import { listRuntimeEnrollmentTokens } from "../runtime-registration.ts";
 import { loadWorkspaceByRouteId } from "../routing.ts";
-import { hashSecret } from "../security.ts";
 import {
   isReservedWorkbenchPathSegment,
   resolveWorkspaceDirectoryDisplayName,

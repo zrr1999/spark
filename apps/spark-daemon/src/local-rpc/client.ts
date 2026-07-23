@@ -21,7 +21,6 @@ import {
   type LocalDaemonStatusResult,
   type LocalDaemonStopResult,
   type LocalTurnCancelParams,
-  type LocalTurnCancelRequest,
   type LocalTurnCancelResult,
   type LocalTurnStatusResult,
   type LocalTurnStreamResult,

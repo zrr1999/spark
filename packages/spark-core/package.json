@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-core",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark host contract + lightweight primitives (ExtensionAPI types and dependency-light helpers). Not a revival of the retired spark-core capability bag.",
   "license": "MIT",
   "author": "zrr1999",
@@ -12,9 +13,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."

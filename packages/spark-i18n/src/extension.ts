@@ -168,9 +168,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `Goal: ${objective}`,
     loopTickHeader: "Spark foreground goal loop tick.",
     loopModeDecisionContract:
-      "Goal driver requirements: use the objective, current project/task state, blockers, and validation needs to choose concrete next actions; do not classify the whole tick as plan or implement. Use workflow, subagent role, and role-run only as tools inside the goal driver boundary.",
+      "Goal driver requirements: use the objective, current project/task state, blockers, and validation needs to choose concrete next actions; do not classify the whole tick as plan or implement. Prefer the main session for scheduling and execution; use workflow, role call, session call/send, assign, or role-run only when the user explicitly requests fan-out or a clearly parallelizable slice cannot be done safely in the main session. When blocked by a missing user decision or a problem the user can unblock, call ask immediately; do not guess.",
     loopReviewerOwnership:
-      "Goal supplies the objective, idle tick cadence, and reviewer-gated completion flow: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. When blocked, resolve the blocking work instead of pausing or weakening the goal.",
+      "Goal supplies the objective, idle tick cadence, and reviewer-gated completion flow: the main session requests completion, the reviewer audits, and Spark applies the approved state transition. When blocked, call ask for decisions the user can unblock; resolve other blocking work in the main session instead of pausing, weakening the goal, or spawning subagents by default.",
     emptyGoalNotSet: "Spark session goal is not set.",
     emptyGoalReadContext:
       "Read the Spark project/task context below and decide a concrete, stable session goal. Default to the substantive project outcome described by the project purpose/description/title; use planning/readiness-only wording only when the user explicitly asked for that scope.",
@@ -188,9 +188,9 @@ const INSTRUCTIONS: Record<SparkLanguage, GoalInstructionStrings> = {
     goalLine: (objective) => `目标：${objective}`,
     loopTickHeader: "Spark 前台目标循环节拍。",
     loopModeDecisionContract:
-      "Goal driver requirements：基于目标、当前项目/任务状态、阻塞与验证需求选择具体下一步；不要把整个 tick 归类为 plan 或 implement。workflow、subagent role、role-run 只作为 goal driver 边界内的工具使用。",
+      "Goal driver requirements：基于目标、当前项目/任务状态、阻塞与验证需求选择具体下一步；不要把整个 tick 归类为 plan 或 implement。优先在主 session 调度与执行；仅当用户明确要求 fan-out，或明显可并行且主 session 无法安全完成时，才使用 workflow、role call、session call/send、assign 或 role-run。遇到用户可解除的决策缺失或问题时立即 ask，禁止猜测。",
     loopReviewerOwnership:
-      "goal 提供目标、空闲节拍循环与 reviewer-gated completion 流程：主 session 发起完成请求，reviewer 审核裁决，Spark 应用通过后的状态转换。遇到阻塞时先解决阻塞工作，不要自主暂停或降低目标难度。",
+      "goal 提供目标、空闲节拍循环与 reviewer-gated completion 流程：主 session 发起完成请求，reviewer 审核裁决，Spark 应用通过后的状态转换。遇到阻塞时，对用户可解除的决策立即 ask；其余阻塞工作优先在主 session 解决，不要自主暂停、降低目标难度，也不要默认拉起子代理。",
     emptyGoalNotSet: "尚未设置 Spark 会话目标。",
     emptyGoalReadContext:
       "阅读下方 Spark 项目/任务上下文，给出一个具体且稳定的会话目标。默认目标应表达 project purpose/description/title 所描述的实质成果；只有用户明确要求仅规划/仅就绪时才写成 planning-only/readiness-only。",

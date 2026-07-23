@@ -27,7 +27,6 @@ test("dependency-cruiser config loads and encodes required boundary rules", asyn
   ]) {
     assert.match(source, new RegExp(`name:\\s*"${ruleName}"`, "u"));
   }
-  assert.match(source, /packages\/pi-btw/u);
   assert.match(source, /pi-parity-commands/u);
   assert.match(source, /Dynamic import/u);
 });

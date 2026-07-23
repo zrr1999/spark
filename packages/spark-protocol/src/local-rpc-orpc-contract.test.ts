@@ -4,8 +4,10 @@ import {
   sparkLocalRpcOrpcContract,
   sparkLocalRpcOrpcLiveMethods,
   sparkLocalRpcOrpcMethodPaths,
+  sparkLocalRpcSideThreadOrpcErrors,
   type SparkLocalRpcOrpcMethod,
 } from "./local-rpc-orpc-contract.ts";
+import { sparkSideThreadErrorCodeOptions } from "./side-thread.ts";
 
 function resolveContractPath(path: readonly string[]): unknown {
   let cursor: unknown = sparkLocalRpcOrpcContract;
@@ -29,8 +31,10 @@ describe("sparkLocalRpcOrpcContract (Phase 4)", () => {
     }
   });
 
-  it("keeps a live half-migration allowlist of at least ten methods", () => {
-    expect(sparkLocalRpcOrpcLiveMethods.length).toBeGreaterThanOrEqual(10);
+  it("marks every contracted method as live via the legacy dispatch bridge", () => {
+    expect(sparkLocalRpcOrpcLiveMethods).toHaveLength(
+      Object.keys(sparkLocalRpcOrpcMethodPaths).length,
+    );
     for (const method of sparkLocalRpcOrpcLiveMethods) {
       expect(sparkLocalRpcOrpcMethodPaths[method as SparkLocalRpcOrpcMethod]).toBeTruthy();
     }
@@ -42,5 +46,14 @@ describe("sparkLocalRpcOrpcContract (Phase 4)", () => {
     expect(sparkLocalRpcOrpcContract.workspace.list).toBeDefined();
     expect(sparkLocalRpcOrpcContract.uplink.status).toBeDefined();
     expect(sparkLocalRpcOrpcContract.model.catalog).toBeDefined();
+  });
+
+  it("declares only protocol-approved Side Thread domain errors", () => {
+    expect(Object.keys(sparkLocalRpcSideThreadOrpcErrors).sort()).toEqual(
+      [...sparkSideThreadErrorCodeOptions].sort(),
+    );
+    for (const procedure of Object.values(sparkLocalRpcOrpcContract.sideThread)) {
+      expect(procedure["~orpc"].errorMap).toEqual(sparkLocalRpcSideThreadOrpcErrors);
+    }
   });
 });

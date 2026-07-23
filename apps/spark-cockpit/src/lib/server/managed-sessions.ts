@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   SparkSessionBindRequest,
   SparkSessionRegistryRecord,
+  SparkSideThreadSnapshot,
 } from "@zendev-lab/spark-protocol";
 import {
   getRuntimeSessionProjection,
@@ -33,6 +34,39 @@ export interface CockpitManagedSessionsClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  sideThreadSnapshot?(
+    parentSessionId: string,
+    options?: { beforeExchangeId?: string; limit?: number },
+  ): Promise<SparkSideThreadSnapshot>;
+  ensureSideThread?(input: {
+    parentSessionId: string;
+    mode?: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  submitSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    prompt: string;
+    idempotencyKey: string;
+  }): Promise<unknown>;
+  resetSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    mode: "contextual" | "tangent";
+  }): Promise<SparkSideThreadSnapshot>;
+  configureSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    modelOverride?: { providerName: string; modelId: string } | null;
+    thinkingOverride?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  }): Promise<SparkSideThreadSnapshot>;
+  handoffSideThread?(input: {
+    parentSessionId: string;
+    expectedGeneration: number;
+    expectedHeadExchangeId: string;
+    kind: "full" | "summary";
+    instructions?: string;
+    idempotencyKey: string;
+  }): Promise<unknown>;
   create(input: CockpitRuntimeSessionCreateRequest): Promise<SparkSessionRegistryRecord>;
   bind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
   unbind(input: SparkSessionBindRequest): Promise<SparkSessionRegistryRecord>;
@@ -110,8 +144,7 @@ export async function getManagedSessionForCockpit(
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
 ): Promise<SparkSessionRegistryRecord | null> {
   try {
-    const session = await client.get(sessionId);
-    return isCockpitWorkspaceSession(session) ? session : null;
+    return await getLiveManagedSessionForCockpit(sessionId, client);
   } catch (error) {
     // A disconnected owner or stale projection must not turn the workbench
     // layout or session page into a 500.
@@ -123,6 +156,24 @@ export async function getManagedSessionForCockpit(
     ) {
       return null;
     }
+    throw error;
+  }
+}
+
+/**
+ * Read current owner state without collapsing transport failure into absence.
+ * Authorization-sensitive routes use this variant so offline/timeout remains
+ * distinguishable from a missing or foreign session.
+ */
+export async function getLiveManagedSessionForCockpit(
+  sessionId: string,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<SparkSessionRegistryRecord | null> {
+  try {
+    const session = await client.get(sessionId);
+    return isCockpitWorkspaceSession(session) ? session : null;
+  } catch (error) {
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
     throw error;
   }
 }
@@ -197,6 +248,52 @@ export async function getManagedSessionSnapshotForCockpit(
   }
 }
 
+/**
+ * Load an already-created Side Thread for a workspace session. This is
+ * deliberately read-only: the Cockpit must never materialize a child merely
+ * because somebody visited a parent session page.
+ */
+export async function getManagedSideThreadSnapshotForCockpit(
+  parentSessionId: string,
+  options: { workspaceId?: string; beforeExchangeId?: string; limit?: number } = {},
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<SparkSideThreadSnapshot | null> {
+  try {
+    if (!client.sideThreadSnapshot) return null;
+    const session = await client.get(parentSessionId);
+    if (!isCockpitWorkspaceSession(session)) return null;
+    if (options.workspaceId && session.scope.workspaceId !== options.workspaceId) return null;
+    return await client.sideThreadSnapshot(parentSessionId, {
+      ...(options.beforeExchangeId ? { beforeExchangeId: options.beforeExchangeId } : {}),
+      ...(options.limit ? { limit: options.limit } : {}),
+    });
+  } catch (error) {
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
+    if (
+      error instanceof RuntimeControlCommandError &&
+      (error.reasonCode === "side_thread_not_found" || error.reasonCode === "SIDE_THREAD_NOT_FOUND")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Mutate a Side Thread only after authorizing the parent workspace session.
+ * The command itself still goes to the daemon's single Side Thread controller.
+ */
+export async function controlManagedSideThreadForCockpit<T>(
+  parentSessionId: string,
+  workspaceId: string,
+  command: (client: CockpitManagedSessionsClient) => Promise<T>,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<T | null> {
+  const session = await client.get(parentSessionId);
+  if (!isCockpitWorkspaceSession(session) || session.scope.workspaceId !== workspaceId) return null;
+  return await command(client);
+}
+
 export async function createManagedSessionForCockpit(
   input: CockpitRuntimeSessionCreateRequest,
   client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
@@ -231,5 +328,9 @@ export async function archiveManagedSessionForCockpit(
 function isCockpitWorkspaceSession(
   session: SparkSessionRegistryRecord,
 ): session is SparkSessionRegistryRecord & { scope: { kind: "workspace"; workspaceId: string } } {
-  return session.scope.kind === "workspace";
+  // The daemon normally omits these from `session.list`, but keep the Cockpit
+  // rail defensive when a stale projection or a diagnostic list response
+  // contains a related child. Children are visible only through the parent
+  // detail's nested Side Thread panel.
+  return session.scope.kind === "workspace" && session.relation?.kind !== "side_thread";
 }

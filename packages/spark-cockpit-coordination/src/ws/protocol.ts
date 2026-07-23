@@ -13,7 +13,6 @@ import {
   runtimeCommandAckEnvelopeSchema,
   runtimeCommandRejectEnvelopeSchema,
   runtimeCommandResultEnvelopeSchema,
-  runtimeEphemeralSecretResultEnvelopeSchema,
   runtimeHeartbeatEnvelopeSchema,
   runtimeHelloEnvelopeSchema,
   runtimeProtocolVersion,
@@ -23,7 +22,6 @@ import {
   taskGraphSnapshotEnvelopeSchema,
   workspaceSnapshotEnvelopeSchema,
 } from "@zendev-lab/spark-protocol";
-import { bearerTokenFromAuthorization } from "@zendev-lab/spark-system";
 import {
   markRuntimeControlCommandDeliveryAttempt,
   pendingRuntimeControlCommands,
@@ -31,20 +29,13 @@ import {
   recordRuntimeControlCommandReject,
   recordRuntimeControlCommandResult,
   recoverUnacknowledgedRuntimeControlCommands,
-  registerRuntimeControlDispatcher,
   requireRuntimeControlCommand,
 } from "../runtime-control.ts";
-import { hashSecret } from "../security.ts";
 import {
   resolveWorkspaceDirectoryDisplayName,
   syncWorkspaceIdentityFromLocalPath,
 } from "../workspace-identity.ts";
-import {
-  recordRuntimeEphemeralSecretProjection,
-  recordRuntimeModelChannelProjection,
-  registerRuntimeEphemeralSecretDispatcher,
-} from "../runtime-model-channel-control.ts";
-import { RuntimeControlCommandError } from "../runtime-control.ts";
+import { recordRuntimeModelChannelProjection } from "../runtime-model-channel-control.ts";
 import { recordRuntimeSessionControlProjection } from "../runtime-session-control.ts";
 import {
   appendEvent,

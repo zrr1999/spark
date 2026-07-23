@@ -232,6 +232,70 @@ test("SparkAgentSession persists and resumes JSONL sessions", async () => {
   }
 });
 
+test("SparkAgentSession follows the authoritative transcript path across same-id generations", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-generation-"));
+  try {
+    const cwd = join(dir, "repo");
+    const sparkHome = join(dir, ".spark");
+    await mkdir(cwd, { recursive: true });
+    let providerReplay = "";
+    const services = await makeFakeServices(
+      { cwd, sparkHome },
+      {
+        streamSimple: (context) => {
+          providerReplay = JSON.stringify(context.messages);
+          return assistant("generation two answer");
+        },
+      },
+    );
+    const sessionId = "same-id-side-thread";
+    const stale = services.sessionStore.createSession({
+      id: sessionId,
+      timestamp: "2026-07-22T01:00:00.000Z",
+    });
+    services.sessionStore.appendMessage(stale, {
+      role: "user",
+      content: "stale generation exchange",
+      timestamp: Date.parse("2026-07-22T03:00:00.000Z"),
+    });
+    stale.entries.at(-1)!.timestamp = "2026-07-22T03:00:00.000Z";
+    await services.sessionStore.save(stale);
+
+    const reset = services.sessionStore.createSession({
+      id: sessionId,
+      timestamp: "2026-07-22T04:00:00.000Z",
+    });
+    services.sessionStore.appendMessage(reset, {
+      role: "user",
+      content: "fresh contextual seed",
+      timestamp: Date.parse("2026-07-22T00:00:00.000Z"),
+    });
+    reset.entries.at(-1)!.timestamp = "2026-07-22T00:00:00.000Z";
+    await services.sessionStore.save(reset);
+
+    assert.equal((await services.sessionStore.findById(sessionId))?.path, stale.path);
+    const result = await new SparkAgentSession(services).run({
+      sessionId,
+      sessionPath: reset.path,
+      prompt: "generation two prompt",
+    });
+
+    assert.equal(result.sessionPath, reset.path);
+    assert.match(providerReplay, /fresh contextual seed/u);
+    assert.doesNotMatch(providerReplay, /stale generation exchange/u);
+    assert.doesNotMatch(
+      JSON.stringify((await services.sessionStore.load(stale.path)).entries),
+      /generation two prompt/u,
+    );
+    assert.match(
+      JSON.stringify((await services.sessionStore.load(reset.path)).entries),
+      /generation two prompt/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("SparkAgentSession compacts persisted history and retries context overflow with backoff", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-overflow-"));
   try {
@@ -406,7 +470,7 @@ test("SparkAgentSession stops repeated overflow retry when compaction has no use
   }
 });
 
-test("SparkAgentSession compacts an over-budget persisted session before its provider call", async () => {
+test("restricted SparkAgentSession runs declared reads but skips unclassified lifecycle writes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-agent-session-preflight-"));
   try {
     const cwd = join(dir, "repo");
@@ -414,7 +478,7 @@ test("SparkAgentSession compacts an over-budget persisted session before its pro
     await mkdir(cwd, { recursive: true });
     let providerCalls = 0;
     const services = await makeFakeServices(
-      { cwd, sparkHome },
+      { cwd, sparkHome, allowedToolEffects: ["read"] },
       {
         contextWindow: 40_000,
         maxTokens: 4_096,
@@ -424,6 +488,17 @@ test("SparkAgentSession compacts an over-budget persisted session before its pro
         },
       },
     );
+    let readLifecycleHooks = 0;
+    services.runtime.on(
+      "session_compact",
+      () => {
+        readLifecycleHooks += 1;
+      },
+      { effects: ["read"] },
+    );
+    services.runtime.on("session_compact", async () => {
+      await writeFile(join(cwd, "forbidden-lifecycle-write"), "must not run", "utf8");
+    });
     const record = services.sessionStore.createSession({ id: "preflight-session" });
     for (let index = 0; index < 80; index += 1) {
       services.sessionStore.appendMessage(record, {
@@ -451,6 +526,8 @@ test("SparkAgentSession compacts an over-budget persisted session before its pro
 
     assert.equal(providerCalls, 1);
     assert.equal(result.outcome?.status, "completed");
+    assert.equal(readLifecycleHooks, 1);
+    assert.equal((await readdir(cwd)).includes("forbidden-lifecycle-write"), false);
     const saved = await services.sessionStore.load(record.path);
     const compactions = saved.entries.filter((entry) => entry.type === "compaction");
     assert.equal(compactions.length, 1);

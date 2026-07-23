@@ -13,7 +13,10 @@ Setup is research-first and separates three requirement kinds:
 Readiness and stage gates are derived from these records. Callers cannot pass a
 gate by writing a bare boolean.
 
-The setup stage explicitly researches reuse/adapt/new implementation options and
-real-module/eager alignment paths before recording the corresponding user
-decisions. Eager execution is a diagnostic path by default, not silent evidence
-that the real module path is aligned.
+The setup stage first verifies whether a runnable competitor/reference baseline
+already exists (typically a Megatron implementation). Missing baselines are a
+blocking user decision: ask how to construct or obtain them before any baseline
+probe, and do not invent a substitute. It then researches reuse/adapt/new
+implementation options and real-module/eager alignment paths before recording
+the corresponding user decisions. Eager execution is a diagnostic path by
+default, not silent evidence that the real module path is aligned.

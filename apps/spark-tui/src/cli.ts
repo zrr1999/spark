@@ -27,12 +27,12 @@ import {
   clientTurnStatus,
   createSparkDaemonNativeCommands,
   createSparkDaemonNativeResponder,
+  requestSparkDaemonControl,
   ensureSparkDaemonWorkspaceSession,
   handleSparkDaemonHumanInteractionRequest,
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
-  requestSparkDaemonControl,
   type SparkDaemonClientOptions,
   type SparkDaemonCliCommand,
   type SparkDaemonWorkspace,
@@ -40,6 +40,7 @@ import {
 import {
   createSparkNativeLocalControlSlashCommands,
   createSparkNativeRuntimeSlashCommands,
+  createSparkNativeSideThreadSlashCommands,
   createSparkNativeUiTransport,
   runNativeSparkTui,
   type SparkNativeSlashCommandMap,
@@ -1526,12 +1527,32 @@ function createSparkNativeSlashCommands(
   const daemonCommands = createSparkDaemonNativeCommands(daemonClient);
   const localControlCommands = createSparkNativeLocalControlSlashCommands();
   const piParityCommands = createSparkPiParitySlashCommands(services, modelControl);
+  const sideThreadCommands = createSparkNativeSideThreadSlashCommands({
+    parentSessionId: () => currentSessionId,
+    client: {
+      ensure: async (input) => {
+        await ensureCurrentSession();
+        return await requestSparkDaemonControl("side-thread.ensure", input, daemonClient);
+      },
+      snapshot: async (input) =>
+        await requestSparkDaemonControl("side-thread.snapshot", input, daemonClient),
+      submit: async (input) =>
+        await requestSparkDaemonControl("side-thread.submit", input, daemonClient),
+      reset: async (input) =>
+        await requestSparkDaemonControl("side-thread.reset", input, daemonClient),
+      configure: async (input) =>
+        await requestSparkDaemonControl("side-thread.configure", input, daemonClient),
+      handoff: async (input) =>
+        await requestSparkDaemonControl("side-thread.handoff", input, daemonClient),
+    },
+  });
   const runtimeCommands = createSparkNativeRuntimeSlashCommands(services.runtime, {
     exclude: [
       ...NATIVE_SLASH_COMMAND_EXCLUSIONS,
       ...Object.keys(daemonCommands),
       ...Object.keys(localControlCommands),
       ...PI_PARITY_COMMAND_NAMES,
+      ...Object.keys(sideThreadCommands),
     ],
     sendUserMessage: async (content, context) => {
       const prompt = content.trim();
@@ -1562,6 +1583,7 @@ function createSparkNativeSlashCommands(
       ...Object.keys(daemonCommands),
       ...Object.keys(localControlCommands),
       ...Object.keys(piParityCommands),
+      ...Object.keys(sideThreadCommands),
     ],
   });
   return {
@@ -1569,6 +1591,7 @@ function createSparkNativeSlashCommands(
     ...daemonCommands,
     ...localControlCommands,
     ...piParityCommands,
+    ...sideThreadCommands,
     ...promptTemplateCommands,
   };
 }

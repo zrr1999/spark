@@ -9,8 +9,13 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/message-port";
 import {
   sparkLocalRpcOrpcLiveMethods,
-  type SparkLocalRpcOrpcLiveMethod,
+  sparkLocalRpcOrpcMethodPaths,
+  type SparkLocalRpcOrpcMethod,
 } from "@zendev-lab/spark-protocol/local-rpc-orpc-contract";
+import {
+  isSparkSideThreadErrorCode,
+  type SparkSideThreadErrorCode,
+} from "@zendev-lab/spark-protocol/side-thread";
 import { resolveSparkPaths, type SparkPaths } from "./paths.ts";
 import { createSocketMessagePort, type SocketMessagePortLike } from "./socket-message-port.ts";
 
@@ -27,57 +32,106 @@ export function sparkDaemonOrpcSocketPath(
   return join(paths.runtimeDir, "daemon-orpc.sock");
 }
 
-export function isSparkDaemonOrpcLiveMethod(method: string): method is SparkLocalRpcOrpcLiveMethod {
+export function isSparkDaemonOrpcLiveMethod(method: string): method is SparkLocalRpcOrpcMethod {
   return (sparkLocalRpcOrpcLiveMethods as readonly string[]).includes(method);
 }
 
-export interface SparkDaemonOrpcClientHandle {
-  // RouterClient typing is owned by the daemon router; callers use nested
-  // procedure calls (client.daemon.status(...)) for live methods.
-  client: {
-    daemon: {
-      status: (input?: Record<string, never>) => Promise<{
-        lifecycle: { state: "starting" | "running" | "draining" | "stopping" };
-        observedAt: string;
-      }>;
-      stop: (input?: Record<string, never>) => Promise<{ stopping: true; observedAt: string }>;
-      restart: (input?: Record<string, never>) => Promise<unknown>;
-    };
-    workspace: {
-      list: (input?: Record<string, never>) => Promise<{
-        workspaces: Array<{ id: string; localPath: string }>;
-        observedAt: string;
-      }>;
-      ensureLocal: (input: {
-        localPath: string;
-        displayName?: string;
-        localWorkspaceKey?: string;
-      }) => Promise<unknown>;
-    };
-    uplink: {
-      status: (input?: Record<string, never>) => Promise<{
-        origins: Array<{ serverUrl: string; preferred?: boolean; parked?: boolean }>;
-      }>;
-    };
-    model: {
-      catalog: (input?: { sessionId?: string }) => Promise<unknown>;
-    };
-    turn: {
-      status: (input: { invocationId: string }) => Promise<unknown>;
-      result: (input: { invocationId: string }) => Promise<unknown>;
-    };
-    invocation: {
-      list: (input?: Record<string, unknown>) => Promise<unknown>;
-    };
-    session: {
-      list: (input?: Record<string, unknown>) => Promise<unknown>;
-    };
-    channel: {
-      status: (input: { workspaceId: string }) => Promise<unknown>;
-    };
+/** Nested oRPC client surface; prefer `invokeSparkDaemonOrpcLiveMethod` for dotted methods. */
+export type SparkDaemonOrpcClient = {
+  daemon: {
+    status: (input?: Record<string, never>) => Promise<{
+      lifecycle: { state: "starting" | "running" | "draining" | "stopping" };
+      observedAt: string;
+    }>;
+    stop: (input?: Record<string, never>) => Promise<{ stopping: true; observedAt: string }>;
+    restart: (input?: Record<string, never>) => Promise<unknown>;
   };
+  workspace: {
+    list: (input?: Record<string, never>) => Promise<{
+      workspaces: Array<{ id: string; localPath: string }>;
+      observedAt: string;
+    }>;
+    ensureLocal: (input: {
+      localPath: string;
+      displayName?: string;
+      localWorkspaceKey?: string;
+    }) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  uplink: {
+    status: (input?: Record<string, never>) => Promise<{
+      origins: Array<{ serverUrl: string; preferred?: boolean; parked?: boolean }>;
+    }>;
+    [key: string]: unknown;
+  };
+  model: {
+    catalog: (input?: { sessionId?: string }) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  turn: {
+    status: (input: { invocationId: string }) => Promise<unknown>;
+    result: (input: { invocationId: string }) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  invocation: {
+    list: (input?: Record<string, unknown>) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  session: {
+    list: (input?: Record<string, unknown>) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  channel: {
+    status: (input: { workspaceId: string }) => Promise<unknown>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
+
+export interface SparkDaemonOrpcClientHandle {
+  client: SparkDaemonOrpcClient;
   port: SocketMessagePortLike;
   close(): void;
+}
+
+/** A typed Side Thread domain error returned by the daemon oRPC surface. */
+export type SparkDaemonSideThreadOrpcError = Error & { code: SparkSideThreadErrorCode };
+
+/**
+ * Narrows a client rejection to the Side Thread errors explicitly declared in
+ * the protocol contract. oRPC INTERNAL and transport failures intentionally do
+ * not pass this check.
+ */
+export function isSparkDaemonSideThreadOrpcError(
+  error: unknown,
+): error is SparkDaemonSideThreadOrpcError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    isSparkSideThreadErrorCode((error as { code?: unknown }).code)
+  );
+}
+
+export async function invokeSparkDaemonOrpcLiveMethod(
+  client: SparkDaemonOrpcClient,
+  method: SparkLocalRpcOrpcMethod,
+  params: unknown = {},
+): Promise<unknown> {
+  const path = sparkLocalRpcOrpcMethodPaths[method];
+  let current: unknown = client;
+  for (const segment of path) {
+    // oRPC exposes nested procedures through a dynamic Proxy whose `has` trap
+    // does not advertise paths. Let property-access failures propagate: once
+    // connected, callers must treat them as invoke failures and not retry.
+    if (current === null || (typeof current !== "object" && typeof current !== "function")) {
+      throw new Error(`oRPC client missing path segment "${segment}" for ${method}`);
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  if (typeof current !== "function") {
+    throw new TypeError(`oRPC client path for ${method} is not callable`);
+  }
+  return await (current as (input: unknown) => Promise<unknown>)(params ?? {});
 }
 
 export async function createSparkDaemonOrpcClient(
@@ -110,7 +164,7 @@ export async function createSparkDaemonOrpcClient(
 
   const port = createSocketMessagePort(socket);
   const link = new RPCLink({ port });
-  const client = createORPCClient(link) as SparkDaemonOrpcClientHandle["client"];
+  const client = createORPCClient(link) as SparkDaemonOrpcClient;
 
   return {
     client,

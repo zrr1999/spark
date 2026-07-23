@@ -7,6 +7,7 @@ import type {
   ExtensionRoleRunInputControl,
   RoleRef,
   RunRef,
+  ToolEffect,
 } from "@zendev-lab/spark-core";
 
 import {
@@ -79,6 +80,8 @@ export interface SparkHeadlessRoleInstructionResult {
 export interface SparkHeadlessSessionRunInput {
   cwd: string;
   sessionId: string;
+  /** Daemon-authoritative native transcript path for this session generation. */
+  sessionPath?: string;
   prompt: SparkHeadlessUserContent;
   model?: string;
   thinkingLevel?: string;
@@ -101,6 +104,8 @@ export interface SparkHeadlessSessionRunInput {
   invocationId?: string;
   sessionQuestionChain?: readonly string[];
   allowedTools?: readonly string[];
+  /** Host-enforced effect allowlist; unknown tool effects are denied. */
+  allowedToolEffects?: readonly ToolEffect[];
   /** Optional base identity/surface prompt; defaults to Spark host identity. */
   systemPrompt?: string;
   /** Display-safe metadata persisted on the submitted user message only. */
@@ -164,6 +169,7 @@ export async function runSparkHeadlessSession(
     invocationId: input.invocationId,
     sessionQuestionChain: input.sessionQuestionChain,
     allowedTools: input.allowedTools,
+    allowedToolEffects: input.allowedToolEffects,
     hasUI: false,
     ...(input.interaction ? { ui: { interaction: input.interaction } } : {}),
     ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
@@ -210,6 +216,7 @@ export async function runSparkHeadlessSession(
     const result = await runWithHeadlessTimeout(
       session.run({
         sessionId: input.sessionId,
+        ...(input.sessionPath ? { sessionPath: input.sessionPath } : {}),
         prompt: input.prompt,
         reset: input.reset,
         ...(input.resumeFromInterrupt ? { resumeFromInterrupt: true } : {}),

@@ -3255,3 +3255,75 @@ test("SparkAgentLoop refuses concurrent submit while in flight", async () => {
   await first;
   assert.equal(loop.getState(), "idle");
 });
+
+test("SparkAgentLoop rechecks host effect policy immediately before dispatch", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-agent-loop-read-only-dispatch-test",
+    allowedToolEffects: ["read"],
+  });
+  let readExecutions = 0;
+  let writeExecutions = 0;
+  host.registerTool({
+    name: "inspect",
+    description: "safe read",
+    parameters: { type: "object" },
+    policy: { effect: "read", approval: "none" },
+    async execute() {
+      readExecutions += 1;
+      return { content: [{ type: "text", text: "read result" }] };
+    },
+  });
+  host.registerTool({
+    name: "mutate",
+    description: "must remain blocked",
+    parameters: { type: "object" },
+    policy: { effect: "local_write", approval: "none" },
+    async execute() {
+      writeExecutions += 1;
+      return { content: [{ type: "text", text: "write result" }] };
+    },
+  });
+
+  // The model may emit a stale schema. Even if a caller corrupts the public
+  // active bit, the host guard is consulted directly before execute().
+  host.getTool("mutate")!.active = true;
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: makeFakeStream({
+      rounds: [
+        [
+          {
+            type: "done",
+            reason: "toolUse",
+            message: buildAssistant(
+              [
+                { type: "toolCall", id: "read-call", name: "inspect", arguments: {} },
+                { type: "toolCall", id: "write-call", name: "mutate", arguments: {} },
+              ],
+              "toolUse",
+            ),
+          },
+        ],
+        [
+          {
+            type: "done",
+            reason: "stop",
+            message: buildAssistant([{ type: "text", text: "done" }]),
+          },
+        ],
+      ],
+    }),
+    getModel: () => TEST_MODEL,
+  });
+
+  await loop.submit("inspect then mutate");
+
+  assert.equal(readExecutions, 1);
+  assert.equal(writeExecutions, 0);
+  const results = loop
+    .getMessages()
+    .filter((message): message is ToolResultMessage => message.role === "toolResult");
+  assert.equal(results[0]?.isError, false);
+  assert.equal(results[1]?.isError, true);
+  assert.match(toolResultText(results[1]), /denied by host policy: mutate/u);
+});

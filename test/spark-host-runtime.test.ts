@@ -173,6 +173,109 @@ test("SparkHostRuntime permanently excludes tools outside the host allowlist", (
   assert.equal(host.makeContext().sessionSource, "channel");
 });
 
+test("SparkHostRuntime intersects name and fail-closed effect allowlists", () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-read-only-test",
+    allowedTools: ["read_allowed", "write_named", "unknown_named"],
+    allowedToolEffects: ["read"],
+  });
+  for (const [name, policy] of [
+    ["read_allowed", { effect: "read" as const }],
+    ["write_named", { effect: "local_write" as const }],
+    ["outside_name_allowlist", { effect: "read" as const }],
+    ["unknown_named", undefined],
+  ] as const) {
+    host.registerTool({
+      name,
+      description: name,
+      parameters: {},
+      ...(policy ? { policy } : {}),
+      async execute() {
+        return { content: [{ type: "text", text: name }] };
+      },
+    });
+  }
+
+  assert.deepEqual(host.getActiveTools(), ["read_allowed"]);
+  host.setActiveTools(["read_allowed", "write_named", "outside_name_allowlist", "unknown_named"]);
+  assert.deepEqual(host.getActiveTools(), ["read_allowed"]);
+  assert.equal(host.isToolDispatchAllowed("read_allowed", host.getTool("read_allowed")!), true);
+
+  // Simulate a stale/mutated active bit. Final dispatch admission must still
+  // deny tools whose effect or name is outside the request-scoped policy.
+  for (const name of ["write_named", "outside_name_allowlist", "unknown_named"]) {
+    const tool = host.getTool(name)!;
+    tool.active = true;
+    assert.equal(host.isToolDispatchAllowed(name, tool), false, name);
+  }
+});
+
+test("SparkHostRuntime suppresses unclassified lifecycle hooks under an effect allowlist", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-lifecycle-policy-test",
+    allowedToolEffects: ["read"],
+  });
+  let compactHooks = 0;
+  host.on("session_before_compact", () => {
+    compactHooks += 1;
+    return { unsafeCheckpoint: true };
+  });
+  host.on("session_compact", () => {
+    compactHooks += 1;
+  });
+
+  assert.deepEqual(await host.emit("session_before_compact", {}), []);
+  assert.deepEqual(await host.emit("session_compact", {}), []);
+  assert.equal(compactHooks, 0);
+});
+
+test("SparkHostRuntime dispatches only declared lifecycle effects allowed by policy", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-hook-effects-test",
+    allowedToolEffects: ["read"],
+  });
+  const invoked: string[] = [];
+  host.on(
+    "session_start",
+    () => {
+      invoked.push("read");
+      return "read-result";
+    },
+    { effects: ["read"] },
+  );
+  host.on("session_start", () => invoked.push("local-write"), { effects: ["local_write"] });
+  host.on("session_start", () => invoked.push("network"), { effects: ["external_write"] });
+  host.on("session_start", () => invoked.push("unknown"));
+
+  assert.deepEqual(await host.emit("session_start", { reason: "test" }), ["read-result"]);
+  assert.deepEqual(invoked, ["read"]);
+});
+
+test("SparkHostRuntime keeps lifecycle dispatch behavior unchanged without an effect allowlist", async () => {
+  const host = new SparkHostRuntime({
+    cwd: "/tmp/spark-host-runtime-hook-effects-unrestricted",
+  });
+  const invoked: string[] = [];
+  host.on("session_start", () => {
+    invoked.push("unknown");
+    return "unknown-result";
+  });
+  host.on(
+    "session_start",
+    () => {
+      invoked.push("write");
+      return "write-result";
+    },
+    { effects: ["local_write"] },
+  );
+
+  assert.deepEqual(await host.emit("session_start", { reason: "test" }), [
+    "unknown-result",
+    "write-result",
+  ]);
+  assert.deepEqual(invoked, ["unknown", "write"]);
+});
+
 test("SparkHostRuntime registerCommand adds numeric suffix for duplicate names", async () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   let aCalled = 0;

@@ -10,6 +10,15 @@ const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
  * Mirrors package script `start:custom` without going through pnpm.
  */
 export async function startCockpitProductionHost(args: string[] = []): Promise<number> {
+  const packagedServerEntry = process.env.SPARK_COCKPIT_SERVER_ENTRYPOINT;
+  if (packagedServerEntry && existsSync(packagedServerEntry)) {
+    return await runCockpitHost(
+      process.execPath,
+      [packagedServerEntry, ...args],
+      dirname(packagedServerEntry),
+    );
+  }
+
   const handlerPath = join(appDir, "build", "handler.js");
   if (!existsSync(handlerPath)) {
     process.stderr.write(
@@ -20,8 +29,12 @@ export async function startCockpitProductionHost(args: string[] = []): Promise<n
 
   const tsx = join(appDir, "node_modules", ".bin", "tsx");
   const serverEntry = join(appDir, "server", "index.ts");
-  const child = spawn(tsx, [serverEntry, ...args], {
-    cwd: appDir,
+  return await runCockpitHost(tsx, [serverEntry, ...args], appDir);
+}
+
+async function runCockpitHost(command: string, args: string[], cwd: string): Promise<number> {
+  const child = spawn(command, args, {
+    cwd,
     env: process.env,
     stdio: "inherit",
   });

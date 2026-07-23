@@ -55,6 +55,18 @@ pnpm exec node --experimental-strip-types scripts/spark-zellij-harness.mts \
 
 Add `--ordinary-input <text>` only when a real model/daemon turn is intended. Use `--spark-session-dir <path>` and `--spark-session-id <id>` when the task graph/session root is outside the current repository.
 
+## Side Thread acceptance
+
+Run lifecycle acceptance in an isolated Zellij session and isolated `SPARK_HOME`; do not reuse a developer daemon. The release gate is behavioral rather than visual modal parity:
+
+1. `/btw ask <question>` reaches a terminal child invocation and `/btw show` displays the durable exchange.
+2. A second submit while the child has a queued/running invocation fails with the typed busy error and creates no second invocation.
+3. `spark daemon restart --yes --wait` changes the daemon process identity while preserving the current generation, transcript, and configuration.
+4. `/btw model <provider>/<model>` and `/btw thinking <level>` update the effective projection; an unavailable model returns its typed configuration error.
+5. `/btw handoff full ...` and `/btw handoff summary ...` each create one successful parent invocation and advance to a fresh generation.
+
+The native command/status presentation is sufficient for this gate. The Pi-product modal overlay remains compatibility UI, not a second state owner or a prerequisite for retiring that product host.
+
 ## Evidence
 
 A valid report includes:

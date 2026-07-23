@@ -150,12 +150,12 @@ describe("persistent session channel routing", () => {
           sessionSurface: "channel",
           sessionSource: "channel",
           channelBinding: {
-            workspaceId: "workspace-qq",
+            workspaceId: "workspace-qq-A",
             adapter: "qqbot",
-            adapterId: "qq-main",
-            adapterAccountIdentity: "channel-account:qqbot:main",
-            externalKey: "qqbot:user:42",
-            recipient: "c2c:user:42",
+            adapterId: "qq-main-A",
+            adapterAccountIdentity: "channel-account:qqbot:A",
+            externalKey: "qqbot:user:A",
+            recipient: "c2c:user:A",
           },
         },
       },
@@ -164,25 +164,41 @@ describe("persistent session channel routing", () => {
 
     const [requestMessage] = await mailStore.list(worker.sessionId, { includeAcked: true });
     expect(requestMessage?.originBinding).toEqual({
-      workspaceId: "workspace-qq",
+      workspaceId: "workspace-qq-A",
       adapter: "qqbot",
-      adapterId: "qq-main",
-      adapterAccountIdentity: "channel-account:qqbot:main",
-      externalKey: "qqbot:user:42",
-      recipient: "c2c:user:42",
+      adapterId: "qq-main-A",
+      adapterAccountIdentity: "channel-account:qqbot:A",
+      externalKey: "qqbot:user:A",
+      recipient: "c2c:user:A",
     });
+    const driftedBinding = {
+      workspaceId: "workspace-infoflow-B",
+      adapter: "infoflow",
+      adapterId: "info-main-B",
+      externalKey: "infoflow:user:B",
+      recipient: "user:B",
+    };
+    expect(requestMessage?.originBinding).not.toMatchObject(driftedBinding);
     expect(request).toHaveBeenCalledWith(
       "turn.submit",
       expect.objectContaining({
         sessionId: worker.sessionId,
         originBinding: {
-          workspaceId: "workspace-qq",
+          workspaceId: "workspace-qq-A",
           adapter: "qqbot",
-          adapterId: "qq-main",
-          adapterAccountIdentity: "channel-account:qqbot:main",
-          externalKey: "qqbot:user:42",
-          recipient: "c2c:user:42",
+          adapterId: "qq-main-A",
+          adapterAccountIdentity: "channel-account:qqbot:A",
+          externalKey: "qqbot:user:A",
+          recipient: "c2c:user:A",
         },
+        messageMetadata: expect.objectContaining({
+          sessionMail: expect.objectContaining({
+            fromSessionId: origin.sessionId,
+            toSessionId: worker.sessionId,
+            kind: "request",
+            notifyOnCompletion: true,
+          }),
+        }),
       }),
       expect.anything(),
     );
@@ -296,6 +312,49 @@ describe("blocking session requests", () => {
       wait: "accepted",
       submitted: { invocationId: "inv_accepted" },
     });
+    expect(request).toHaveBeenCalledWith(
+      "turn.submit",
+      expect.objectContaining({
+        messageMetadata: expect.objectContaining({
+          sessionMail: expect.objectContaining({ notifyOnCompletion: true }),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("disables completion notify for wait=completed requests", async () => {
+    const mailStore = await createMailStore();
+    const request = baseRequest((method) => {
+      if (method === "turn.submit") {
+        return {
+          invocationId: "inv_waitcompleted",
+          status: "queued",
+          acceptedAt: "2026-07-17T00:00:00.000Z",
+        };
+      }
+      if (method === "turn.status") return status("inv_waitcompleted", "succeeded");
+      if (method === "turn.result") {
+        return {
+          invocationId: "inv_waitcompleted",
+          status: "succeeded",
+          assistantText: "done",
+          finishedAt: "2026-07-17T00:00:01.000Z",
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
+
+    await send({ kind: "request", wait: "completed" }, request, mailStore);
+    expect(request).toHaveBeenCalledWith(
+      "turn.submit",
+      expect.objectContaining({
+        messageMetadata: expect.objectContaining({
+          sessionMail: expect.objectContaining({ notifyOnCompletion: false }),
+        }),
+      }),
+      expect.anything(),
+    );
   });
 
   it("returns a result completed before waiter registration or after daemon restart", async () => {

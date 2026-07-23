@@ -230,6 +230,9 @@ function localRpcRoute(method: string, params: unknown): Partial<SparkCommand["r
   if (method.startsWith("session.") && typeof params.sessionId === "string") {
     return { sessionId: params.sessionId };
   }
+  if (method.startsWith("side-thread.") && typeof params.parentSessionId === "string") {
+    return { sessionId: params.parentSessionId };
+  }
   if (
     (method === "workspace.register" || method === "workspace.ensure-local") &&
     typeof params.localPath === "string"

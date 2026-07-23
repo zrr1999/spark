@@ -10,6 +10,7 @@
 import type {
   CommandMetadata,
   SparkHostContext,
+  ToolEffect,
   SparkHostRuntimeMessageAuthority,
   SparkHostRuntimeMessageTrust,
   ExtensionUi,
@@ -81,8 +82,12 @@ export type EventListener<E extends EventName = EventName> = E extends SparkHost
   ? (event: BuiltinEventPayloadMap[E], ctx: SparkHostContext) => unknown
   : (event: unknown, ctx: SparkHostContext) => unknown;
 
-/** Stored listener type (payload erased) for the runtime registry map. */
-export type RegisteredEventListener = (event: unknown, ctx: SparkHostContext) => unknown;
+/** Stored listener metadata (payload erased) for the runtime registry map. */
+export interface RegisteredEventListener {
+  handler: (event: unknown, ctx: SparkHostContext) => unknown;
+  /** Undefined means unknown, never implicit read-only. */
+  effects: readonly ToolEffect[] | undefined;
+}
 
 /**
  * Outbox slot for `pi.sendMessage(...)` and `pi.sendUserMessage(...)`. The

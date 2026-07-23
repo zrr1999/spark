@@ -1,7 +1,0 @@
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "rules": {
-    "complexity": ["warn", 15],
-    "max-lines": ["warn", 1000]
-  }
-}

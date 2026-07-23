@@ -24,7 +24,7 @@ export {
   type SparkAgentSessionRunResult,
 } from "./host/agent-session.ts";
 export { SparkHostRuntime, type SparkHostRuntimeOptions } from "./host/runtime.ts";
-export { SparkSessionStore, type SparkSessionRecord } from "./host/session-store.ts";
+export { SparkSessionStore, type SparkSessionRecord } from "@zendev-lab/spark-host/session-store";
 export { SparkProviderRegistry, type ProviderConfig } from "./host/provider-registry.ts";
 export { SparkModelSelector } from "./host/model-selector.ts";
 export {

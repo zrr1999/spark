@@ -6,12 +6,10 @@ module.exports = {
       name: "no-direct-pi-ai",
       comment:
         "Direct @earendil-works/pi-ai imports must go through @zendev-lab/spark-ai. " +
-        "packages/pi-btw is a frozen Pi product path (explicit exemption). " +
         "apps/spark-tui/src/cli/pi-parity-commands.ts is WIP — exempt until the user commits cleanup.",
       severity: "error",
       from: {
-        pathNot:
-          "^(packages/spark-ai/|packages/pi-btw/|apps/spark-tui/src/cli/pi-parity-commands\\.ts$)",
+        pathNot: "^(packages/spark-ai/|apps/spark-tui/src/cli/pi-parity-commands\\.ts$)",
       },
       to: {
         path: "node_modules/.*/@earendil-works/pi-ai|/node_modules/@earendil-works/pi-ai|^@earendil-works/pi-ai",
@@ -306,6 +304,7 @@ function piAllowedSparkFoundationDirs() {
     "spark-loop",
     "spark-modes",
     "spark-tasks",
+    "spark-turn",
     "spark-workflows",
     // Old script treated spark-tui as non-spark for the foundation allowlist check
     // (isSparkSpecifier returned false for spark-tui). Keep spark-text similarly allowed.

@@ -13,9 +13,6 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && node --experimental-strip-types scripts/check-schema-types.mjs && vp test run",
     "check:schema-types": "node --experimental-strip-types scripts/check-schema-types.mjs",

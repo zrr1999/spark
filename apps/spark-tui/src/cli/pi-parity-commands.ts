@@ -7,6 +7,7 @@ import type {
   SparkModelCatalogProvider,
   SparkModelControlSnapshot,
 } from "@zendev-lab/spark-protocol";
+import type { SparkSessionMessage, SparkSessionRecord } from "@zendev-lab/spark-host/session-store";
 
 import type {
   SparkNativeMessage,
@@ -40,7 +41,6 @@ import {
 } from "../host/session-mail-store.ts";
 import type { SparkCliHostServices } from "../host/index.ts";
 import type { SparkConfig } from "../host/config.ts";
-import type { SparkSessionMessage, SparkSessionRecord } from "../host/session-store.ts";
 import type { SparkDaemonModelAuthClient } from "./model-control.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;

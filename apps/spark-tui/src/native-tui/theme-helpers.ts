@@ -1,6 +1,6 @@
 /** Theme / key helpers for the native TUI editor chrome. */
 
-import { Key, type OverlayOptions, type SelectListTheme } from "../tui/pi-tui-adapter.ts";
+import type { OverlayOptions, SelectListTheme } from "../tui/pi-tui-adapter.ts";
 import {
   BUILTIN_SPARK_THEMES,
   createSparkHostRenderTheme,

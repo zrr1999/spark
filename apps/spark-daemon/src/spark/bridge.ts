@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import { loadSparkHeadlessSessionModule } from "@zendev-lab/spark-host/headless-loader";
-import { importWorkspaceAware } from "./import-utils.ts";
+import {
+  builtinRoleRef,
+  createDefaultRoleRegistry,
+  hydrateDefaultRoleRegistry,
+} from "@zendev-lab/spark-roles";
+import { killActiveSparkRoleRunProcesses, runSparkTask } from "@zendev-lab/spark-runtime";
+import { defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 type ArtifactRef = `artifact:${string}`;
 type ProjectRef = `proj:${string}`;
 type RunRef = `run:${string}`;
@@ -147,39 +154,22 @@ interface SparkTaskBinding {
 
 const DEFAULT_SPARK_TIMEOUT_MS = 30 * 60_000;
 
-async function dynamicImport<T>(specifier: string): Promise<T> {
-  return import(/* @vite-ignore */ specifier) as Promise<T>;
-}
-
 async function loadSparkRuntimeModules(): Promise<SparkRuntimeModules> {
-  const [artifacts, roles, tasks, runtime, headless] = await Promise.all([
-    dynamicImport<{ defaultArtifactStore: SparkRuntimeModules["defaultArtifactStore"] }>(
-      "@zendev-lab/spark-artifacts",
-    ),
-    dynamicImport<{
-      builtinRoleRef: SparkRuntimeModules["builtinRoleRef"];
-      createDefaultRoleRegistry: SparkRuntimeModules["createDefaultRoleRegistry"];
-      hydrateDefaultRoleRegistry: SparkRuntimeModules["hydrateDefaultRoleRegistry"];
-    }>("@zendev-lab/spark-roles"),
-    dynamicImport<{ defaultTaskGraphStore: SparkRuntimeModules["defaultTaskGraphStore"] }>(
-      "@zendev-lab/spark-tasks",
-    ),
-    dynamicImport<{
-      runSparkTask: SparkRuntimeModules["runSparkTask"];
-      killActiveSparkRoleRunProcesses: SparkRuntimeModules["killActiveSparkRoleRunProcesses"];
-    }>("@zendev-lab/spark-runtime"),
-    loadSparkHeadlessSessionModule({
-      importModule: (specifier) => importWorkspaceAware(specifier),
-    }),
-  ]);
+  const headless = await loadSparkHeadlessSessionModule();
+  // The bridge keeps structural "Like" contracts so focused daemon tests can
+  // inject small fakes. Production implementations are adapted once here;
+  // their branded refs and narrower creation inputs are the same values this
+  // bridge passes at runtime, but TypeScript cannot prove that variance.
   return {
-    defaultArtifactStore: artifacts.defaultArtifactStore,
-    builtinRoleRef: roles.builtinRoleRef,
-    createDefaultRoleRegistry: roles.createDefaultRoleRegistry,
-    hydrateDefaultRoleRegistry: roles.hydrateDefaultRoleRegistry,
-    defaultTaskGraphStore: tasks.defaultTaskGraphStore,
-    runSparkTask: runtime.runSparkTask,
-    killActiveSparkRoleRunProcesses: runtime.killActiveSparkRoleRunProcesses,
+    defaultArtifactStore:
+      defaultArtifactStore as unknown as SparkRuntimeModules["defaultArtifactStore"],
+    builtinRoleRef,
+    createDefaultRoleRegistry,
+    hydrateDefaultRoleRegistry,
+    defaultTaskGraphStore:
+      defaultTaskGraphStore as unknown as SparkRuntimeModules["defaultTaskGraphStore"],
+    runSparkTask: runSparkTask as unknown as SparkRuntimeModules["runSparkTask"],
+    killActiveSparkRoleRunProcesses,
     createSparkHeadlessRoleExecutor:
       headless.createSparkHeadlessRoleExecutor as SparkRuntimeModules["createSparkHeadlessRoleExecutor"],
   };

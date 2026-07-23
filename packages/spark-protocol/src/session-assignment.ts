@@ -35,6 +35,24 @@ export const sparkSessionScopeSchema = z.discriminatedUnion("kind", [
   sparkDaemonSessionScopeSchema,
 ]);
 
+export const sparkSideThreadModeOptions = ["contextual", "tangent"] as const;
+export const sparkSideThreadModeSchema = z.enum(sparkSideThreadModeOptions);
+
+/**
+ * A side thread is a daemon-owned child conversation. The relation is emitted
+ * by the daemon and cannot be selected through ordinary session.create.
+ */
+export const sparkSideThreadSessionRelationSchema = z.object({
+  kind: z.literal("side_thread"),
+  parentSessionId: z.string().min(1),
+  generation: z.number().int().positive(),
+  mode: sparkSideThreadModeSchema,
+});
+
+export const sparkSessionRelationSchema = z.discriminatedUnion("kind", [
+  sparkSideThreadSessionRelationSchema,
+]);
+
 const sparkSessionRegistryRecordBaseSchema = z.object({
   sessionId: z.string().min(1),
   /** Compatibility display mirror of role for role-named sessions. */
@@ -46,6 +64,7 @@ const sparkSessionRegistryRecordBaseSchema = z.object({
   sessionPath: z.string().min(1).optional(),
   model: sparkModelRefSchema.optional(),
   thinkingLevel: sparkThinkingLevelSchema.optional(),
+  relation: sparkSessionRelationSchema.optional(),
   bindings: z.array(sparkSessionChannelBindingSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
@@ -171,6 +190,14 @@ export const sparkSessionSnapshotRequestSchema = sparkSessionGetRequestSchema.ex
   beforeMessageId: z.string().trim().min(1).optional(),
 });
 
+export const sparkSessionPendingTurnSchema = z.object({
+  invocationId: z.string().min(1),
+  prompt: z.string(),
+  status: z.enum(["queued", "running"]),
+  createdAt: isoDateTimeSchema,
+  startedAt: isoDateTimeSchema.optional(),
+});
+
 export const sparkSessionBindRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   externalKey: z.string().trim().min(1),
@@ -222,6 +249,9 @@ export type SparkSessionStatus = z.infer<typeof sparkSessionStatusSchema>;
 export type SparkChannelAdapter = z.infer<typeof sparkChannelAdapterSchema>;
 export type SparkSessionChannelBinding = z.infer<typeof sparkSessionChannelBindingSchema>;
 export type SparkSessionScope = z.infer<typeof sparkSessionScopeSchema>;
+export type SparkSideThreadMode = z.infer<typeof sparkSideThreadModeSchema>;
+export type SparkSideThreadSessionRelation = z.infer<typeof sparkSideThreadSessionRelationSchema>;
+export type SparkSessionRelation = z.infer<typeof sparkSessionRelationSchema>;
 export type SparkSessionRegistryRecord = z.infer<typeof sparkSessionRegistryRecordSchema>;
 /** Public input keeps the v1 workspaceId-only shape during migration. */
 export type SparkSessionCreateRequest =
@@ -232,9 +262,16 @@ export type SparkSessionCreateRequest =
     });
 export type SparkSessionListRequest =
   | z.infer<typeof sparkSessionListRequestSchema>
-  | { scope?: undefined; workspaceId?: string; includeArchived?: boolean };
+  | {
+      scope?: undefined;
+      workspaceId?: string;
+      includeArchived?: boolean;
+      cursor?: string;
+      limit?: number;
+    };
 export type SparkSessionGetRequest = z.infer<typeof sparkSessionGetRequestSchema>;
 export type SparkSessionSnapshotRequest = z.infer<typeof sparkSessionSnapshotRequestSchema>;
+export type SparkSessionPendingTurn = z.infer<typeof sparkSessionPendingTurnSchema>;
 export type SparkSessionBindRequest = z.infer<typeof sparkSessionBindRequestSchema>;
 export type SparkSessionUnbindRequest = z.infer<typeof sparkSessionUnbindRequestSchema>;
 export type SparkSessionArchiveRequest = z.infer<typeof sparkSessionArchiveRequestSchema>;

@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-session",
   "version": "0.1.0",
+  "private": true,
   "description": "Daemon-owned persistent session registry, channel bindings, and durable local mailbox mechanism.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,9 +14,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

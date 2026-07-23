@@ -1,14 +1,12 @@
 {
   "name": "@zendev-lab/spark-cockpit",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark Cockpit SvelteKit web application.",
   "bin": {
     "spark-cockpit": "./bin/spark-cockpit"
   },
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "dev": "vp dev --host 127.0.0.1",
     "build": "vp build",
@@ -46,7 +44,7 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@types/web-push": "^3.6.4",
     "@types/ws": "catalog:",
-    "@vitest/browser-playwright": "4.1.9",
+    "@vitest/browser-playwright": "4.1.10",
     "playwright": "1.61.1",
     "svelte-check": "^4.3.1",
     "tsx": "^4.20.5",

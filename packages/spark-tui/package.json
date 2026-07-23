@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-tui",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark-owned TUI boundary over pi-tui for text, input, and native renderer adapter surfaces.",
   "license": "MIT",
   "author": "zrr1999",
@@ -15,9 +16,6 @@
     "./input": "./src/input.ts",
     "./pi-tui": "./src/pi-tui.ts",
     "./text": "./src/text.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.80.6",

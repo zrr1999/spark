@@ -30,7 +30,11 @@ export interface SparkHostAPI {
   registerCommand?(name: string, config: CommandConfig): void;
   registerTool?(config: ToolConfig): void;
   registerShortcut?(shortcut: string, options: ShortcutConfig): void;
-  on?(event: string, handler: (event: unknown, ctx: SparkHostContext) => unknown): void;
+  on?(
+    event: string,
+    handler: (event: unknown, ctx: SparkHostContext) => unknown,
+    options?: SparkHostHookOptions,
+  ): void;
   /** Names of the tools currently active for the agent (a subset of getAllTools). */
   getActiveTools?(): string[];
   /** All configured tools, including ones that are currently inactive. */
@@ -100,6 +104,16 @@ export interface ShortcutConfig {
 
 /** Observable side-effect class used by Spark host execution policy. */
 export type ToolEffect = "read" | "local_write" | "external_write" | "destructive";
+
+/**
+ * Static effect declaration for an extension lifecycle hook. A host with an
+ * effect allowlist dispatches a hook only when every declared effect is
+ * allowed. Omit this on a hook whose effects cannot be proven; restricted
+ * hosts deliberately treat an omitted or malformed declaration as unknown.
+ */
+export interface SparkHostHookOptions {
+  effects?: readonly ToolEffect[];
+}
 
 /** Pi-compatible per-tool sibling-call execution mode. */
 export type ToolExecutionMode = "sequential" | "parallel";

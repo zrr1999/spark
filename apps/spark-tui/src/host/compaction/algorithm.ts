@@ -6,7 +6,6 @@ import {
   compactToolResultContent,
   parseSparkPromptItemMetadata,
 } from "@zendev-lab/spark-turn";
-
 import type {
   SparkBranchSummaryEntry,
   SparkCompactionEntry,
@@ -16,8 +15,9 @@ import type {
   SparkSessionMessage,
   SparkSessionMessageEntry,
   SparkSessionRecord,
-} from "../session-store/types.ts";
-import type { SparkSessionStore } from "../session-store/store.ts";
+  SparkSessionStore,
+} from "@zendev-lab/spark-host/session-store";
+
 import {
   getSparkSessionBranch,
   getSparkSessionLeafId,
@@ -26,7 +26,6 @@ import {
 import {
   CURRENT_SPARK_COMPACTION_SUMMARY_VERSION,
   DEFAULT_SPARK_COMPACTION_SETTINGS,
-  type SparkCompactModelSelection,
   type SparkCompactionFallbackReason,
   type SparkCompactionSettings,
   type SparkCompactionTokenSource,
