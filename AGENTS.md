@@ -34,6 +34,8 @@ Target package topology follows type-first names:
 | `pnpm run check`                         | Run the root validation gate                                     |
 | `pnpm run fix`                           | Format, lint-fix, and typecheck the complete workspace            |
 | `pnpm run typecheck`                     | Typecheck root TypeScript, Cockpit, and daemon                    |
+| `pnpm run check:test-quality`            | Reject growth or unreviewed drift in source-mirror test debt      |
+| `pnpm run test:browser:cockpit`          | Run Cockpit interaction tests in headless Chromium                |
 | `pnpm run smoke`                         | Pack, clean-install, and smoke the complete npm product           |
 | `pnpm run audit`                         | Audit dependencies for high/critical advisories via npm registry |
 | `pnpm run report:hygiene`                | Generate advisory Knip, duplication, and complexity reports       |
@@ -51,7 +53,7 @@ Target package topology follows type-first names:
 ## CI
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + prek pass with `vp-check` skipped (avoids duplicating `vp check` already covered by ci-verify).
-- `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check` + `pnpm run smoke`.
+- `.github/workflows/ci-verify.yml` — repository verification and npm-product smoke, plus an isolated headless-Chromium Cockpit lane.
 - `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
