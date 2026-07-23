@@ -36,7 +36,9 @@ describe("channel reply delivery", () => {
       prompt: "finish silently",
       channelReply: {
         workspaceId: "workspace-1",
+        adapter: "qqbot" as const,
         adapterId: "qqbot",
+        externalKey: "qqbot:c2c:user-1",
         recipient: "c2c:user-1",
       },
     };
@@ -116,7 +118,9 @@ describe("channel reply delivery", () => {
       workspaceId: "workspace-1",
       channelReply: {
         workspaceId: "workspace-1",
+        adapter: "infoflow" as const,
         adapterId: "infoflow",
+        externalKey: "infoflow:group:10838226",
         recipient: "group:10838226",
       },
       channelContext: {
