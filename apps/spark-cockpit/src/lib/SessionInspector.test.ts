@@ -27,6 +27,10 @@ function renderInspector(
   }).body;
 }
 
+function renderedText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 describe("SessionInspector rendered contract", () => {
   it("renders the canonical five tabs and instance-scoped summary relationships", () => {
     const body = renderInspector(
@@ -54,13 +58,13 @@ describe("SessionInspector rendered contract", () => {
     );
 
     expect(body.match(/role="tab"/gu)).toHaveLength(5);
-    for (const label of Object.values(labels.tabs)) expect(body).toContain(label);
+    for (const label of Object.values(labels.tabs)) expect(body).toContain(renderedText(label));
     expect(body).toContain('id="inspector-summary-summary-tab"');
     expect(body).toContain('aria-controls="inspector-summary-summary-panel"');
     expect(body).toContain('id="inspector-summary-summary-panel"');
     expect(body).toContain('aria-labelledby="inspector-summary-summary-tab"');
     expect(body).toContain('aria-selected="true"');
-    expect(body).toContain("SUMMARY_HEADING");
+    expect(body).toContain(labels.summaryHeading);
     expect(body).toContain("STATUS_running");
     expect(body).toContain("/workspace/spark");
     expect(body).toContain("Fixture / Model");
@@ -70,10 +74,10 @@ describe("SessionInspector rendered contract", () => {
   });
 
   it.each([
-    ["artifacts", "NO_ARTIFACTS", "NO_ARTIFACTS_BODY"],
-    ["changes", "NO_CHANGES", "NO_CHANGES_BODY"],
-    ["tasks", "NO_TASKS", "NO_TASKS_BODY"],
-    ["messages", "NO_MESSAGES", "NO_MESSAGES_BODY"],
+    ["artifacts", labels.noArtifactsTitle, labels.noArtifactsBody],
+    ["changes", labels.noChangesTitle, labels.noChangesBody],
+    ["tasks", labels.noTasksTitle, labels.noTasksBody],
+    ["messages", labels.noMessagesTitle, labels.noMessagesBody],
   ] as const)(
     "renders the %s empty state selected by the initial tab",
     (initialTab, title, body) => {
@@ -85,7 +89,7 @@ describe("SessionInspector rendered contract", () => {
       expect(html).toContain(`id="inspector-${initialTab}-${initialTab}-panel"`);
       expect(html).toContain(title);
       expect(html).toContain(body);
-      expect(html).not.toContain("SUMMARY_HEADING");
+      expect(html).not.toContain(labels.summaryHeading);
     },
   );
 
@@ -116,14 +120,14 @@ describe("SessionInspector rendered contract", () => {
     );
 
     expect(body).toContain('aria-labelledby="inspector-todo-session-todo-heading"');
-    expect(body).toContain("SESSION_TODO_HEADING");
+    expect(body).toContain(labels.sessionTodoHeading);
     expect(body).toContain("Session TODOs: 2 active.");
     expect(body).toContain("Inspect projection");
     expect(body).toContain("Render session TODO");
-    expect(body).toContain("TODO_IN_PROGRESS");
-    expect(body).toContain("TODO_WAITING");
+    expect(body).toContain(labels.sessionTodoInProgress);
+    expect(body).toContain(labels.sessionTodoPending);
     expect(body).toContain('href="#message:todo-message"');
-    expect(body).not.toContain("NO_SESSION_TODO");
+    expect(body).not.toContain(labels.noSessionTodoTitle);
   });
 
   it("renders a restrained TODO empty state without an invented execution link", () => {
@@ -131,9 +135,9 @@ describe("SessionInspector rendered contract", () => {
       instanceId: "inspector-empty",
     });
 
-    expect(body).toContain("NO_SESSION_TODO");
-    expect(body).toContain("NO_SESSION_TODO_BODY");
-    expect(body).not.toContain("OPEN_SESSION_TODO");
+    expect(body).toContain(labels.noSessionTodoTitle);
+    expect(body).toContain(labels.noSessionTodoBody);
+    expect(body).not.toContain(labels.openSessionTodo);
     expect(body).not.toContain('href="#message:');
   });
 
@@ -190,7 +194,7 @@ describe("SessionInspector rendered contract", () => {
     expect(body).toContain('max="2"');
     expect(body).toContain('value="1"');
     expect(body).toContain("1/2");
-    expect(body).toContain("UNASSIGNED_PROJECT");
+    expect(body).toContain(labels.unassignedProject);
     expect(body).toContain("Unassigned task");
   });
 
@@ -292,13 +296,13 @@ describe("SessionInspector rendered contract", () => {
     );
 
     expect(body).toContain("Research result");
-    expect(body).toContain("NOTIFICATION");
-    expect(body).toContain("FROM");
+    expect(body).toContain(labels.messageNotification);
+    expect(body).toContain(labels.messageFrom);
     expect(body).toContain("sess-worker");
-    expect(body).toContain("DELIVERY_UNCERTAIN");
-    expect(body).toContain("UNREAD");
+    expect(body).toContain(labels.messageDeliveryUncertain);
+    expect(body).toContain(labels.messageUnread);
     expect(body).toContain("message-delivery-status uncertain");
     expect(body).toContain("message-read-status unread");
-    expect(body).toContain('aria-label="1 UNREAD"');
+    expect(body).toContain(`aria-label="1 ${labels.messageUnread}"`);
   });
 });

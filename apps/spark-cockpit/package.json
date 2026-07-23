@@ -15,6 +15,7 @@
     "start": "node build",
     "start:custom": "tsx server/index.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "setup:browser": "playwright install --with-deps chromium",
     "test": "vp test run",
     "test:browser": "vp test run --config vitest.browser.config.ts"
   },

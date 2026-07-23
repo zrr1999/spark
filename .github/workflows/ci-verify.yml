@@ -42,20 +42,20 @@ jobs:
     name: cockpit-browser
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Chromium
-        run: pnpm --filter @zendev-lab/spark-cockpit exec playwright install --with-deps chromium
+        run: pnpm --filter @zendev-lab/spark-cockpit run setup:browser
 
       - run: pnpm run test:browser:cockpit

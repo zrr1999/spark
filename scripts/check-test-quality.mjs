@@ -22,6 +22,8 @@ const testFilePattern = /\.(?:test|spec)\.[cm]?[jt]sx?$/u;
 const productionSourcePattern = /\.(?:[cm]?[jt]sx?|svelte)(?:["'`)]|$)/u;
 const fragmentMatcherNames = new Set(["toContain", "toMatch"]);
 const nodeAssertMatcherNames = new Set(["match", "doesNotMatch"]);
+const fileReadModules = new Set(["node:fs", "fs", "node:fs/promises", "fs/promises"]);
+const nodeAssertModules = new Set(["node:assert/strict", "assert/strict"]);
 
 function scriptKind(fileName) {
   switch (extname(fileName)) {
@@ -106,51 +108,49 @@ function readCallFrom(initializer) {
   return ts.isCallExpression(expression) ? expression : undefined;
 }
 
-export function findSourceMirrorAssertions(sourceText, fileName = "fixture.test.ts") {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKind(fileName),
-  );
+function collectImportedBindings(sourceFile) {
   const readBindings = new Set();
   const assertBindings = new Set();
-  const declarations = new Map();
-
   for (const statement of sourceFile.statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      const moduleName = statement.moduleSpecifier.text;
-      const clause = statement.importClause;
-      if (
-        (moduleName === "node:fs" ||
-          moduleName === "fs" ||
-          moduleName === "node:fs/promises" ||
-          moduleName === "fs/promises") &&
-        clause?.namedBindings &&
-        ts.isNamedImports(clause.namedBindings)
-      ) {
-        for (const element of clause.namedBindings.elements) {
-          const imported = element.propertyName?.text ?? element.name.text;
-          if (imported === "readFile" || imported === "readFileSync") {
-            readBindings.add(element.name.text);
-          }
-        }
-      }
-      if ((moduleName === "node:assert/strict" || moduleName === "assert/strict") && clause?.name) {
-        assertBindings.add(clause.name.text);
-      }
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+      continue;
+    collectReadBindings(statement, readBindings);
+    collectAssertBinding(statement, assertBindings);
+  }
+  return { readBindings, assertBindings };
+}
+
+function collectReadBindings(statement, readBindings) {
+  if (!fileReadModules.has(statement.moduleSpecifier.text)) return;
+  const namedBindings = statement.importClause?.namedBindings;
+  if (!namedBindings || !ts.isNamedImports(namedBindings)) return;
+  for (const element of namedBindings.elements) {
+    const imported = element.propertyName?.text ?? element.name.text;
+    if (imported === "readFile" || imported === "readFileSync") {
+      readBindings.add(element.name.text);
     }
   }
+}
 
-  function collectDeclarations(node) {
+function collectAssertBinding(statement, assertBindings) {
+  if (!nodeAssertModules.has(statement.moduleSpecifier.text)) return;
+  const binding = statement.importClause?.name?.text;
+  if (binding) assertBindings.add(binding);
+}
+
+function collectDeclarations(sourceFile) {
+  const declarations = new Map();
+  function visitDeclaration(node) {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       declarations.set(node.name.text, node.initializer);
     }
-    ts.forEachChild(node, collectDeclarations);
+    ts.forEachChild(node, visitDeclaration);
   }
-  collectDeclarations(sourceFile);
+  visitDeclaration(sourceFile);
+  return declarations;
+}
 
+function collectSourceVariables(declarations, readBindings, sourceFile) {
   const sourceVariables = new Set();
   for (const [name, initializer] of declarations) {
     const readCall = readCallFrom(initializer);
@@ -164,7 +164,10 @@ export function findSourceMirrorAssertions(sourceText, fileName = "fixture.test.
       : pathArgument.getText(sourceFile);
     if (productionSourcePattern.test(pathText)) sourceVariables.add(name);
   }
+  return sourceVariables;
+}
 
+function collectFindings(sourceFile, sourceVariables, assertBindings, fileName) {
   const findings = [];
   function visit(node) {
     if (ts.isCallExpression(node)) {
@@ -186,6 +189,20 @@ export function findSourceMirrorAssertions(sourceText, fileName = "fixture.test.
   }
   visit(sourceFile);
   return findings;
+}
+
+export function findSourceMirrorAssertions(sourceText, fileName = "fixture.test.ts") {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(fileName),
+  );
+  const { readBindings, assertBindings } = collectImportedBindings(sourceFile);
+  const declarations = collectDeclarations(sourceFile);
+  const sourceVariables = collectSourceVariables(declarations, readBindings, sourceFile);
+  return collectFindings(sourceFile, sourceVariables, assertBindings, fileName);
 }
 
 async function collectTestFiles(directory) {

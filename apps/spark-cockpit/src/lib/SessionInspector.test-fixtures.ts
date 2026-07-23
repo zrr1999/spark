@@ -1,56 +1,8 @@
-import type { SessionInspectorLabels, SessionWorkbenchView } from "./session-workbench";
+import { getDictionary } from "./i18n";
+import type { SessionWorkbenchView } from "./session-workbench";
+import { buildInspectorLabels } from "./sessions-workspace/ask-inspector.svelte";
 
-export const sessionInspectorLabels: SessionInspectorLabels = {
-  ariaLabel: "SESSION_INSPECTOR",
-  tabs: {
-    summary: "SUMMARY_TAB",
-    artifacts: "ARTIFACTS_TAB",
-    changes: "CHANGES_TAB",
-    tasks: "TASKS_TAB",
-    messages: "MESSAGES_TAB",
-  },
-  summaryHeading: "SUMMARY_HEADING",
-  artifactsHeading: "ARTIFACTS_HEADING",
-  tasksHeading: "TASKS_HEADING",
-  changesHeading: "CHANGES_HEADING",
-  messagesHeading: "MESSAGES_HEADING",
-  noTasksTitle: "NO_TASKS",
-  noTasksBody: "NO_TASKS_BODY",
-  noArtifactsTitle: "NO_ARTIFACTS",
-  noArtifactsBody: "NO_ARTIFACTS_BODY",
-  noChangesTitle: "NO_CHANGES",
-  noChangesBody: "NO_CHANGES_BODY",
-  noMessagesTitle: "NO_MESSAGES",
-  noMessagesBody: "NO_MESSAGES_BODY",
-  noSessionTodoTitle: "NO_SESSION_TODO",
-  noSessionTodoBody: "NO_SESSION_TODO_BODY",
-  noActiveSessionTodo: "NO_ACTIVE_SESSION_TODO",
-  unassignedProject: "UNASSIGNED_PROJECT",
-  progress: "PROGRESS",
-  todoList: "SESSION_TODO_LIST",
-  sessionTodoHeading: "SESSION_TODO_HEADING",
-  openSessionTodo: "OPEN_SESSION_TODO",
-  sessionTodoPending: "TODO_WAITING",
-  sessionTodoInProgress: "TODO_IN_PROGRESS",
-  messageFrom: "FROM",
-  messageRequest: "REQUEST",
-  messageQuestion: "QUESTION",
-  messageNotification: "NOTIFICATION",
-  messageUnread: "UNREAD",
-  messageRead: "READ",
-  messageAcknowledged: "ACKNOWLEDGED",
-  messageDeliveryPending: "DELIVERY_PENDING",
-  messageDeliveryDelivered: "DELIVERY_DELIVERED",
-  messageDeliveryFailed: "DELIVERY_FAILED",
-  messageDeliveryUncertain: "DELIVERY_UNCERTAIN",
-  sessionId: "SESSION_ID",
-  sessionStatus: "SESSION_STATUS",
-  workingDirectory: "WORKING_DIRECTORY",
-  model: "MODEL",
-  createdAt: "CREATED_AT",
-  updatedAt: "UPDATED_AT",
-  unavailable: "UNAVAILABLE",
-};
+export const sessionInspectorLabels = buildInspectorLabels(getDictionary("en").sessions.workbench);
 
 export function sessionWorkbenchView(
   overrides: Partial<SessionWorkbenchView> = {},
