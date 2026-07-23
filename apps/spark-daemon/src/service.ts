@@ -20,7 +20,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
-import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-system/daemon-local-rpc";
+import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-daemon-client/local-rpc";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
 

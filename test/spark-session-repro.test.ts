@@ -22,7 +22,7 @@ import {
   sessionReproStorePath,
   type SparkReproRequirementProof,
   type SparkSessionRepro,
-} from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+} from "../packages/spark-extension/src/extension/spark-session-repro.ts";
 
 const artifactRef = (id: string) => `artifact:${id}` as ArtifactRef;
 

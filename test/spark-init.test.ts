@@ -5,20 +5,20 @@ import { join } from "node:path";
 import { test } from "vitest";
 
 import { TaskGraph, defaultTaskGraphStore, defaultTaskTodoStore } from "@zendev-lab/spark-tasks";
-import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import {
   renderActiveSparkContextSummary,
   renderSparkActiveSystemPrompt,
-} from "../packages/pi-extension/src/extension/spark-active-injection.ts";
-import { saveIndependentTodos } from "../packages/pi-extension/src/extension/session-todos.ts";
+} from "../packages/spark-extension/src/extension/spark-active-injection.ts";
+import { saveIndependentTodos } from "../packages/spark-extension/src/extension/session-todos.ts";
 import {
   hasNonSparkProjectFiles,
   shouldMaterializeSparkMd,
-} from "../packages/pi-extension/src/extension/spark-activation.ts";
+} from "../packages/spark-extension/src/extension/spark-activation.ts";
 import {
   initializeSparkIdea,
   shouldClarifyBeforeInit,
-} from "../packages/pi-extension/src/extension/spark-initialization.ts";
+} from "../packages/spark-extension/src/extension/spark-initialization.ts";
 
 type SparkHostApiForTest = Parameters<typeof sparkExtension>[0];
 type SparkToolConfig = Parameters<NonNullable<SparkHostApiForTest["registerTool"]>>[0];

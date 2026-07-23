@@ -6,15 +6,15 @@ const mocks = vi.hoisted(() => ({
   legacyRequest: vi.fn(),
 }));
 
-vi.mock("@zendev-lab/spark-system/daemon-local-rpc-orpc", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@zendev-lab/spark-system/daemon-local-rpc-orpc")>()),
+vi.mock("@zendev-lab/spark-daemon-client/orpc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@zendev-lab/spark-daemon-client/orpc")>()),
   createSparkDaemonOrpcClient: mocks.createOrpc,
   invokeSparkDaemonOrpcLiveMethod: mocks.invokeOrpc,
   isSparkDaemonOrpcLiveMethod: () => true,
 }));
 
-vi.mock("@zendev-lab/spark-system/daemon-local-rpc", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@zendev-lab/spark-system/daemon-local-rpc")>()),
+vi.mock("@zendev-lab/spark-daemon-client/local-rpc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@zendev-lab/spark-daemon-client/local-rpc")>()),
   requestSparkDaemonLocalRpcWire: mocks.legacyRequest,
 }));
 

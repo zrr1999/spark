@@ -33,7 +33,7 @@ spark <plane> <resource> <verb> [args...]
 | cross-surface schemas and semantics | `spark-protocol` | each transport performs validation and translation only |
 | projects, tasks, goals, reviews, workflows, and evidence coordination | `spark-cockpit-coordination` and the capability package named for the domain | Cockpit routes and UI are replaceable projections |
 | terminal presentation and interaction | `apps/spark-tui` behind `spark-tui` / `spark-text` boundaries | no durable business-state ownership |
-| Pi product compatibility | `pi-extension`, frozen | may consume Spark foundation packages; must not become an owner for new native behavior |
+| Pi product compatibility | `pi-extension`, frozen | may only forward to `spark-extension`; must not own native behavior |
 
 Generated UI is artifact-backed data, never executable MDX, JS, JSX, imports, exports, or raw HTML. Public action-tool names remain canonical. Serialized `.spark/` markers change only through an explicit, idempotent migration with compatibility tests.
 

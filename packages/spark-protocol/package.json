@@ -21,6 +21,7 @@
     "./model-control": "./src/model-control.ts",
     "./refs": "./src/refs.ts",
     "./session-assignment": "./src/session-assignment.ts",
+    "./session-mail": "./src/session-mail.ts",
     "./side-thread": "./src/side-thread.ts",
     "./runtime-v1/envelope": "./src/runtime-v1/envelope.ts",
     "./runtime-v1/ephemeral-secret": "./src/runtime-v1/ephemeral-secret.ts",
@@ -37,12 +38,12 @@
   },
   "dependencies": {
     "@orpc/contract": "catalog:",
-    "@zendev-lab/spark-core": "workspace:^",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@stryker-mutator/core": "catalog:",
     "@stryker-mutator/vitest-runner": "catalog:",
+    "@zendev-lab/spark-core": "workspace:^",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

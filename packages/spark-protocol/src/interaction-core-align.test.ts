@@ -9,6 +9,7 @@ import {
   sparkInteractionRequestSchema,
   sparkInteractionResponseSchema,
   sparkTaskViewSchema,
+  sparkTaskViewStatuses,
   type SparkInteractionRequest,
   type SparkInteractionResponse,
   type SparkTaskView,
@@ -32,6 +33,7 @@ void _taskStatusAligns;
 describe("interaction / task status core alignment", () => {
   it("keeps task view status enum locked to core TASK_STATUSES", () => {
     expect(sparkTaskViewSchema.shape.status.options).toEqual([...TASK_STATUSES]);
+    expect(sparkTaskViewStatuses).toEqual(TASK_STATUSES);
   });
 
   it("parses a representative askFlow request/response pair", () => {

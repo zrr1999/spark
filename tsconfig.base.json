@@ -22,8 +22,6 @@
       ],
       "@zendev-lab/spark-ask": ["./packages/spark-ask/src/index.ts"],
       "@zendev-lab/spark-ask/extension": ["./packages/spark-ask/src/extension.ts"],
-      "@zendev-lab/spark-context": ["./packages/spark-context/src/index.ts"],
-      "@zendev-lab/spark-context/extension": ["./packages/spark-context/src/extension.ts"],
       "@zendev-lab/spark-core": ["./packages/spark-core/src/index.ts"],
       "@zendev-lab/spark-cue": ["./packages/spark-cue/src/index.ts"],
       "@zendev-lab/spark-cue/extension": ["./packages/spark-cue/src/extension/index.ts"],

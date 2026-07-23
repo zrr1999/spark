@@ -24,6 +24,9 @@ import {
   type SparkSessionCreateRequest,
   type SparkSessionGetRequest,
   type SparkSessionListRequest,
+  type SparkSessionInboxRequest,
+  type SparkSessionMailMutationRequest,
+  type SparkSessionSendRequest,
   type SparkSessionSnapshotRequest,
   type SparkSessionUnbindRequest,
   type SparkTurnCancelResult,
@@ -175,7 +178,12 @@ export interface LocalWorkspaceClientResult {
 }
 
 export type LocalRpcMailStore = Pick<SparkSessionMailStore, "list"> &
-  Partial<Pick<SparkSessionMailStore, "get" | "recordChannelDelivery">>;
+  Partial<
+    Pick<
+      SparkSessionMailStore,
+      "ack" | "get" | "read" | "recordChannelDelivery" | "recordRequestAdmission" | "send"
+    >
+  >;
 
 export interface LocalRpcHandlerOptions {
   ensureSparkDaemonRegistrationForWorkspace?: EnsureSparkDaemonRegistrationForWorkspace;
@@ -400,6 +408,24 @@ export type LocalRpcRequest =
       id: string;
       method: "session.archive";
       params: SparkSessionArchiveRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.send";
+      params: SparkSessionSendRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.inbox";
+      params: SparkSessionInboxRequest;
+      sparkCommand: SparkCommand;
+    }
+  | {
+      id: string;
+      method: "session.mail.read" | "session.mail.ack";
+      params: SparkSessionMailMutationRequest;
       sparkCommand: SparkCommand;
     }
   | {

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { renderReproTickInstruction } from "../packages/pi-extension/src/extension/spark-repro-tool-registration.ts";
+import { renderReproTickInstruction } from "../packages/spark-extension/src/extension/spark-repro-tool-registration.ts";
 import {
   createSparkSessionRepro,
   type SparkReproStageName,
-} from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+} from "../packages/spark-extension/src/extension/spark-session-repro.ts";
 
 function instructionForStage(stageName: SparkReproStageName): string {
   const repro = createSparkSessionRepro(`session:${stageName}`);

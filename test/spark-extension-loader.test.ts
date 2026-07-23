@@ -140,9 +140,14 @@ test("Spark host-support is owned by spark-extension, not spark-host or TUI→pi
   ) as { dependencies?: Record<string, string> };
 
   assert.equal(sparkExtensionPackage.exports?.["./host-support"], "./src/host-support.ts");
-  assert.equal(sparkExtensionPackage.exports?.["./extension"], "./src/extension.ts");
-  assert.ok(sparkExtensionPackage.dependencies?.["@zendev-lab/pi-extension"]);
+  assert.equal(sparkExtensionPackage.exports?.["./extension"], "./src/extension/index.ts");
+  assert.equal(sparkExtensionPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.equal(piPackage.exports?.["./host-support"], "./src/host-support.ts");
+  assert.ok(
+    (piPackage as { dependencies?: Record<string, string> }).dependencies?.[
+      "@zendev-lab/spark-extension"
+    ],
+  );
   assert.equal(hostPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.equal(tuiPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.ok(tuiPackage.dependencies?.["@zendev-lab/spark-extension"]);

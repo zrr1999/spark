@@ -101,8 +101,26 @@ module.exports = {
 
     // --- pi-extension ---
     {
+      name: "pi-extension-only-spark-extension",
+      comment:
+        "The frozen Pi product facade may depend only on the Spark-native extension package.",
+      severity: "error",
+      from: {
+        path: "^packages/pi-extension/",
+      },
+      to: {
+        path: [
+          "^apps/",
+          "^packages/(?!spark-extension(?:/|$))",
+          "node_modules/.*/@zendev-lab/(?!spark-extension(?:/|$))",
+          "/node_modules/@zendev-lab/(?!spark-extension(?:/|$))",
+          "^@zendev-lab/(?!spark-extension(?:/|$))",
+        ].join("|"),
+      },
+    },
+    {
       name: "pi-extension-no-spark-tui",
-      comment: "pi-extension must use @zendev-lab/spark-text instead of @zendev-lab/spark-tui.",
+      comment: "The frozen Pi facade must not acquire presentation dependencies.",
       severity: "error",
       from: {
         path: "^packages/pi-extension/",
@@ -139,12 +157,10 @@ module.exports = {
     {
       name: "spark-core-no-pi-extension",
       comment:
-        "Spark foundation packages must not import pi-extension policy. " +
-        "packages/spark-extension is the explicit Spark-native thin facade allowed to wrap it " +
-        "while domains migrate out of the Pi-compatible package.",
+        "Spark packages must not import the frozen Pi product facade; dependency direction is Pi to Spark.",
       severity: "error",
       from: {
-        path: "^packages/spark-(?!cockpit-|extension(?:/|$))",
+        path: "^packages/spark-",
       },
       to: {
         path: "node_modules/.*/@zendev-lab/pi-extension|/node_modules/@zendev-lab/pi-extension|^packages/pi-extension/",

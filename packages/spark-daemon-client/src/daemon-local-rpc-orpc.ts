@@ -16,8 +16,11 @@ import {
   isSparkSideThreadErrorCode,
   type SparkSideThreadErrorCode,
 } from "@zendev-lab/spark-protocol/side-thread";
-import { resolveSparkPaths, type SparkPaths } from "./paths.ts";
-import { createSocketMessagePort, type SocketMessagePortLike } from "./socket-message-port.ts";
+import { resolveSparkPaths, type SparkPaths } from "@zendev-lab/spark-system";
+import {
+  createSocketMessagePort,
+  type SocketMessagePortLike,
+} from "@zendev-lab/spark-system/socket-message-port";
 
 export interface SparkDaemonOrpcClientOptions {
   paths?: Pick<SparkPaths, "runtimeDir">;

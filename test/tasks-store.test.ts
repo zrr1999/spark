@@ -66,13 +66,13 @@ import {
 import {
   cleanupOwnedBackgroundSubroles,
   resumeOwnedBackgroundSubroles,
-} from "../packages/pi-extension/src/extension/spark-background-subrole-lifecycle.ts";
-import { SparkWorkflowRunManagerController } from "../packages/pi-extension/src/extension/spark-workflow-run-manager.ts";
-import { createSparkRuntimeReadyTaskRunner } from "../packages/pi-extension/src/extension/spark-ready-task-runtime.ts";
+} from "../packages/spark-extension/src/extension/spark-background-subrole-lifecycle.ts";
+import { SparkWorkflowRunManagerController } from "../packages/spark-extension/src/extension/spark-workflow-run-manager.ts";
+import { createSparkRuntimeReadyTaskRunner } from "../packages/spark-extension/src/extension/spark-ready-task-runtime.ts";
 import {
   saveCurrentProjectRef,
   sparkSessionOwnerKey,
-} from "../packages/pi-extension/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 
 after(async () => {
   for (const run of listActiveRoleRuns()) cancelRoleRun(run.ref, "tasks-store suite cleanup");

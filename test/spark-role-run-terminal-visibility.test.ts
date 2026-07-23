@@ -12,12 +12,12 @@ import type {
 } from "@zendev-lab/spark-core";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
 
-import { buildSparkRoleRunRegistry } from "../packages/pi-extension/src/extension/spark-role-run-observability.ts";
-import { roleRunTaskInfoByRefForTests } from "../packages/pi-extension/src/extension/spark-role-run-tui-controller.ts";
+import { buildSparkRoleRunRegistry } from "../packages/spark-extension/src/extension/spark-role-run-observability.ts";
+import { roleRunTaskInfoByRefForTests } from "../packages/spark-extension/src/extension/spark-role-run-tui-controller.ts";
 import {
   formatSparkRoleRunStatusSummary,
   renderSparkRoleRunBoardLines,
-} from "../packages/pi-extension/src/ui/spark-role-run-tui.ts";
+} from "../packages/spark-extension/src/ui/spark-role-run-tui.ts";
 
 const projectRef = "proj:terminal-role-tui" as ProjectRef;
 const taskRef = "task:terminal-role-tui" as TaskRef;

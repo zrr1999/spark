@@ -63,7 +63,6 @@
     "@zendev-lab/spark-ask": "workspace:^",
     "@zendev-lab/spark-channels": "workspace:^",
     "@zendev-lab/spark-cockpit-coordination": "workspace:^",
-    "@zendev-lab/spark-context": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-cue": "workspace:^",
     "@zendev-lab/spark-files": "workspace:^",
@@ -88,6 +87,7 @@
   "devDependencies": {
     "@j178/prek": "0.4.6",
     "@types/node": "^26.1.1",
+    "@zendev-lab/spark-daemon-client": "workspace:*",
     "@zendev-lab/spark-system": "workspace:*",
     "dependency-cruiser": "^18.1.0",
     "es-toolkit": "catalog:",

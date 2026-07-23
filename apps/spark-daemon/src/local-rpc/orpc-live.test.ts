@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSparkPaths } from "@zendev-lab/spark-system";
-import { createSparkDaemonOrpcClient } from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
+import { createSparkDaemonOrpcClient } from "@zendev-lab/spark-daemon-client/orpc";
 import { openSparkDaemonDatabase } from "../store/schema.js";
 import { ensureLocalWorkspace } from "../store/workspaces.js";
 import { startLocalRpcOrpcServer } from "./orpc-server.ts";

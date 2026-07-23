@@ -15,7 +15,7 @@ import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpcWire,
   SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system/daemon-local-rpc";
+} from "@zendev-lab/spark-daemon-client/local-rpc";
 import {
   createDaemonSessionRegistry,
   handleLocalRpcLine,
@@ -2130,6 +2130,126 @@ describe("Spark daemon local RPC", () => {
       expect(spoofed).toMatchObject({
         ok: false,
         error: { code: "session_scope_mismatch" },
+      });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("owns session mail writes and request admission behind one idempotent daemon RPC", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-rpc-session-send-"));
+    const workspacePath = join(root, "workspace");
+    mkdirSync(workspacePath);
+    const paths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: {
+        dataDir: join(root, "data"),
+        cacheDir: join(root, "cache"),
+        stateDir: join(root, "state"),
+        runtimeDir: join(root, "run"),
+      },
+    });
+    const db = openSparkDaemonDatabase(paths);
+    const sparkHome = join(root, ".spark");
+    const sessionRegistry = createDaemonSessionRegistry(sparkHome, {
+      daemonId: "session-send-test",
+      daemonCwd: root,
+      resolveWorkspaceCwd: (workspaceId) =>
+        workspaceId === "ws_session_send" ? workspacePath : undefined,
+    });
+    const mailStore = new SparkSessionMailStore({ sparkHome });
+    try {
+      for (const sessionId of ["sess_origin", "sess_worker"]) {
+        await sessionRegistry.create({
+          sessionId,
+          scope: { kind: "workspace", workspaceId: "ws_session_send" },
+          workspaceId: "ws_session_send",
+        });
+      }
+      const params = {
+        toSessionId: "sess_worker",
+        fromSessionId: "sess_origin",
+        kind: "request",
+        intent: "work.request",
+        payload: { body: "investigate" },
+        idempotencyKey: "session.send:sess_origin:tool-1",
+        body: "investigate",
+        origin: { surface: "local", host: "session" },
+        notifyOnCompletion: true,
+        source: "tool",
+      };
+      const send = async (id: string) =>
+        await handleLocalRpcLine(
+          JSON.stringify({ id, method: "session.send", params }),
+          paths,
+          db,
+          undefined,
+          { sessionRegistry, mailStore },
+        );
+
+      const first = await send("session_send_first");
+      expect(first).toMatchObject({
+        ok: true,
+        result: {
+          created: true,
+          executionTriggered: true,
+          message: {
+            toSessionId: "sess_worker",
+            requestAdmission: { status: "accepted" },
+          },
+          submitted: { status: "queued" },
+        },
+      });
+      const firstResult = first as {
+        result: {
+          message: { id: string };
+          submitted: { invocationId: string };
+        };
+      };
+
+      const replayed = await send("session_send_replayed");
+      expect(replayed).toMatchObject({
+        ok: true,
+        result: {
+          created: false,
+          message: { id: firstResult.result.message.id },
+          submitted: { invocationId: firstResult.result.submitted.invocationId },
+        },
+      });
+      expect(await mailStore.list("sess_worker", { includeAcked: true })).toHaveLength(1);
+
+      const inbox = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "session_inbox",
+          method: "session.inbox",
+          params: { sessionId: "sess_worker", includeAcked: true },
+        }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry, mailStore },
+      );
+      expect(inbox).toMatchObject({
+        ok: true,
+        result: { messages: [{ id: firstResult.result.message.id, readAt: null }] },
+      });
+
+      const read = await handleLocalRpcLine(
+        JSON.stringify({
+          id: "session_mail_read",
+          method: "session.mail.read",
+          params: { sessionId: "sess_worker", messageId: firstResult.result.message.id },
+        }),
+        paths,
+        db,
+        undefined,
+        { sessionRegistry, mailStore },
+      );
+      expect(read).toMatchObject({
+        ok: true,
+        result: { message: { id: firstResult.result.message.id, readAt: expect.any(String) } },
       });
     } finally {
       db.close();

@@ -15,11 +15,11 @@ import {
 import type {
   SparkRegisteredToolConfig,
   SparkToolContext,
-} from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
 import type {
   ReviewerRunner,
   ReviewInput,
-} from "../packages/pi-extension/src/extension/reviewer-runner.ts";
+} from "../packages/spark-extension/src/extension/reviewer-runner.ts";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));

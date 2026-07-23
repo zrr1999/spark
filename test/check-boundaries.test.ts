@@ -18,6 +18,7 @@ test("dependency-cruiser config loads and encodes required boundary rules", asyn
     "no-cross-package-relative-src-deep-link",
     "pi-no-product-adapters",
     "pi-only-foundation-spark",
+    "pi-extension-only-spark-extension",
     "pi-extension-no-spark-tui",
     "spark-core-no-pi-extension",
     "tui-no-pi-extension",

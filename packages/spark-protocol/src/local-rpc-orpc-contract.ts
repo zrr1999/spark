@@ -23,6 +23,14 @@ import {
   sparkSideThreadSubmitRequestSchema,
   sparkSideThreadSubmitResultSchema,
 } from "./side-thread.ts";
+import {
+  sparkSessionInboxRequestSchema,
+  sparkSessionInboxResultSchema,
+  sparkSessionMailMutationRequestSchema,
+  sparkSessionMailMutationResultSchema,
+  sparkSessionSendRequestSchema,
+  sparkSessionSendResultSchema,
+} from "./session-mail.ts";
 
 const emptyInputSchema = z.object({}).default({});
 const unknownResultSchema = z.unknown();
@@ -252,6 +260,32 @@ export const sparkLocalRpcOrpcContract = {
     bind: procedure("POST", "/session/bind", z.record(z.string(), z.unknown())),
     unbind: procedure("POST", "/session/unbind", z.record(z.string(), z.unknown())),
     archive: procedure("POST", "/session/archive", z.record(z.string(), z.unknown())),
+    send: procedure(
+      "POST",
+      "/session/send",
+      sparkSessionSendRequestSchema,
+      sparkSessionSendResultSchema,
+    ),
+    inbox: procedure(
+      "GET",
+      "/session/inbox",
+      sparkSessionInboxRequestSchema,
+      sparkSessionInboxResultSchema,
+    ),
+    mail: {
+      read: procedure(
+        "POST",
+        "/session/mail/read",
+        sparkSessionMailMutationRequestSchema,
+        sparkSessionMailMutationResultSchema,
+      ),
+      ack: procedure(
+        "POST",
+        "/session/mail/ack",
+        sparkSessionMailMutationRequestSchema,
+        sparkSessionMailMutationResultSchema,
+      ),
+    },
     notification: {
       deliver: procedure(
         "POST",
@@ -401,6 +435,10 @@ export const sparkLocalRpcOrpcMethodPaths = {
   "session.bind": ["session", "bind"],
   "session.unbind": ["session", "unbind"],
   "session.archive": ["session", "archive"],
+  "session.send": ["session", "send"],
+  "session.inbox": ["session", "inbox"],
+  "session.mail.read": ["session", "mail", "read"],
+  "session.mail.ack": ["session", "mail", "ack"],
   "session.notification.deliver": ["session", "notification", "deliver"],
   "session.model.set": ["session", "model", "set"],
   "session.thinking.set": ["session", "thinking", "set"],

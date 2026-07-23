@@ -1,14 +1,10 @@
 # @zendev-lab/pi-extension
 
-Pi-compatible Spark command and policy facade for the Pi product loader.
+Frozen Pi product loader facade over `@zendev-lab/spark-extension`.
 
 Spark-native hosts (TUI, daemon headless) must use `@zendev-lab/spark-extension`
-instead. This package remains loadable so Pi product discovery keeps working while
-policy migrates into capability packages and the Spark-native boundary.
-
-The facade does not own task, artifact, workflow, role, session, or execution stores.
-It composes those package APIs through the host-neutral extension contract and must
-not import Spark app runtimes.
+instead. This package remains loadable so Pi product discovery keeps working,
+but it contains no Spark policy or durable state implementation.
 
 Public task execution uses `task_read`, `task_write`, and `assign`. Anonymous role
 calls use `role`; persistent continuity and mail use `session`. The separate

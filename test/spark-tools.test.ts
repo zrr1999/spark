@@ -44,16 +44,16 @@ import {
 import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import { registerSparkMemoryTool } from "@zendev-lab/spark-memory/extension";
 import piAskExtension from "../packages/spark-ask/src/extension.ts";
-import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
-import { SparkWorkflowRunManagerController } from "../packages/pi-extension/src/extension/spark-workflow-run-manager.ts";
-import { JsonStoreFormatError } from "../packages/pi-extension/src/extension/json-store.ts";
-import type { SparkToolContext } from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
+import { SparkWorkflowRunManagerController } from "../packages/spark-extension/src/extension/spark-workflow-run-manager.ts";
+import { JsonStoreFormatError } from "../packages/spark-extension/src/extension/json-store.ts";
+import type { SparkToolContext } from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
 import {
   loadCurrentProjectState,
   loadHiddenRoleRunInboxState,
   loadSparkMode,
   saveCurrentProjectRef,
-} from "../packages/pi-extension/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 import {
   assignTodoDisplayNumber,
   importLegacyIndependentTodos,
@@ -61,12 +61,12 @@ import {
   loadTodoDisplayNumberState,
   saveIndependentTodos,
   saveTodoDisplayNumberState,
-} from "../packages/pi-extension/src/extension/session-todos.ts";
+} from "../packages/spark-extension/src/extension/session-todos.ts";
 import {
   normalizeSparkStatusFormat,
   normalizeSparkStatusLimit,
   normalizeSparkStatusView,
-} from "../packages/pi-extension/src/extension/spark-status.ts";
+} from "../packages/spark-extension/src/extension/spark-status.ts";
 import {
   normalizeForceAfterMs,
   normalizeKillSignal,
@@ -74,27 +74,27 @@ import {
   normalizeOptionalRunRef,
   normalizeSparkBackgroundAction,
   normalizeSparkBackgroundBoolean,
-} from "../packages/pi-extension/src/extension/background-runs.ts";
+} from "../packages/spark-extension/src/extension/background-runs.ts";
 import {
   normalizeSparkRunReadyTasksBoolean,
   normalizeSparkRunReadyTasksPositiveInteger,
-} from "../packages/pi-extension/src/extension/spark-run-ready-tasks-tool-registration.ts";
-import { normalizeSparkPlanTaskInputs } from "../packages/pi-extension/src/extension/spark-plan-tasks-tool-registration.ts";
-import { normalizeSparkClaimTaskInput } from "../packages/pi-extension/src/extension/spark-claim-task-tool-registration.ts";
-import { normalizeSparkFinishTaskInput } from "../packages/pi-extension/src/extension/spark-finish-task-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-run-ready-tasks-tool-registration.ts";
+import { normalizeSparkPlanTaskInputs } from "../packages/spark-extension/src/extension/spark-plan-tasks-tool-registration.ts";
+import { normalizeSparkClaimTaskInput } from "../packages/spark-extension/src/extension/spark-claim-task-tool-registration.ts";
+import { normalizeSparkFinishTaskInput } from "../packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts";
 import {
   goalReviewDirectory,
   rebuildWorkspaceReviewIndex,
   subjectReviewRecordPath,
   taskReviewDirectory,
-} from "../packages/pi-extension/src/extension/subject-review-store.ts";
-import { normalizeSparkTodoOps } from "../packages/pi-extension/src/extension/spark-todo-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/subject-review-store.ts";
+import { normalizeSparkTodoOps } from "../packages/spark-extension/src/extension/spark-todo-tool-registration.ts";
 import {
   normalizeArtifactBoolean,
   normalizeArtifactLimit,
   normalizeArtifactRef,
   normalizePositiveInteger,
-} from "../packages/pi-extension/src/extension/artifact-tools.ts";
+} from "../packages/spark-extension/src/extension/artifact-tools.ts";
 import {
   normalizeLearningBoolean,
   normalizeLearningCategory,
@@ -103,33 +103,33 @@ import {
   normalizeLearningLocation,
   normalizeLearningStatusFilter,
   normalizeStringArray,
-} from "../packages/pi-extension/src/extension/learning-tools.ts";
+} from "../packages/spark-extension/src/extension/learning-tools.ts";
 import {
   normalizeSparkWorkflowRunsAction,
   normalizeSparkWorkflowRunsBoolean,
   normalizeSparkWorkflowRunsNonNegativeInteger,
   normalizeSparkWorkflowRunsRunRef,
-} from "../packages/pi-extension/src/extension/spark-workflow-runs-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-workflow-runs-tool-registration.ts";
 import { defaultSparkDynamicWorkflowEventStore } from "../packages/spark-workflows/src/index.ts";
 import {
   normalizeSparkNewProjectInput,
   normalizeSparkProjectOptionalString,
   normalizeSparkProjectOutputLanguage,
   normalizeSparkProjectPatch,
-} from "../packages/pi-extension/src/extension/spark-project-tools.ts";
+} from "../packages/spark-extension/src/extension/spark-project-tools.ts";
 import {
   normalizeSparkStateAction,
   normalizeSparkStateOptionalString,
-} from "../packages/pi-extension/src/extension/spark-state-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-state-tool-registration.ts";
 import {
   normalizeTaskKind,
   normalizeTaskStatus,
-} from "../packages/pi-extension/src/extension/task-plan-tool.ts";
-import { normalizeSparkAskReplayArtifactRef } from "../packages/pi-extension/src/extension/spark-ask-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/task-plan-tool.ts";
+import { normalizeSparkAskReplayArtifactRef } from "../packages/spark-extension/src/extension/spark-ask-tool-registration.ts";
 import {
   isReproRequirementSatisfied,
   readSessionRepro,
-} from "../packages/pi-extension/src/extension/spark-session-repro.ts";
+} from "../packages/spark-extension/src/extension/spark-session-repro.ts";
 import {
   inferSessionGoalObjective,
   loadSessionGoal,
@@ -528,7 +528,7 @@ test("Spark tool normalizer groups reject invalid explicit parameters instead of
             evidence: {
               title: " Evidence title ",
               notes: " Notes ",
-              changedFiles: [" packages/pi-extension/src/file.ts "],
+              changedFiles: [" packages/spark-extension/src/file.ts "],
               sourceRefs: [" test/file.test.ts:10 "],
               validationCommands: [" pnpm test — pass "],
             },
@@ -541,7 +541,7 @@ test("Spark tool normalizer groups reject invalid explicit parameters instead of
           evidence: {
             title: "Evidence title",
             notes: "Notes",
-            changedFiles: ["packages/pi-extension/src/file.ts"],
+            changedFiles: ["packages/spark-extension/src/file.ts"],
             sourceRefs: ["test/file.test.ts:10"],
             validationCommands: ["pnpm test — pass"],
           },
@@ -5606,7 +5606,7 @@ test("impl_finish_task can create bounded task evidence artifact before reviewer
         title: "Generated finish evidence",
         notes: "Bounded evidence notes.",
         changedFiles: [
-          "packages/pi-extension/src/extension/spark-finish-task-tool-registration.ts",
+          "packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts",
         ],
         sourceRefs: ["test/spark-tools.test.ts:generated-evidence"],
         validationCommands: ["pnpm run test:file test/spark-tools.test.ts — pass"],

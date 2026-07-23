@@ -9,7 +9,7 @@ import { resolveSparkPaths } from "@zendev-lab/spark-system";
 import {
   requestSparkDaemonLocalRpc,
   type SparkDaemonLocalRpcClientOptions,
-} from "@zendev-lab/spark-system/daemon-local-rpc";
+} from "@zendev-lab/spark-daemon-client/local-rpc";
 
 export interface CockpitCoordinationDaemonClientOptions {
   runtimeDir?: string;

@@ -88,7 +88,7 @@ describe("package boundaries", () => {
   it("does not import Spark daemon internals from the cockpit app", () => {
     const sourceFiles = collectSourceFiles(join(webRoot, "src"));
     const violations = sourceFiles.filter((file) =>
-      /from\s+["']@zendev-lab\/spark-daemon/u.test(readFileSync(file, "utf8")),
+      /from\s+["']@zendev-lab\/spark-daemon(?:\/|["'])/u.test(readFileSync(file, "utf8")),
     );
 
     expect(violations).toEqual([]);

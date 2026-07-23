@@ -1,6 +1,7 @@
 {
   "name": "@zendev-lab/spark-fusion",
   "version": "0.1.0",
+  "private": true,
   "description": "Spark-native bounded multi-model deliberation capability.",
   "license": "MIT",
   "author": "zrr1999",
@@ -13,9 +14,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",

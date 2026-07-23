@@ -41,12 +41,12 @@ import {
   SparkDaemonLocalRpcError,
   SparkDaemonLocalRpcRemoteError,
   SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system/daemon-local-rpc";
+} from "@zendev-lab/spark-daemon-client/local-rpc";
 import {
   createSparkDaemonOrpcClient,
   invokeSparkDaemonOrpcLiveMethod,
   isSparkDaemonOrpcLiveMethod,
-} from "@zendev-lab/spark-system/daemon-local-rpc-orpc";
+} from "@zendev-lab/spark-daemon-client/orpc";
 import { SparkSessionStore, type SparkSessionInfo } from "@zendev-lab/spark-host/session-store";
 
 import {

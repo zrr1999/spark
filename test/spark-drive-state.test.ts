@@ -9,7 +9,7 @@ import {
   SparkDriveRegistry,
   sparkDriveRegistry,
   type SparkDriveDescriptor,
-} from "../packages/pi-extension/src/extension/spark-drive-state.ts";
+} from "../packages/spark-extension/src/extension/spark-drive-state.ts";
 
 test("Spark drive registry centralizes modes, aliases, and rendering", () => {
   assert.deepEqual(SPARK_DRIVE_MODES, ["assist", "loop", "goal", "repro", "workflow"]);

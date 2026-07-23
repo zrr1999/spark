@@ -6,11 +6,11 @@ import { test } from "vitest";
 
 import { TaskGraph, defaultTaskGraphStore } from "@zendev-lab/spark-tasks";
 
-import { saveCurrentProjectRef } from "../packages/pi-extension/src/extension/current-project-state.ts";
+import { saveCurrentProjectRef } from "../packages/spark-extension/src/extension/current-project-state.ts";
 import {
   currentSparkProject,
   loadSparkGraph,
-} from "../packages/pi-extension/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 import {
   rebuildSessionIndex as rebuildSparkLoopSessionIndex,
   sessionGoalStorePath,
