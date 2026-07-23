@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "maxWorkspacePackages": 39,
+  "maxWorkspacePackages": 38,
   "packages": {
     "@zendev-lab/spark-cli": {
       "path": "apps/spark-cli",
@@ -29,14 +29,6 @@
       "owner": "tui",
       "stability": "supported",
       "stateWriter": "host"
-    },
-    "@zendev-lab/pi-extension": {
-      "path": "packages/pi-extension",
-      "layer": "compatibility",
-      "owner": "pi-product",
-      "stability": "frozen",
-      "stateWriter": "none",
-      "allowedWorkspaceDependencies": ["@zendev-lab/spark-extension"]
     },
     "@zendev-lab/spark-acp-spike": {
       "path": "packages/spark-acp-spike",

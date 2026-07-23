@@ -41,7 +41,7 @@ state; Cockpit owns its coordination database and projections.
 | `contract` | JSON-friendly wire schemas and compatibility validation | workspace implementation dependencies |
 | `foundation` | small dependency-light primitives and host contracts | product policy |
 | `private-adapter` | Cockpit-only storage, projection, or localization | daemon/shared ownership |
-| `compatibility` | frozen legacy entry that forwards to a native owner | new behavior or state |
+| `compatibility` | legacy read or wire compatibility inside a current owner | a second implementation package |
 | `experiment` | isolated, non-default spike with an explicit graduation decision | production startup |
 
 ## Deliberate boundaries
@@ -53,9 +53,9 @@ state; Cockpit owns its coordination database and projections.
   no Spark workspace dependency.
 - `spark-daemon-client` owns legacy local RPC and oRPC client transports. This
   keeps protocol-aware daemon calls out of the system-primitives package.
-- `spark-extension` owns Spark-native extension composition and policy.
-  `pi-extension` is a frozen two-entry compatibility facade that may depend
-  only on `spark-extension`.
+- `spark-extension` owns product extension composition and policy for native
+  and structurally compatible hosts. Legacy `pi-extension` specifiers are
+  rewritten while reading configuration; there is no facade workspace.
 - `spark-cockpit-*` names are Cockpit-private. Shared code must move to a
   capability or foundation package before daemon/native reuse.
 - `spark-acp-spike` and `spark-mcp-spike` remain experiments until they have a
@@ -74,10 +74,9 @@ Create a workspace only when at least one hard boundary exists:
 4. a replaceable external adapter;
 5. a separately validated experimental lifecycle.
 
-Otherwise add a module to the existing owner. A compatibility facade must name
-its native owner, have a frozen public surface, and contain no implementation.
-Merge or delete a package when it only re-exports one owner and has no external
-compatibility requirement.
+Otherwise add a module to the existing owner. Compatibility reads must name
+their native owner and remain behind a frozen decoder. Delete a package when it
+only re-exports one owner and has no independent runtime boundary.
 
 ## Reference patterns
 

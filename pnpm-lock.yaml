@@ -473,12 +473,6 @@ importers:
         specifier: workspace:^
         version: link:../../packages/spark-web
 
-  packages/pi-extension:
-    dependencies:
-      '@zendev-lab/spark-extension':
-        specifier: workspace:^
-        version: link:../spark-extension
-
   packages/spark-acp-spike:
     dependencies:
       '@agentclientprotocol/sdk':

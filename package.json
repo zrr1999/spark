@@ -126,7 +126,7 @@
       "./packages/spark-web/src/extension-entry.ts",
       "./packages/spark-workflows/src/extension-entry.ts",
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",
-      "./packages/pi-extension/src/extension/index.ts"
+      "./packages/spark-extension/src/extension/index.ts"
     ]
   }
 }

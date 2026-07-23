@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const architecture = readJson(join(root, "architecture/packages.json"));
 const maxProductionFileLines = 4_000;
-const frozenPiExtensions = new Set([
+const frozenCompatibilityExtensions = new Set([
   "./packages/spark-ask/src/extension-entry.ts",
   "./packages/spark-artifacts/src/extension-entry.ts",
   "./packages/spark-cue/src/extension/index.ts",
@@ -17,7 +17,7 @@ const frozenPiExtensions = new Set([
   "./packages/spark-web/src/extension-entry.ts",
   "./packages/spark-workflows/src/extension-entry.ts",
   "./packages/spark-ai/src/baidu-oneapi-provider.ts",
-  "./packages/pi-extension/src/extension/index.ts",
+  "./packages/spark-extension/src/extension/index.ts",
 ]);
 const validLayers = new Set([
   "adapter",
@@ -149,11 +149,13 @@ for (const [name, declaration] of Object.entries(declaredPackages)) {
 }
 
 const rootPackage = readJson(join(root, "package.json"));
-const piExtensions = Array.isArray(rootPackage.pi?.extensions) ? rootPackage.pi.extensions : [];
-for (const extension of piExtensions) {
-  if (!frozenPiExtensions.has(extension)) {
+const compatibilityExtensions = Array.isArray(rootPackage.pi?.extensions)
+  ? rootPackage.pi.extensions
+  : [];
+for (const extension of compatibilityExtensions) {
+  if (!frozenCompatibilityExtensions.has(extension)) {
     failures.push(
-      `Pi product extension surface grew: ${extension}. New capabilities must target Spark-native hosts.`,
+      `Compatibility loader extension surface grew: ${extension}. New capabilities must target Spark-native hosts.`,
     );
   }
 }
@@ -165,7 +167,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Architecture ratchet passed (${workspacePackages.length}/${architecture.maxWorkspacePackages} workspaces classified; production imports declared; production files <= ${maxProductionFileLines} lines; Pi surface frozen).`,
+    `Architecture ratchet passed (${workspacePackages.length}/${architecture.maxWorkspacePackages} workspaces classified; production imports declared; production files <= ${maxProductionFileLines} lines; compatibility surface frozen).`,
   );
 }
 

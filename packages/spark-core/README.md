@@ -1,9 +1,7 @@
 # spark-core
 
-Spark **host contract + lightweight primitives** for Spark extension hosts and
-retained Pi-compatible adapters consumed by both
-[`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-and the Spark native host family.
+Spark **host contract + lightweight primitives** shared by the Spark native host
+family and structurally compatible extension loaders.
 
 This package is the renamed `@zendev-lab/spark-extension-api`. It is **not** a
 revival of the retired workspace capability bag formerly named `spark-core`.
@@ -11,7 +9,7 @@ revival of the retired workspace capability bag formerly named `spark-core`.
 ## Why this package exists
 
 Before this package, every extension package (`@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`,
-`@zendev-lab/spark-graft`, `@zendev-lab/spark-roles`, `@zendev-lab/pi-extension`) maintained its own `pi-types.d.ts` shim
+`@zendev-lab/spark-graft`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-extension`) maintained its own `pi-types.d.ts` shim
 that re-declared a slice of `SparkHostAPI` via `declare module
 "@earendil-works/pi-coding-agent"`. That meant:
 
@@ -33,16 +31,15 @@ and the same code runs on either host.
 
 The package is mostly TypeScript declarations for `SparkHostAPI` and related
 shapes, plus a small set of dependency-light runtime helpers (refs, stable IDs,
-JSON file IO, copy-language detection). Two hosts implement supersets of these
-types:
+JSON file IO, copy-language detection). Host implementations speak supersets of
+these types:
 
-- pi-coding-agent runtime — full Pi semantics (commands, tools, events,
-  widgets, sessions). Declares this surface as a subset of its private
-  `SparkHostAPI`.
 - Spark native host family — `@zendev-lab/spark-host` provides `SparkHostRuntime`, implementing the retained
-  surface needed by `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/pi-extension`,
+  surface needed by `@zendev-lab/spark-ask`, `@zendev-lab/spark-cue`, `@zendev-lab/spark-roles`, `@zendev-lab/spark-graft`, and `@zendev-lab/spark-extension`,
   plus host-only helpers for keybindings, message renderers, provider/model
   registry adapters, session glue, and native UI bridges.
+- Compatibility loaders may supply the same structural methods without creating
+  another extension implementation or a runtime dependency on `pi-coding-agent`.
 
 ## Contract rules
 

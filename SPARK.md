@@ -18,7 +18,7 @@ inspired_by:
 
 ## 起源
 
-`spark` 最初作为面向 Pi 产品的工作流套件起步，通过意图明确的用户命令与规范化工具，将项目意图、任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。仓库落地后，执行与会话中枢已迁移到 Spark daemon，产品面扩展为原生 TUI、Cockpit Web 与消息通道；**Pi SDK**（`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 及与之对齐的流式/会话形状）仍是模型与终端呈现内核，**Pi 产品宿主**（`pi-coding-agent` 扩展加载路径）则已冻结为兼容面。
+`spark` 最初作为面向 Pi 产品的工作流套件起步，通过意图明确的用户命令与规范化工具，将项目意图、任务有向无环图、结构化提问、审查、证据制品、角色执行以及 `cue-shell` 执行能力组织为可追溯的本地工作流。仓库落地后，执行与会话中枢已迁移到 Spark daemon，产品面扩展为原生 TUI、Cockpit Web 与消息通道；**Pi SDK**（`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 及与之对齐的流式/会话形状）仍是模型与终端呈现内核，独立的 Pi 产品 extension facade 已退场，兼容加载器与原生宿主共用 `spark-extension`。
 
 ## 当前工作标题
 
@@ -30,7 +30,7 @@ inspired_by:
 - 以 daemon 为持久会话与调用调度真源；TUI、Cockpit、消息通道、本地 RPC 共用一套 registry 与 invocation，不维护并行会话状态机。
 - 在 `spark-protocol` 中沉淀跨表面交互协议（ask 判定、slash/action catalog、session status / pending turns、可展示错误），各表面只保留呈现与执行胶水。
 - 保持 Pi SDK 为内核：模型流、provider、终端 UI 原语继续建立在 `pi-ai` / `pi-tui`（经 `spark-ai` / `spark-tui` 边界）之上，不把“退场 Pi 产品”误解为剥离 SDK。
-- 冻结并规划退场 Pi 产品宿主兼容：`pi-extension`、`package.json#pi` 发现、`pi-coding-agent` 加载路径只保留窄读与必要磁盘格式兼容，新能力只进入 Spark 宿主家族。
+- 由 `spark-extension` 统一拥有产品 extension 组合；`package.json#pi` 仅保留指向同一实现的兼容发现元数据，不保留第二套 facade 或 `pi-coding-agent` 运行时依赖。
 - 将 side conversation、worktree/change/PR/CI/review feedback 与 provider runtime 建模为可组合的领域契约：产品表面消费同一状态与反馈闭环，而不是各自维护一套按钮、轮询器或终端启发式。
 - 为 invocation、provider、tool、delivery 与代码交付保留隐私安全的关联观测边界；执行真相仍在 daemon/SQLite，可选 exporter 或外部观察面不得成为状态所有者。
 - 将 command policy 与实际执行隔离逐步对齐，在不改变 local-first 语义的前提下，为支持平台提供显式、fail-closed 的 sandbox runner。
@@ -43,7 +43,7 @@ inspired_by:
 - **执行宿主**：`spark-host` + `spark-turn` 服务 TUI / headless / daemon；`apps/spark-daemon` 拥有会话、通道与 SQLite；`apps/spark-tui` 与 `apps/spark-cockpit` 是一等产品面。
 - **跨表面契约**：`spark-protocol`（含 ask 语义、action-bar、session view、human-interaction 生命周期）；`spark-core`（由 `spark-extension-api` 重命名）是 Spark 宿主契约 + 轻量 primitives（`SparkHostAPI` 类型与依赖极轻的 helpers），不是复活已退场的能力袋 `spark-core`。
 - **能力包**：`spark-ask`、`spark-artifacts`、`spark-tasks`、`spark-roles`、`spark-cue`、`spark-channels`、`spark-cockpit-coordination` 等；工具表面使用规范化 `tool({ action })`。
-- **Pi 产品兼容（冻结）**：`packages/pi-extension`（legacy facade，slated for retirement）以及各包上的 `"pi": { "extensions": ... }` 发现元数据。Side Thread 已由 daemon、`spark-turn`、原生 TUI 与 Cockpit 统一实现，旧 `pi-btw` 产品适配器已退场；Spark 原生宿主不重新引入 Pi SDK package discovery。
+- **产品 extension 组合根**：`packages/spark-extension` 为原生与结构兼容宿主注册 command/tool/policy；历史 `pi-extension` workspace 已退场。根 `"pi": { "extensions": ... }` 只让兼容加载器发现同一 Spark 实现，不形成第二套能力或状态 owner。
 
 已退场的工作区包包括历史能力袋 `spark-core`（与现 `@zendev-lab/spark-core` 无关）、`spark-goal`、`spark-learnings` 与 `spark-recall`。`spark-tasks`、`spark-workflows` 仍是当前包；learning / recall / reflection 由 `spark-memory` 拥有。`pi-* -> spark-*` 反向依赖由边界检查守门。`.spark/` 磁盘格式不因包名迁移而改名（reflection 落盘路径统一到 `.spark/memory/reflections/` 除外）。
 
@@ -51,7 +51,7 @@ inspired_by:
 
 - 不将本仓库泛化为公开模板或通用项目管理产品。
 - 不剥离或重写 Pi SDK 内核去“去 Pi 化”；退场对象是 Pi **产品**宿主，不是 `pi-ai` / `pi-tui`。
-- 不为 Pi 产品宿主新增一等能力；不长期保留双重公开工具表面。
+- 不为兼容加载器新增独立能力；不重新建立双重 extension 实现或公开工具表面。
 - 不把 TUI 进程内 follow-up 队列与 daemon `pendingTurns` 盲目合并成单一数组；采用双层模型：daemon `pendingTurns` 是跨表面耐久真相，TUI `queuedFollowUps` 只保留未 ack 的乐观 steer/followUp（合并、编辑器恢复），ack 后以 daemon 投影为准。
 - 不把 Cockpit 专用 notice/error part 未经设计提升进协议。
 - 不复制 OpenSpec/OpenArc 的完整文件树或重型流程。
@@ -64,7 +64,7 @@ inspired_by:
 - 同一 ask 的“算不算有效回答 / gate 是否满足”在 TUI、Cockpit、通道结算路径上共用 `spark-protocol` 语义，表面只做 UI。
 - Slash / action catalog 继续以协议为源；Cockpit 与 TUI 只做 i18n 与执行。
 - 新功能默认可在 TUI 或 Cockpit 验证，消息通道按 channel policy 收窄；无需先在 Pi 产品里跑通。
-- Pi 产品加载路径可冻结：无新 `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与产品兼容。宿主契约公开名为 `SparkHostAPI`（`spark-core`）；ask/tasks/context 注册入口为 `registerSpark*`。
+- 兼容加载路径只指向 `spark-extension`：无第二个 facade package、无新 `"pi.extensions"` 扩张；文档与边界检查区分 SDK 内核与兼容发现元数据。宿主契约公开名为 `SparkHostAPI`（`spark-core`）；ask/tasks/context 注册入口为 `registerSpark*`。
 - Spark 原生 TUI 与 Cockpit 通过同一 daemon controller 运行只读 Side Thread、恢复隔离历史并将全文或紧凑摘要显式 handoff 回主会话；TUI 使用单一 `/btw` 命令，Cockpit 提供同一组 ensure、ask、reset、model、thinking 与 handoff 操作，两个表面都不加载 `pi-coding-agent`。
 - 用户可从 npm 安装单一 `@zendev-lab/spark` 产品包并获得 `spark` 命令；发布物只包含编译后的 JavaScript、声明过的运行时依赖以及 daemon migrations、TUI 和 Cockpit 资产，不暴露内部 workspace 包图。
 - CI failure、review comment 与 merge conflict 能以幂等反馈事件回到创建该 change/PR 的原 session，并带可审查 evidence，而不是要求用户手工复制终端输出。
@@ -78,8 +78,8 @@ inspired_by:
 ## 近期收尾任务
 
 - 继续对齐跨表面 ask / gate / submit 语义；Cockpit 已改用协议 option `value` 与 `parseSparkAskChoice`。
-- 文档与 AGENTS 边界语言改为“Pi SDK 内核 + Pi 产品冻结”。
-- 后续可单独收缩 `pi-extension` 表面与 `"pi.extensions"` 元数据；该收缩不阻塞协议对齐。
+- 文档与 AGENTS 边界语言已统一为“Pi SDK 内核 + 单一 `spark-extension` 组合根”。
+- 历史 `pi-extension` workspace 已并入 `spark-extension`；`"pi.extensions"` 兼容元数据只允许指向现有 Spark entries。
 - Spark 原生 Side Thread 已通过隔离的真实 TUI/Zellij 验收：提交与繁忙并行拒绝、daemon 重启恢复、model/thinking 配置、全文和摘要 handoff 均由真实 daemon invocation 验证。Cockpit 使用同一 daemon controller 提供完整 BTW 操作；旧 `pi-btw` 包、skill 与 Pi discovery 已删除。
 - 以 `check:architecture` 守住工作区数量、生产文件体量和冻结 Pi manifest；前期 ceiling 保留适度扩展余量，但新增 workspace 仍须证明稳定依赖边界。先分类 Knip/jscpd/complexity 的动态入口误报，再把稳定基线升级为非增长门禁。
 - Spark v0.1 通过生成的自包含 `@zendev-lab/spark` 产物发布 npm；源码 workspace 保持 private，`check:distribution` 校验公开产品与内部 owner 分类，package-only smoke 在仓库外安装 tarball 并验证 dispatcher、TUI、daemon migrations/lifecycle 与 Cockpit health。
@@ -104,3 +104,4 @@ inspired_by:
 - 2026-07-22：实测发现 Node 不支持在 `node_modules` 内 strip TypeScript，且 daemon bundle 曾遗漏 migration assets；因此 v0.1 收敛为全仓私有源码分发，移除 registry publish 面并增加真实 source build/start smoke。
 - 2026-07-22：真实 TUI/Zellij 验收覆盖 Side Thread 提交、繁忙并行、重启恢复、配置及 full/summary handoff，并修复旧 generation-less 转录在 daemon 升级重启后的兼容读取；决定 `pi-btw` 仅随 Pi 产品宿主整体退场，modal overlay 不作为门禁。
 - 2026-07-23：用户确认恢复 npm 发布、以原生 BTW 完全替代并删除 `pi-btw`、Cockpit 与 TUI 共用 daemon Side Thread controller，同时为早期架构增长 ceiling 留出适度余量；发布面收敛为编译后、自包含的 `@zendev-lab/spark` 产品包，内部 workspace 不成为公共 API。
+- 2026-07-23：将 `pi-extension` 完整并入 `spark-extension`，原生与兼容加载器共用单一组合根；继续保留 `pi-ai` / `pi-tui` SDK 内核。

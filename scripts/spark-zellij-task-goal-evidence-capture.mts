@@ -83,7 +83,7 @@ await writeFile(
   `
 import { join } from "node:path";
 import { createSparkCliHostServices } from "${process.cwd()}/apps/spark-tui/src/host/bootstrap.ts";
-const services = await createSparkCliHostServices({ cwd: ${JSON.stringify(stateParent)}, sparkStateRoot: join(${JSON.stringify(stateParent)}, ".spark"), extensions: ["@zendev-lab/pi-extension/extension"], sessionManager: { getLeafId: () => ${JSON.stringify(sessionKey)} } });
+const services = await createSparkCliHostServices({ cwd: ${JSON.stringify(stateParent)}, sparkStateRoot: join(${JSON.stringify(stateParent)}, ".spark"), extensions: ["@zendev-lab/spark-extension/extension"], sessionManager: { getLeafId: () => ${JSON.stringify(sessionKey)} } });
 const ctx = services.runtime.makeContext();
 const read = services.runtime.getTool("task_read")?.config;
 if (!read?.execute) throw new Error("task_read unavailable");

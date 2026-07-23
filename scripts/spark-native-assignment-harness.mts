@@ -54,8 +54,8 @@ async function main(): Promise<void> {
     const services = await createSparkCliHostServices({
       cwd,
       sparkHome,
-      config: { extensions: ["@zendev-lab/pi-extension/extension"], providers: [] },
-      extensions: ["@zendev-lab/pi-extension/extension"],
+      config: { extensions: ["@zendev-lab/spark-extension/extension"], providers: [] },
+      extensions: ["@zendev-lab/spark-extension/extension"],
       providers: [],
       sessionManager: { getLeafId: () => "session:native-assignment" },
     });
