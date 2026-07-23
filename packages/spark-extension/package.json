@@ -15,9 +15,6 @@
     "./extension": "./src/extension/index.ts",
     "./host-support": "./src/host-support.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-ask": "workspace:^",

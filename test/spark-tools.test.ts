@@ -5609,7 +5609,7 @@ test("impl_finish_task can create bounded task evidence artifact before reviewer
           "packages/spark-extension/src/extension/spark-finish-task-tool-registration.ts",
         ],
         sourceRefs: ["test/spark-tools.test.ts:generated-evidence"],
-        validationCommands: ["pnpm run test:file test/spark-tools.test.ts — pass"],
+        validationCommands: ["pnpm test test/spark-tools.test.ts — pass"],
       },
     });
 
@@ -5634,7 +5634,7 @@ test("impl_finish_task can create bounded task evidence artifact before reviewer
     assert.equal(typeof body, "string");
     if (typeof body !== "string") throw new Error("generated evidence body must be markdown");
     assert.match(body, /Generated finish evidence/);
-    assert.match(body, /pnpm run test:file test\/spark-tools\.test\.ts — pass/);
+    assert.match(body, /pnpm test test\/spark-tools\.test\.ts — pass/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

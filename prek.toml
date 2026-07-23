@@ -49,7 +49,7 @@ hooks = [
   {
     id = "architecture-ratchet-check",
     name = "architecture growth ratchets",
-    entry = "pnpm run check:architecture",
+    entry = "node scripts/check-architecture-ratchets.mjs",
     language = "system",
     pass_filenames = false,
     stages = ["pre-commit"]
@@ -57,7 +57,7 @@ hooks = [
   {
     id = "pi-boundary-check",
     name = "package boundary check (dependency-cruiser)",
-    entry = "pnpm run check:boundaries",
+    entry = "pnpm exec depcruise --config .dependency-cruiser.cjs apps packages test",
     language = "system",
     pass_filenames = false,
     stages = ["pre-commit"]
@@ -71,9 +71,9 @@ hooks = [
     stages = ["pre-commit"]
   },
   {
-    id = "vp-check",
+    id = "spark-check-fix",
     name = "Spark static checks --fix",
-    entry = "bash -c 'pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && pnpm run check:static:fix'",
+    entry = "pnpm run fix",
     language = "system",
     pass_filenames = false,
     stages = ["pre-commit"]

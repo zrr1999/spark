@@ -20,7 +20,7 @@ const packages = [
 let failed = 0;
 for (const name of packages) {
   console.log(`\n=== mutation: ${name} ===\n`);
-  const result = spawnSync("pnpm", ["--filter", name, "run", "test:mutation"], {
+  const result = spawnSync("pnpm", ["--filter", name, "exec", "stryker", "run"], {
     stdio: "inherit",
     shell: process.platform === "win32",
   });

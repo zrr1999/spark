@@ -105,7 +105,7 @@ function terminateProcessTree(child) {
 const temporary = await temporaryRoot();
 try {
   console.log("Building npm product artifact...");
-  await run("pnpm", ["run", "build:npm-product"], {
+  await run("node", ["scripts/build-npm-product.mjs"], {
     cwd: root,
     env: process.env,
     timeout: 300_000,

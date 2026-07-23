@@ -27,8 +27,7 @@
   "scripts": {
     "generate": "node scripts/generate-paraglide.mjs && node scripts/allow-generated-output.mjs",
     "check": "pnpm run generate && vp check --no-fmt --no-lint . && vp test run",
-    "test": "vp test run",
-    "test:mutation": "stryker run"
+    "test": "vp test run"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.20.2",

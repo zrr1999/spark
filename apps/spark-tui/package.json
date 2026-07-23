@@ -18,9 +18,6 @@
     ".": "./src/index.ts",
     "./headless-role-executor": "./src/headless-role-executor.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
     "@zendev-lab/spark-ai": "workspace:^",

@@ -5,7 +5,7 @@ Zellij is the required operator path for real Spark TUI interaction and capture 
 ## Run
 
 ```bash
-pnpm run check:zellij-harness -- --session spark
+node --experimental-strip-types scripts/spark-zellij-harness.mts --session spark
 pnpm exec node --experimental-strip-types scripts/spark-zellij-harness.mts --session spark --strict
 ```
 

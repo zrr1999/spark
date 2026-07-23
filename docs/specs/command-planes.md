@@ -22,7 +22,7 @@ spark <plane> <resource> <verb> [args...]
 
 - Every stateful domain has exactly one authoritative owner. `packages/spark-cockpit-coordination` owns server coordination plus Cockpit query/projection APIs, but its projections are never execution truth for tasks, runs, artifacts, asks, reviews, or invocations.
 - Transports and app adapters translate through owner APIs; they do not duplicate execution or policy, and they must not read or write another owner's store. Cockpit may cache or project Spark state, but it must not mutate local Spark stores directly.
-- Reusable capability and runtime behavior belongs in `packages/spark-*`; executable apps retain bootstrap, presentation, and compatibility glue. Boundary regressions are enforced by `pnpm run check:boundaries`.
+- Reusable capability and runtime behavior belongs in `packages/spark-*`; executable apps retain bootstrap, presentation, and compatibility glue. Boundary regressions are enforced by the dependency-cruiser stage of `pnpm run check`.
 
 ### Capability owners
 
@@ -64,7 +64,7 @@ Spark v0.1 has one public npm product: `@zendev-lab/spark`, exposing the `spark`
 
 The npm package is generated from the checked source tree and contains compiled JavaScript plus the complete runtime closure: dispatcher, native TUI, daemon, database migrations, and built Cockpit assets. It must not execute `.ts` from `node_modules`, depend on an unpublished workspace package, discover a sibling checkout, or require the repository's `PATH`. The source root may remain private as a monorepo safety boundary; the generated package manifest is the public release contract.
 
-`pnpm run check:distribution` validates the explicit public-product/internal-workspace classification and the generated manifest contract. `pnpm run test:npm-product` packs the generated product, installs the tarball in a clean temporary project, and probes dispatcher help, native TUI help, daemon lifecycle/migrations, and Cockpit health under an isolated `SPARK_HOME`. CI must pass this package-only smoke before publication; `pnpm run publish` publishes only that verified generated directory.
+The distribution stage of `pnpm run check` validates the explicit public-product/internal-workspace classification and the generated manifest contract. `pnpm run smoke` packs the generated product, installs the tarball in a clean temporary project, and probes dispatcher help, native TUI help, daemon lifecycle/migrations, and Cockpit health under an isolated `SPARK_HOME`. CI must pass this package-only smoke before publication; `pnpm run publish` publishes only that verified generated directory.
 
 ## Canonical examples
 

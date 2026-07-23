@@ -16,9 +16,6 @@
     "./extension": "./src/extension.ts",
     "./reviewer-runner": "./src/reviewer-runner.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",

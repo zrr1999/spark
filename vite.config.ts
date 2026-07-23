@@ -13,8 +13,8 @@ export default defineConfig({
     // NOTE (Phase 1): Oxlint exposes cyclomatic `complexity` and `max-lines` (not
     // Sonar `cognitive-complexity`). Enabling them as warn across the repo floods
     // stdout and makes `vp check --fix` abort (Vite+ panic: EAGAIN on stdout).
-    // Keep them off the default lint path; `pnpm run check:complexity` enables
-    // only those two rules through CLI overrides for a report-only hotspot scan.
+    // Keep them off the default lint path; `pnpm run report:hygiene` enables
+    // only those two rules through CLI overrides for an advisory hotspot scan.
     overrides: [
       {
         files: [

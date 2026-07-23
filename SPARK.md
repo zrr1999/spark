@@ -81,8 +81,8 @@ inspired_by:
 - 文档与 AGENTS 边界语言已统一为“Pi SDK 内核 + 单一 `spark-extension` 组合根”。
 - 历史 `pi-extension` workspace 已并入 `spark-extension`；`"pi.extensions"` 兼容元数据只允许指向现有 Spark entries。
 - Spark 原生 Side Thread 已通过隔离的真实 TUI/Zellij 验收：提交与繁忙并行拒绝、daemon 重启恢复、model/thinking 配置、全文和摘要 handoff 均由真实 daemon invocation 验证。Cockpit 使用同一 daemon controller 提供完整 BTW 操作；旧 `pi-btw` 包、skill 与 Pi discovery 已删除。
-- 以 `check:architecture` 守住工作区数量、生产文件体量和冻结 Pi manifest；前期 ceiling 保留适度扩展余量，但新增 workspace 仍须证明稳定依赖边界。先分类 Knip/jscpd/complexity 的动态入口误报，再把稳定基线升级为非增长门禁。
-- Spark v0.1 通过生成的自包含 `@zendev-lab/spark` 产物发布 npm；源码 workspace 保持 private，`check:distribution` 校验公开产品与内部 owner 分类，package-only smoke 在仓库外安装 tarball 并验证 dispatcher、TUI、daemon migrations/lifecycle 与 Cockpit health。
+- 以 `pnpm run check` 的 architecture ratchet 守住工作区数量、生产文件体量和冻结 Pi manifest；前期 ceiling 保留适度扩展余量，但新增 workspace 仍须证明稳定依赖边界。先通过 `pnpm run report:hygiene` 分类 Knip/jscpd/complexity 的动态入口误报，再把稳定基线升级为非增长门禁。
+- Spark v0.1 通过生成的自包含 `@zendev-lab/spark` 产物发布 npm；源码 workspace 保持 private，完整 check 校验公开产品与内部 owner 分类，`pnpm run smoke` 在仓库外安装 tarball 并验证 dispatcher、TUI、daemon migrations/lifecycle 与 Cockpit health。
 - 将现有 PR/CI 读取能力收敛成 change delivery feedback 事件，先完成“失败反馈回原 session”，再考虑 GitHub Checks 回写。
 - 会话队列双层收敛：TUI 乐观层 ↔ daemon `pendingTurns` 真相；Cockpit 继续只投影 daemon。
 - `memory` owns durable scoped memory, recall candidates (`recall` tool), the `LearningStore` / `learning` tool, and reflection pipelines (`.spark/memory/reflections/`).

@@ -16,8 +16,7 @@
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint . && vp test run",
-    "test": "vp test run",
-    "test:mutation": "stryker run"
+    "test": "vp test run"
   },
   "dependencies": {
     "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",

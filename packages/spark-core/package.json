@@ -13,8 +13,5 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
   }
 }

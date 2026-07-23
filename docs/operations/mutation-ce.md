@@ -30,7 +30,7 @@ Out of scope: root `test/*.test.ts` (Vitest integration suite; not in mutation C
 
 ```bash
 pnpm run test:mutation
-pnpm --filter @zendev-lab/spark-channels run test:mutation
+pnpm --filter @zendev-lab/spark-channels exec stryker run
 ```
 
 CI: `.github/workflows/ce-mutation.yml` (Monday 03:17 UTC + `workflow_dispatch`, `continue-on-error`, uploads HTML/JSON reports).
