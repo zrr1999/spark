@@ -2932,7 +2932,21 @@ test("SparkAgentLoop retains nextTurn runtime data in its originating session", 
 
   loop.setViewSessionId("session-a");
   host.sendMessage(
-    { customType: "spark-memory-checkpoint", content: "checkpoint payload", display: false },
+    {
+      customType: "spark-memory-checkpoint",
+      deliveryId: "spark-memory-checkpoint:generation-1",
+      content: "checkpoint payload",
+      display: false,
+    },
+    { deliverAs: "nextTurn", triggerTurn: false },
+  );
+  host.sendMessage(
+    {
+      customType: "spark-memory-checkpoint",
+      deliveryId: "spark-memory-checkpoint:generation-1",
+      content: "checkpoint payload",
+      display: false,
+    },
     { deliverAs: "nextTurn", triggerTurn: false },
   );
   loop.setViewSessionId("session-b");
@@ -2952,6 +2966,104 @@ test("SparkAgentLoop retains nextTurn runtime data in its originating session", 
   assert.match(checkpointContext, /spark-memory-checkpoint/u);
   assert.match(checkpointContext, /checkpoint payload/u);
   assert.equal(contexts[1]?.[1]?.content, "session a prompt");
+  assert.equal(
+    loop.getPromptItems().filter((entry) => entry.customType === "spark-memory-checkpoint").length,
+    1,
+  );
+
+  host.sendMessage(
+    {
+      customType: "spark-memory-checkpoint",
+      deliveryId: "spark-memory-checkpoint:generation-1",
+      content: "checkpoint payload",
+      display: false,
+    },
+    { deliverAs: "nextTurn", triggerTurn: false },
+  );
+  await loop.submit("session a second prompt");
+  assert.equal(
+    loop.getPromptItems().filter((entry) => entry.customType === "spark-memory-checkpoint").length,
+    1,
+    "a consumed checkpoint identity is not replayed",
+  );
+});
+
+test("SparkAgentLoop scopes delivery ids by session and bounds consumed history", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-agent-loop-delivery-ledger-test" });
+  const contexts: Message[][] = [];
+  const loop = new SparkAgentLoop({
+    host,
+    streamFunction: (_model, context) => {
+      contexts.push([...context.messages]);
+      const message = buildAssistant([{ type: "text", text: "ok" }]);
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message };
+        },
+        result: async () => message,
+      } as ReturnType<SparkAgentStreamFunction>;
+    },
+    getModel: () => TEST_MODEL,
+  });
+  const checkpoint = (deliveryId: string) => ({
+    customType: "spark-memory-checkpoint",
+    deliveryId,
+    content: deliveryId,
+    display: false,
+  });
+
+  loop.setViewSessionId("session-a");
+  host.sendMessage(checkpoint("shared-id"), { deliverAs: "nextTurn", triggerTurn: false });
+  loop.setViewSessionId("session-b");
+  host.sendMessage(checkpoint("shared-id"), { deliverAs: "nextTurn", triggerTurn: false });
+  await loop.submit("session b prompt");
+  assert.match(messageContentText(contexts[0]?.[0]?.content), /shared-id/u);
+
+  loop.replaceMessages([]);
+  loop.setViewSessionId("session-a");
+  await loop.submit("session a prompt");
+  assert.match(messageContentText(contexts[1]?.[0]?.content), /shared-id/u);
+
+  loop.replaceMessages([]);
+  loop.setViewSessionId("bounded-session");
+  for (let index = 0; index <= 256; index += 1) {
+    host.sendMessage(checkpoint(`bounded-${index}`), {
+      deliverAs: "nextTurn",
+      triggerTurn: false,
+    });
+  }
+  await loop.submit("fill bounded delivery history");
+
+  loop.replaceMessages([]);
+  host.sendMessage(checkpoint("bounded-0"), { deliverAs: "nextTurn", triggerTurn: false });
+  await loop.submit("replay evicted delivery");
+  assert.match(
+    messageContentText(contexts.at(-1)?.[0]?.content),
+    /bounded-0/u,
+    "the oldest identity is evicted once the bounded per-session history is full",
+  );
+
+  for (let index = 0; index <= 64; index += 1) {
+    loop.replaceMessages([]);
+    loop.setViewSessionId(`lru-session-${index}`);
+    host.sendMessage(checkpoint("session-lru-id"), {
+      deliverAs: "nextTurn",
+      triggerTurn: false,
+    });
+    await loop.submit(`fill session ledger ${index}`);
+  }
+  loop.replaceMessages([]);
+  loop.setViewSessionId("lru-session-0");
+  host.sendMessage(checkpoint("session-lru-id"), {
+    deliverAs: "nextTurn",
+    triggerTurn: false,
+  });
+  await loop.submit("replay evicted session delivery");
+  assert.match(
+    messageContentText(contexts.at(-1)?.[0]?.content),
+    /session-lru-id/u,
+    "the oldest session ledger is evicted once the bounded session history is full",
+  );
 });
 
 test("SparkAgentLoop triggerTurn uses queued user instruction without duplicate custom", async () => {

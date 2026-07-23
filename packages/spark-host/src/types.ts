@@ -97,6 +97,8 @@ export interface OutboxEnvelope {
   kind: "custom" | "user";
   /** Session active when the message was enqueued; prevents cross-session drain. */
   sessionId?: string;
+  /** Stable producer identity for idempotent enqueue and turn consumption. */
+  deliveryId?: string;
   customType?: string;
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;

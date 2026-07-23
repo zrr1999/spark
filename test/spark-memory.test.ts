@@ -107,7 +107,10 @@ test("spark memory extension registers only the canonical memory tool by default
     assert.equal(api.messages[0]?.message.customType, "spark-memory-policy");
     assert.match(api.messages[0]?.message.content ?? "", /policy-only/);
 
-    const compactEventResult = await api.handlers.get("session_before_compact")?.({}, { cwd: dir });
+    const compactEventResult = await api.handlers.get("session_before_compact")?.(
+      {},
+      { cwd: dir, sessionId: "session-memory-test" },
+    );
     assert.equal(api.messages[1]?.message.customType, "spark-memory-checkpoint");
     // The checkpoint must ride the next real user prompt, not trigger its own
     // post-compaction turn/request.
@@ -119,6 +122,26 @@ test("spark memory extension registers only the canonical memory tool by default
       "spark-memory-checkpoint",
     );
     assert.match(api.messages[1]?.message.content ?? "", /validation output/);
+    const checkpointDeliveryId = api.messages[1]?.message.deliveryId;
+    assert.match(checkpointDeliveryId ?? "", /^spark-memory-checkpoint:[a-f0-9]{64}$/u);
+    await api.handlers.get("session_before_compact")?.(
+      {},
+      { cwd: dir, sessionId: "session-memory-test" },
+    );
+    assert.equal(
+      api.messages[2]?.message.deliveryId,
+      checkpointDeliveryId,
+      "unchanged memory content keeps a stable checkpoint delivery identity",
+    );
+    await api.handlers.get("session_before_compact")?.(
+      {},
+      { cwd: dir, sessionId: "session-memory-other" },
+    );
+    assert.notEqual(
+      api.messages[3]?.message.deliveryId,
+      checkpointDeliveryId,
+      "checkpoint identities remain session-scoped",
+    );
 
     const status = await tool.execute(
       "call-3",
@@ -388,6 +411,7 @@ class FakeApi {
   readonly messages: Array<{
     message: {
       customType: string;
+      deliveryId?: string;
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
@@ -411,6 +435,7 @@ class FakeApi {
   sendMessage(
     message: {
       customType: string;
+      deliveryId?: string;
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
