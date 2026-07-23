@@ -117,8 +117,6 @@
         "./packages/spark-cockpit-coordination/src/security.ts"
       ],
       "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],
-      "@zendev-lab/pi-extension/extension": ["./packages/pi-extension/src/extension/index.ts"],
-      "@zendev-lab/pi-extension/host-support": ["./packages/pi-extension/src/host-support.ts"],
       "@zendev-lab/spark-extension/extension": ["./packages/spark-extension/src/extension.ts"],
       "@zendev-lab/spark-extension/host-support": [
         "./packages/spark-extension/src/host-support.ts"

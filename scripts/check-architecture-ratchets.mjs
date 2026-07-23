@@ -160,6 +160,18 @@ for (const extension of compatibilityExtensions) {
   }
 }
 
+const tsconfig = readJson(join(root, "tsconfig.base.json"));
+for (const [specifier, targets] of Object.entries(tsconfig.compilerOptions?.paths ?? {})) {
+  if (
+    specifier.includes("pi-extension") ||
+    (Array.isArray(targets) && targets.some((target) => target.includes("packages/pi-extension/")))
+  ) {
+    failures.push(
+      `Retired pi-extension facade remains in tsconfig path mapping ${specifier}. Legacy config migration must not recreate a source workspace alias.`,
+    );
+  }
+}
+
 if (failures.length > 0) {
   console.error(
     ["Architecture ratchet failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"),
