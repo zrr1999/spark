@@ -4,6 +4,7 @@ import {
   writeTextFileAtomic,
   type ExtensionRoleRunInputController,
   type ExtensionRoleRunner,
+  type RoleRunCompletionOutcome,
 } from "@zendev-lab/spark-core";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { resolveRoleNativeExecutor } from "./native-executor.ts";
@@ -73,6 +74,7 @@ export interface RoleRunRecord {
   runName?: string;
   instruction: string;
   status: RoleRunStatus;
+  outcome?: RoleRunCompletionOutcome;
   outputArtifactRef?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -108,6 +110,8 @@ export interface RoleRunCommandInput extends RoleRunRequest {
 export interface RoleRunLauncherInput extends RoleRunCommandInput {
   runRef: RoleRunRef;
   cwd: string;
+  phase?: "plan" | "implement";
+  requireStructuredOutcome?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   now?: () => string;
@@ -137,6 +141,7 @@ export interface RoleRunResult {
     failureKind?: string;
     errorMessage?: string;
   };
+  outcome?: RoleRunCompletionOutcome;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
@@ -1438,6 +1443,8 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
       },
       cwd: input.cwd,
       timeoutMs,
+      phase: input.phase ?? "implement",
+      requireStructuredOutcome: input.requireStructuredOutcome ?? false,
       signal: abortController.signal,
       ...(input.sessionDir ? { sessionDir: input.sessionDir } : {}),
       launch,
@@ -1479,6 +1486,7 @@ export async function runRole(input: RoleRunLauncherInput): Promise<RoleRunResul
         forkFromSession: launch === "forked" ? input.forkFromSession?.trim() : undefined,
         ...(input.noSession ? { noSession: true, sessionPersistence: "anonymous" as const } : {}),
       },
+      outcome: result.outcome ?? result.record.outcome,
       stdout: result.stdout,
       stderr: result.stderr,
       jsonEvents: result.jsonEvents,

@@ -192,6 +192,36 @@ test("Spark role-run completion message renderer supports compact and expanded d
   assert.match(expanded, /completed/);
 });
 
+test("Spark role-run TUI treats blocked workers as visible terminal results", () => {
+  const blocked = taskRun({
+    ref: "run:dddddddd44444444" as RunRef,
+    status: "blocked",
+    finishedAt: "2026-06-17T00:00:12.000Z",
+    failureKind: "blocked",
+    errorMessage: "Authorization is required",
+    outcome: {
+      kind: "blocked",
+      code: "missing_authorization",
+      reason: "Authorization is required",
+      nextAction: "Ask the owner session",
+    },
+  });
+  const snapshot = buildSparkRoleRunRegistry({
+    graph: graphWithRuns([blocked]),
+    now: "2026-06-17T00:00:30.000Z",
+  });
+  const entry = snapshot.entries[0] as SparkRoleRunRegistryEntry;
+
+  assert.equal(formatSparkRoleRunStatusSummary(snapshot), "roles: blocked=1");
+  const board = renderSparkRoleRunBoardLines(snapshot, {}, { width: 120 }, theme).join("\n");
+  assert.match(board, /blocked=1/u);
+  const completion = renderSparkRoleRunCompletionMessageLines(entry, { width: 120 }, theme).join(
+    "\n",
+  );
+  assert.match(completion, /worker blocked/u);
+  assert.match(completion, /Authorization is required/u);
+});
+
 test("Spark extension role-run surfaces are no-op safe without UI", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-role-run-tui-no-ui-"));
   try {

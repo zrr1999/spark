@@ -5,9 +5,11 @@ import type {
   ExtensionInteractionRequest,
   ExtensionInteractionResponse,
   ExtensionRoleRunInputControl,
+  RoleRunCompletionOutcome,
   RoleRef,
   RunRef,
   SparkHostDriverContext,
+  ToolConfig,
   ToolEffect,
 } from "@zendev-lab/spark-core";
 
@@ -56,9 +58,12 @@ export interface SparkHeadlessRoleInstructionInput {
     forkFromSession?: string;
     noSession?: boolean;
     sessionPersistence?: "anonymous" | "persistent";
+    outcome?: RoleRunCompletionOutcome;
   };
   cwd: string;
   timeoutMs: number;
+  phase?: "plan" | "implement";
+  requireStructuredOutcome?: boolean;
   signal?: AbortSignal;
   sessionDir?: string;
   runName?: string;
@@ -73,6 +78,7 @@ export interface SparkHeadlessRoleInstructionInput {
 
 export interface SparkHeadlessRoleInstructionResult {
   record: SparkHeadlessRoleInstructionInput["record"];
+  outcome: RoleRunCompletionOutcome;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
@@ -271,6 +277,7 @@ export async function runSparkHeadlessRoleInstruction(
   const startedAt = input.record.startedAt ?? new Date().toISOString();
   const jsonEvents: unknown[] = [];
   const createServices = options.createServices ?? createSparkCliHostServices;
+  let reportedOutcome: RoleRunCompletionOutcome | undefined;
   const services = await createServices({
     cwd: input.cwd,
     sparkHome: options.sparkHome,
@@ -278,6 +285,7 @@ export async function runSparkHeadlessRoleInstruction(
     hasUI: false,
     systemPrompt: input.role.systemPrompt,
     approvalMethod: "auto",
+    executionPhase: input.phase ?? "implement",
   } satisfies SparkCliHostServicesOptions);
   throwIfHeadlessAborted(input.signal);
 
@@ -287,15 +295,22 @@ export async function runSparkHeadlessRoleInstruction(
   };
 
   applyAllowedTools(services, input.role.allowedTools);
+  registerRoleOutcomeTool(services, (outcome) => {
+    if (reportedOutcome)
+      throw new Error("role_report_outcome may only be called once per role run");
+    reportedOutcome = outcome;
+  });
   if (input.model?.trim()) {
     try {
       selectHeadlessModel(services, input.model.trim());
     } catch (error) {
       recordEvent(providerResolutionFailedEvent(input.model.trim(), error));
+      const outcome = failedRoleRunOutcome("provider_resolution_failed", errorMessage(error));
       return {
         record: {
           ...input.record,
           status: "failed",
+          outcome,
           startedAt,
           finishedAt: new Date().toISOString(),
           launch,
@@ -304,6 +319,7 @@ export async function runSparkHeadlessRoleInstruction(
             ? { noSession: true, sessionPersistence: "anonymous" as const }
             : { sessionPersistence: "persistent" as const }),
         },
+        outcome,
         stdout: "",
         stderr: [renderDiagnostics(services.diagnostics), errorMessage(error)]
           .filter(Boolean)
@@ -345,11 +361,19 @@ export async function runSparkHeadlessRoleInstruction(
       input.timeoutMs,
       abort,
     );
-    const status = statusForOutcome(result.outcome, result.assistant, input.signal);
+    const outcome = completionOutcomeForRun(
+      result.outcome,
+      result.assistant,
+      input.signal,
+      reportedOutcome,
+      input.requireStructuredOutcome === true,
+    );
+    const status = statusForCompletionOutcome(outcome);
     return {
       record: {
         ...input.record,
         status,
+        outcome,
         startedAt,
         finishedAt: new Date().toISOString(),
         launch,
@@ -360,16 +384,21 @@ export async function runSparkHeadlessRoleInstruction(
           ? { noSession: true, sessionPersistence: "anonymous" as const }
           : { sessionPersistence: "persistent" as const }),
       },
+      outcome,
       stdout: result.assistantText,
       stderr: renderDiagnostics(services.diagnostics),
       jsonEvents,
     };
   } catch (error) {
     const aborted = Boolean(input.signal?.aborted);
+    const outcome = aborted
+      ? cancelledRoleRunOutcome(abortReason(input.signal))
+      : failedRoleRunOutcome(errorCode(error), errorMessage(error));
     return {
       record: {
         ...input.record,
         status: aborted ? "cancelled" : "failed",
+        outcome,
         startedAt,
         finishedAt: new Date().toISOString(),
         launch,
@@ -379,6 +408,7 @@ export async function runSparkHeadlessRoleInstruction(
           ? { noSession: true, sessionPersistence: "anonymous" as const }
           : { sessionPersistence: "persistent" as const }),
       },
+      outcome,
       stdout: "",
       stderr: [renderDiagnostics(services.diagnostics), errorMessage(error)]
         .filter(Boolean)
@@ -510,25 +540,128 @@ function providerResolutionFailedEvent(modelSelector: string, error: unknown): u
   };
 }
 
-function statusForAssistant(
-  assistant: AssistantMessage | undefined,
-  signal: AbortSignal | undefined,
-): SparkHeadlessRoleRunStatus {
-  if (signal?.aborted || assistant?.stopReason === "aborted") return "cancelled";
-  if (!assistant || assistant.stopReason === "error") return "failed";
-  return "succeeded";
+function statusForCompletionOutcome(outcome: RoleRunCompletionOutcome): SparkHeadlessRoleRunStatus {
+  if (outcome.kind === "completed") return "succeeded";
+  if (outcome.kind === "cancelled") return "cancelled";
+  return "failed";
 }
 
-function statusForOutcome(
+function completionOutcomeForRun(
   outcome: SparkRunOutcome | undefined,
   assistant: AssistantMessage | undefined,
   signal: AbortSignal | undefined,
-): SparkHeadlessRoleRunStatus {
-  if (signal?.aborted) return "cancelled";
-  if (!outcome) return statusForAssistant(assistant, signal);
-  if (outcome.status === "completed") return "succeeded";
-  if (outcome.status === "aborted") return "cancelled";
-  return "failed";
+  reportedOutcome: RoleRunCompletionOutcome | undefined,
+  requireStructuredOutcome: boolean,
+): RoleRunCompletionOutcome {
+  if (signal?.aborted) return cancelledRoleRunOutcome(abortReason(signal));
+  if (outcome?.status === "aborted") return cancelledRoleRunOutcome(outcome.reason);
+  if (outcome?.status === "failed")
+    return failedRoleRunOutcome("provider_failure", outcome.errorMessage);
+  if (!outcome && (!assistant || assistant.stopReason === "error")) {
+    return failedRoleRunOutcome(
+      "assistant_error",
+      assistant?.errorMessage?.trim() ||
+        "Spark headless role produced no successful assistant response",
+    );
+  }
+  if (assistant?.stopReason === "aborted") return cancelledRoleRunOutcome("assistant_aborted");
+  if (reportedOutcome) return reportedOutcome;
+  if (!requireStructuredOutcome) {
+    return {
+      kind: "completed",
+      code: "role_run_completed",
+      reason: "Spark headless role execution completed",
+    };
+  }
+  return failedRoleRunOutcome(
+    "missing_structured_outcome",
+    "Spark headless role ended without calling role_report_outcome",
+    "Call role_report_outcome with completed, blocked, failed, or cancelled and a machine-readable reason.",
+  );
+}
+
+function failedRoleRunOutcome(
+  code: string,
+  reason: string,
+  nextAction?: string,
+): RoleRunCompletionOutcome {
+  return {
+    kind: "failed",
+    code: code.trim() || "role_run_failed",
+    reason: reason.trim() || "Spark headless role execution failed",
+    ...(nextAction?.trim() ? { nextAction: nextAction.trim() } : {}),
+  };
+}
+
+function cancelledRoleRunOutcome(reason: string): RoleRunCompletionOutcome {
+  return {
+    kind: "cancelled",
+    code: "role_run_cancelled",
+    reason: reason.trim() || "Spark headless role execution was cancelled",
+  };
+}
+
+function registerRoleOutcomeTool(
+  services: Awaited<ReturnType<typeof createSparkCliHostServices>>,
+  setOutcome: (outcome: RoleRunCompletionOutcome) => void,
+): void {
+  const tool: ToolConfig = {
+    name: "role_report_outcome",
+    description:
+      "Record the structured terminal outcome of this worker task. Call exactly once before ending the role run.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["completed", "blocked", "failed", "cancelled"] },
+        code: { type: "string" },
+        reason: { type: "string" },
+        nextAction: { type: "string" },
+      },
+      required: ["kind", "code", "reason"],
+      additionalProperties: false,
+    },
+    policy: {
+      effect: "local_write",
+      executionMode: "sequential",
+      phases: ["implement"],
+      approval: "none",
+    },
+    async execute(_toolCallId, params) {
+      const { kind, code, reason } = params;
+      if (
+        (kind !== "completed" && kind !== "blocked" && kind !== "failed" && kind !== "cancelled") ||
+        typeof code !== "string" ||
+        !code.trim() ||
+        typeof reason !== "string" ||
+        !reason.trim()
+      ) {
+        throw new Error("role_report_outcome requires kind, non-empty code, and non-empty reason");
+      }
+      const reported: RoleRunCompletionOutcome = {
+        kind,
+        code: code.trim(),
+        reason: reason.trim(),
+        ...(typeof params.nextAction === "string" && params.nextAction.trim()
+          ? { nextAction: params.nextAction.trim() }
+          : {}),
+      };
+      setOutcome(reported);
+      return {
+        content: [{ type: "text", text: `Recorded ${reported.kind} outcome (${reported.code}).` }],
+      };
+    },
+  };
+  services.runtime.registerTool(tool);
+  const activeTools = services.runtime.getActiveTools();
+  if (!activeTools.includes(tool.name)) {
+    services.runtime.setActiveTools([...activeTools, tool.name]);
+  }
+}
+
+function errorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "role_run_failed";
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.trim() ? code.trim().toLowerCase() : "role_run_failed";
 }
 
 function assertSuccessfulHeadlessSessionOutcome(

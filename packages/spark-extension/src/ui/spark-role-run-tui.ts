@@ -29,7 +29,12 @@ export interface SparkRoleRunTuiRenderOptions {
 
 const MAX_ROLE_RUN_BOARD_LINES = 8;
 const RECENT_TERMINAL_MS = 10 * 60_000;
-const TERMINAL_STATUSES = new Set<SparkRoleRunObservedStatus>(["done", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set<SparkRoleRunObservedStatus>([
+  "done",
+  "blocked",
+  "failed",
+  "cancelled",
+]);
 const PROBLEM_STATUSES = new Set<SparkRoleRunObservedStatus>(["interrupted", "stale"]);
 const ACTIVE_STATUSES = new Set<SparkRoleRunObservedStatus>(["queued", "waiting", "running"]);
 
@@ -39,7 +44,17 @@ export function formatSparkRoleRunStatusSummary(
   const visible = visibleRoleRunEntries(snapshot, { now: snapshot.generatedAt });
   if (visible.length === 0) return undefined;
   const parts = (
-    ["running", "waiting", "queued", "failed", "stale", "interrupted", "cancelled", "done"] as const
+    [
+      "running",
+      "waiting",
+      "queued",
+      "blocked",
+      "failed",
+      "stale",
+      "interrupted",
+      "cancelled",
+      "done",
+    ] as const
   )
     .map((status) => {
       const count = visible.filter((entry) => entry.status === status).length;
@@ -135,7 +150,7 @@ function formatRoleRunHeader(
 ): string {
   const counts = new Map<SparkRoleRunObservedStatus, number>();
   for (const entry of entries) counts.set(entry.status, (counts.get(entry.status) ?? 0) + 1);
-  const summary = (["running", "waiting", "queued", "failed", "stale", "done"] as const)
+  const summary = (["running", "waiting", "queued", "blocked", "failed", "stale", "done"] as const)
     .map((status) => {
       const count = counts.get(status) ?? 0;
       return count > 0 ? `${status}=${count}` : undefined;
@@ -184,6 +199,7 @@ function lastActivityText(entry: SparkRoleRunRegistryEntry): string | undefined 
   if (event.toolName) return `tool ${event.toolName}`;
   if (event.message) return event.message.replace(/\s+/gu, " ").trim();
   if (event.type === "completed") return "done";
+  if (event.type === "blocked") return "blocked";
   if (event.type === "failed") return "failed";
   if (event.type === "stopped") return "stopped";
   if (event.type === "waiting_for_user") return "waiting for user";
@@ -234,6 +250,8 @@ function statusIcon(status: SparkRoleRunObservedStatus, theme: SparkRoleRunTuiTh
       return fg(theme, "warning", "◼");
     case "done":
       return fg(theme, "success", "✓");
+    case "blocked":
+      return fg(theme, "warning", "!");
     case "failed":
     case "stale":
       return fg(theme, "error", "✗");

@@ -174,6 +174,13 @@ function formatRoleRunCompletionLine(summary: TaskRunCompletionSummary): string 
 }
 
 function hiddenRoleRunNextAction(summary: TaskRunCompletionSummary): string {
+  if (summary.status === "blocked") {
+    const blocker = summary.outcome?.reason ?? summary.summary;
+    const nextAction = summary.outcome?.nextAction;
+    return nextAction
+      ? `resolve blocker: ${blocker}; next=${nextAction}`
+      : `resolve blocker: ${blocker}; then rerun the ready frontier`;
+  }
   if (summary.status === "failed") {
     return `inspect with task_read({ action: "run_status", runAction: "inspect", runRef: "${summary.runRef}" }); fix the failure cause, then rerun the ready frontier`;
   }
@@ -186,5 +193,9 @@ function hiddenRoleRunNextAction(summary: TaskRunCompletionSummary): string {
 function cloneTaskRunCompletionSummary(
   summary: TaskRunCompletionSummary,
 ): TaskRunCompletionSummary {
-  return { ...summary, artifactRefs: [...summary.artifactRefs] };
+  return {
+    ...summary,
+    artifactRefs: [...summary.artifactRefs],
+    outcome: summary.outcome ? { ...summary.outcome } : undefined,
+  };
 }

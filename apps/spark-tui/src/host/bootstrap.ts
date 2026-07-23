@@ -122,6 +122,8 @@ export interface SparkCliHostServicesOptions {
   modelPicker?: SparkModelPicker;
   systemPrompt?: string;
   noPromptTemplates?: boolean;
+  /** Scheduler-owned role runs pin phase independently of persisted session phase. */
+  executionPhase?: "plan" | "implement";
   /** Per-model-stream wall-clock deadline; <=0 disables it. Default disabled. */
   streamTimeoutMs?: number;
   /** Abort a model stream after this long with no events; <=0 disables. */
@@ -358,7 +360,7 @@ export async function createSparkCliHostServices(
           selectedSkillsPrompt,
         );
         agentLoop.setSystemPrompt(promptState.systemPrompt);
-        agentLoop.setCurrentPhase(promptState.phase);
+        agentLoop.setCurrentPhase(options.executionPhase ?? promptState.phase);
       }
     },
     finishUserSubmit: () => clearRequestSkillSelection(),
@@ -394,7 +396,7 @@ export async function createSparkCliHostServices(
       };
     },
   });
-  agentLoop.setCurrentPhase(initialPromptState.phase);
+  agentLoop.setCurrentPhase(options.executionPhase ?? initialPromptState.phase);
   clearRequestSkillSelection = () => {
     const hadSelection = selectedSkillMatches.length > 0 || selectedSkillsPrompt.length > 0;
     selectedSkillMatches = [];
@@ -411,6 +413,19 @@ export async function createSparkCliHostServices(
     );
   };
   runtime.on("before_agent_start", async (event, ctx) => {
+    if (options.executionPhase) {
+      agentLoop.setSystemPrompt(
+        composeSparkCliAgentSystemPrompt(
+          cwd,
+          baseSystemPrompt,
+          skillsCatalogPrompt,
+          selectedSkillsPrompt,
+          options.executionPhase,
+        ),
+      );
+      agentLoop.setCurrentPhase(options.executionPhase);
+      return;
+    }
     if (sparkAgentLifecycleSource(event) === "triggerTurn") {
       // Driver/background turns (goal, loop, repro, scheduled continuations)
       // are not assist-plan turns. Do not inherit a request skill body or a

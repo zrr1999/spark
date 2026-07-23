@@ -1,5 +1,6 @@
 import type {
   ArtifactRef,
+  RoleRunCompletionOutcome,
   RoleRef,
   RunRef,
   TaskRef,
@@ -92,6 +93,7 @@ export type SparkBackgroundChildStatus =
   | "running"
   | "queued"
   | "succeeded"
+  | "blocked"
   | "failed"
   | "cancelled"
   | "unknown";
@@ -134,6 +136,7 @@ export interface SparkBackgroundChildRunView {
   status: SparkBackgroundChildStatus;
   summary?: string;
   errorMessage?: string;
+  outcome?: RoleRunCompletionOutcome;
   artifactRefs: ArtifactRef[];
   transcriptRef?: ArtifactRef;
   stdoutTail?: RoleRunTextTail;

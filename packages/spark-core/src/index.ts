@@ -607,6 +607,16 @@ export type ExtensionRoleRunStatus =
   | "cancelled"
   | "not_started";
 
+export type RoleRunCompletionOutcomeKind = "completed" | "blocked" | "failed" | "cancelled";
+
+export interface RoleRunCompletionOutcome {
+  kind: RoleRunCompletionOutcomeKind;
+  /** Stable machine-readable terminal code; never infer this from display text. */
+  code: string;
+  reason: string;
+  nextAction?: string;
+}
+
 export interface ExtensionRoleRunInputController {
   send(text: string): void | Promise<void>;
 }
@@ -641,9 +651,12 @@ export interface ExtensionRoleRunRequest {
     forkFromSession?: string;
     noSession?: boolean;
     sessionPersistence?: "anonymous" | "persistent";
+    outcome?: RoleRunCompletionOutcome;
   };
   cwd: string;
   timeoutMs: number;
+  phase?: "plan" | "implement";
+  requireStructuredOutcome?: boolean;
   signal?: AbortSignal;
   sessionDir?: string;
   runName?: string;
@@ -659,6 +672,7 @@ export interface ExtensionRoleRunRequest {
 
 export interface ExtensionRoleRunResult {
   record: ExtensionRoleRunRequest["record"];
+  outcome?: RoleRunCompletionOutcome;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
@@ -1212,8 +1226,14 @@ export interface TaskProposal {
   rationale: string;
 }
 
-export type TaskRunFailureKind = "runtime_timeout" | "runtime_error" | "claim_stale";
-export type TaskRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type TaskRunFailureKind =
+  | "runtime_timeout"
+  | "runtime_error"
+  | "runtime_cancelled"
+  | "claim_stale"
+  | "blocked"
+  | "provider_failure";
+export type TaskRunStatus = "queued" | "running" | "succeeded" | "blocked" | "failed" | "cancelled";
 
 export interface TaskRunCompletionSummary {
   runRef: RunRef;
@@ -1223,6 +1243,7 @@ export interface TaskRunCompletionSummary {
   status: TaskRunStatus;
   summary: string;
   artifactRefs: ArtifactRef[];
+  outcome?: RoleRunCompletionOutcome;
   createdAt: string;
 }
 
@@ -1238,6 +1259,7 @@ export interface TaskRun {
   status: TaskRunStatus;
   failureKind?: TaskRunFailureKind;
   errorMessage?: string;
+  outcome?: RoleRunCompletionOutcome;
   startedAt?: string;
   finishedAt?: string;
   outputArtifacts: ArtifactRef[];

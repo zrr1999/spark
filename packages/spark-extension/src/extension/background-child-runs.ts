@@ -107,6 +107,7 @@ export function collectBackgroundChildRuns(input: {
       status,
       summary: taskRun?.completionSummary?.summary,
       errorMessage: taskRun?.errorMessage,
+      outcome: taskRun?.outcome ? { ...taskRun.outcome } : undefined,
       artifactRefs: [
         ...(taskRun?.completionSummary?.artifactRefs ?? []),
         ...(taskRun?.outputArtifacts ?? []).filter(
@@ -155,6 +156,12 @@ function backgroundChildNextAction(child: SparkBackgroundChildRunView): string |
     return `wait for completion, reply/steer with a selected target, or kill ${child.runRef} if this child is non-responsive`;
   if (child.activeProcess)
     return `wait for completion, or kill ${child.runRef} if this child is non-responsive`;
+  if (child.status === "blocked") {
+    const detail = child.outcome?.nextAction ?? child.outcome?.reason;
+    return detail
+      ? `resolve blocker: ${detail}`
+      : "inspect the blocked run, resolve its blocker, then rerun";
+  }
   if (child.status === "failed")
     return "inspect failed task/run evidence, fix the cause, then rerun";
   if (child.status === "queued" || child.status === "running")
@@ -170,13 +177,15 @@ function taskRunStatusRank(status: SparkBackgroundChildStatus): number {
       return 1;
     case "queued":
       return 2;
-    case "failed":
+    case "blocked":
       return 3;
-    case "cancelled":
+    case "failed":
       return 4;
-    case "succeeded":
+    case "cancelled":
       return 5;
-    case "unknown":
+    case "succeeded":
       return 6;
+    case "unknown":
+      return 7;
   }
 }

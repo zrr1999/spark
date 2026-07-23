@@ -86,15 +86,19 @@ function formatWorkflowRunCompletionDigest(summaries: TaskRunCompletionSummary[]
 function cloneTaskRunCompletionSummary(
   summary: TaskRunCompletionSummary,
 ): TaskRunCompletionSummary {
-  return { ...summary, artifactRefs: [...summary.artifactRefs] };
+  return {
+    ...summary,
+    artifactRefs: [...summary.artifactRefs],
+    outcome: summary.outcome ? { ...summary.outcome } : undefined,
+  };
 }
 
 function workflowRunNextActions(run: WorkflowRunRecord): string[] {
   const nextActions: string[] = [];
   if (run.status === "failed") {
     nextActions.push(
-      'failed: inspect task_read({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the failed or cancelled child run.',
-      "failed: fix the task, executor, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
+      'failed: inspect task_read({ action: "run_status", runAction: "inspect" }) plus child task-run artifacts/logs to find the blocked, failed, or cancelled child run.',
+      "failed: resolve the blocker or fix the task, executor, model, or dependency error, then rerun ready background work for the remaining ready frontier.",
     );
   } else if (run.status === "stale") {
     nextActions.push(

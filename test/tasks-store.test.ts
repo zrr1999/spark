@@ -16,6 +16,7 @@ import {
   newRef,
   nowIso,
   type RoleRef,
+  type RoleRunCompletionOutcome,
   type RunRef,
   type TaskPlan,
   type TaskRef,
@@ -153,17 +154,42 @@ function testRoleRunResult(
   input: SparkRoleInstructionExecutorInput,
   options: {
     status?: SparkRoleRunResult["record"]["status"];
+    outcome?: RoleRunCompletionOutcome;
     stdout?: string;
     stderr?: string;
     jsonEvents?: unknown[];
   } = {},
 ): SparkRoleRunResult {
+  const status = options.status ?? "succeeded";
+  const outcome =
+    options.outcome ??
+    (status === "succeeded"
+      ? {
+          kind: "completed" as const,
+          code: "test_role_completed",
+          reason: "Test role completed its assigned contract",
+        }
+      : status === "cancelled"
+        ? {
+            kind: "cancelled" as const,
+            code: "test_role_cancelled",
+            reason: "Test role was cancelled",
+          }
+        : status === "failed"
+          ? {
+              kind: "failed" as const,
+              code: "test_role_failed",
+              reason: "Test role failed",
+            }
+          : undefined);
   return {
     record: {
       ...input.record,
-      status: options.status ?? "succeeded",
+      status,
+      outcome,
       finishedAt: nowIso(),
     },
+    outcome,
     stdout: options.stdout ?? "",
     stderr: options.stderr ?? "",
     jsonEvents: options.jsonEvents ?? [],
@@ -2666,20 +2692,19 @@ test("Spark DAG manager reports widget refresh failures without failing complete
           notifications.push({ message, level });
         },
       },
-      runRole: async (input) => ({
-        record: { ...input.record, status: "succeeded", finishedAt: nowIso() },
-        stdout: "completed work before widget refresh\n",
-        stderr: "",
-        jsonEvents: [
-          {
-            type: "message_end",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "completed work before widget refresh" }],
+      runRole: async (input) =>
+        testRoleRunResult(input, {
+          stdout: "completed work before widget refresh\n",
+          jsonEvents: [
+            {
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "completed work before widget refresh" }],
+              },
             },
-          },
-        ],
-      }),
+          ],
+        }),
     });
 
     const stored = await defaultTaskGraphStore(dir).load();
@@ -3601,10 +3626,8 @@ test("runReadyTasks assigns default roles and schedules DAG waves with maxConcur
         cwd: dir,
         roleExecutor: async (input) => {
           await new Promise((resolve) => setTimeout(resolve, 50));
-          return {
-            record: { ...input.record, status: "succeeded", finishedAt: nowIso() },
+          return testRoleRunResult(input, {
             stdout: "ready task completed\n",
-            stderr: "",
             jsonEvents: [
               {
                 type: "message_end",
@@ -3614,7 +3637,7 @@ test("runReadyTasks assigns default roles and schedules DAG waves with maxConcur
                 },
               },
             ],
-          };
+          });
         },
       }),
       dryRun: false,
@@ -3692,14 +3715,8 @@ test("runReadyTasks uses daemon-native role executor when provided", async () =>
         cwd: dir,
         roleExecutor: async (input) => {
           seen.push(input.role.ref, input.record.ref, input.instruction.instruction);
-          return {
-            record: {
-              ...input.record,
-              status: "succeeded",
-              finishedAt: "2026-07-07T00:00:00.000Z",
-            },
+          return testRoleRunResult(input, {
             stdout: "native ready task result",
-            stderr: "",
             jsonEvents: [
               {
                 type: "message_end",
@@ -3709,7 +3726,7 @@ test("runReadyTasks uses daemon-native role executor when provided", async () =>
                 },
               },
             ],
-          };
+          });
         },
       }),
       dryRun: false,
@@ -3793,11 +3810,11 @@ test("runReadyTasks aborts launched child work when schedule hook fails", async 
       listActiveSparkRoleRunProcesses().some((entry) => entry.cwd === dir),
       false,
     );
-    assert.equal(graph.getTask(task.ref).status, "failed");
+    assert.equal(graph.getTask(task.ref).status, "cancelled");
     assert.equal(graph.getTask(task.ref).claim, undefined);
     const runs = graph.runs(project.ref).filter((run) => run.taskRef === task.ref);
     assert.equal(runs.length, 1);
-    assert.equal(runs[0]?.status, "failed");
+    assert.equal(runs[0]?.status, "cancelled");
     assert.match(runs[0]?.errorMessage ?? "", /ready task scheduler aborted/);
   } finally {
     await killActiveSparkRoleRunProcesses({ forceAfterMs: 0, waitMs: 1_000 });
@@ -3869,9 +3886,70 @@ test("runReadyTasks reports failed child runs in aggregate result", async () => 
     assert.equal(result.scheduled, 1);
     assert.equal(result.completed, 1);
     assert.equal(result.succeeded, 0);
+    assert.equal(result.blocked, 0);
     assert.equal(result.failed, 1);
     assert.equal(result.cancelled, 0);
     assert.equal(graph.getTask(task.ref).status, "failed");
+  } finally {
+    await killActiveSparkRoleRunProcesses();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runReadyTasks and workflow storage preserve blocked child aggregation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-ready-child-blocked-"));
+  try {
+    const graph = new TaskGraph();
+    const project = graph.createProject({ title: "Blocked", description: "blocked child" });
+    const task = graph.createTask({
+      projectRef: project.ref,
+      title: "Await authorization",
+      description: "Report the authorization blocker.",
+      roleRef: builtinRoleRef("worker"),
+      plan: executionReadyPlan("Await authorization"),
+    });
+    const outcome: RoleRunCompletionOutcome = {
+      kind: "blocked",
+      code: "missing_authorization",
+      reason: "Authorization is required",
+      nextAction: "Ask the owner session",
+    };
+    const result = await runReadyTasks({
+      graph,
+      ...createSparkRuntimeReadyTaskRunner({
+        registry: new RoleRegistry(),
+        cwd: dir,
+        roleExecutor: async (input) =>
+          testRoleRunResult(input, {
+            status: "failed",
+            outcome,
+            stdout: "blocked",
+          }),
+      }),
+      dryRun: false,
+      timeoutMs: 5_000,
+      claim: { sessionId: "session:parent" },
+    });
+
+    assert.equal(result.scheduled, 1);
+    assert.equal(result.completed, 1);
+    assert.equal(result.succeeded, 0);
+    assert.equal(result.blocked, 1);
+    assert.equal(result.failed, 0);
+    assert.equal(result.cancelled, 0);
+    assert.equal(graph.getTask(task.ref).status, "blocked");
+
+    const store = defaultWorkflowRunStore(dir);
+    const workflow = await store.startRun({
+      projectRef: project.ref,
+      dryRun: false,
+      maxConcurrency: 1,
+      timeoutMs: 5_000,
+    });
+    await store.finishRun(workflow.ref, result);
+    const status = await store.status();
+    assert.equal(status.lastRun?.status, "failed");
+    assert.match(status.lastRun?.errorMessage ?? "", /blocked=1 failed=0 cancelled=0/u);
   } finally {
     await killActiveSparkRoleRunProcesses();
     await rm(dir, { recursive: true, force: true });

@@ -120,6 +120,33 @@ test("Spark role-run registry serialization is reload-safe JSON data", () => {
   assert.equal(snapshot.entries[0].events[0].provenance.source, "task-graph");
 });
 
+test("Spark role-run registry preserves blocked outcome provenance", () => {
+  const outcome = {
+    kind: "blocked" as const,
+    code: "missing_authorization",
+    reason: "Authorization is required",
+    nextAction: "Ask the owner session to authorize the operation",
+  };
+  const run = taskRun({
+    ref: "run:blocked" as RunRef,
+    status: "blocked",
+    finishedAt: "2026-06-17T00:00:09.000Z",
+    failureKind: "blocked",
+    errorMessage: outcome.reason,
+    outcome,
+  });
+  const snapshot = buildSparkRoleRunRegistry({ graph: graphWithRuns([run]) });
+  const entry = findSparkRoleRunRegistryEntry(snapshot, run.ref);
+
+  assert.equal(entry?.status, "blocked");
+  assert.deepEqual(entry?.outcome, outcome);
+  assert.equal(entry?.events.at(-1)?.type, "blocked");
+  assert.equal(entry?.events.at(-1)?.message, outcome.reason);
+  assert.equal(snapshot.counts.blocked, 1);
+  const serialized = serializeSparkRoleRunRegistry(snapshot);
+  assert.deepEqual(serialized.entries[0]?.outcome, outcome);
+});
+
 test("Spark role-run protocol carries parent links, usage, activity, and stopped events", () => {
   const run = taskRun({
     ref: "run:child" as RunRef,

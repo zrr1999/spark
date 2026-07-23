@@ -8,6 +8,7 @@ import {
   listActiveRoleRuns,
   parsePiJsonlEvents,
   resolveRoleModelSetting,
+  RoleRunCancelledError as PiRoleRunCancelledError,
   RoleRunTimeoutError as PiRoleRunTimeoutError,
   runRole,
   sendInputToRoleRun,
@@ -25,6 +26,7 @@ import {
   nowIso,
   refId,
   type RoleRef,
+  type RoleRunCompletionOutcome,
   type RunRef,
   type Task,
   type TaskRef,
@@ -72,6 +74,7 @@ export interface SparkRoleRunResult {
     noSession?: boolean;
     sessionPersistence?: "anonymous" | "persistent";
   };
+  outcome?: RoleRunCompletionOutcome;
   stdout: string;
   stderr: string;
   jsonEvents: unknown[];
@@ -91,6 +94,8 @@ export interface SparkRoleInstructionExecutorInput {
   model?: string;
   noSession?: boolean;
   sessionPersistence?: "anonymous" | "persistent";
+  phase?: "plan" | "implement";
+  requireStructuredOutcome?: boolean;
   env?: NodeJS.ProcessEnv;
   onEvent?: (event: unknown) => void | Promise<void>;
 }
@@ -424,6 +429,8 @@ export function buildRoleRunArgs(input: PiRoleCommandInput): string[] {
 export interface RoleRunnerOptions {
   cwd: string;
   dryRun?: boolean;
+  phase?: "plan" | "implement";
+  requireStructuredOutcome?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   sessionDir?: string;
@@ -606,6 +613,8 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         sessionModel: input.sessionModel,
         env: input.env,
         allowedTools: input.allowedTools,
+        phase: "implement",
+        requireStructuredOutcome: true,
         roleExecutor: input.roleExecutor,
         onRoleEvent: input.onRoleEvent,
       },
@@ -637,10 +646,20 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.graph.attachOutputArtifact(task.ref, artifact.ref);
     }
 
+    const outcome = result.outcome ?? result.record.outcome;
+    const outcomeFailure =
+      outcome && outcome.kind !== "completed" ? outcome.reason.trim() || outcome.code : undefined;
+    const missingOutcomeFailure =
+      !outcome && !dryRun
+        ? "role run ended without a required structured completion outcome"
+        : undefined;
     const roleFailure = roleRunCompletionFailure(result, dryRun);
-    if (!roleFailure && !dryRun) markOpenTaskPlanItemsDone(input.graph, task.ref);
+    const executionFailure = outcomeFailure ?? roleFailure ?? missingOutcomeFailure;
+    if (!executionFailure && outcome?.kind === "completed" && !dryRun) {
+      markOpenTaskPlanItemsDone(input.graph, task.ref);
+    }
     const completionFailure =
-      roleFailure ??
+      executionFailure ??
       roleRunEvidenceCompletionFailure(
         input.graph.getTask(task.ref),
         dryRun,
@@ -649,10 +668,12 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
     const succeeded = !completionFailure;
     const finishedAt = nowIso();
     const outputArtifacts = outputArtifactRef ? [outputArtifactRef] : [];
+    const status = taskRunStatusForOutcome(succeeded, outcome);
     const finished: TaskRun = {
       ...run,
-      status: succeeded ? "succeeded" : "failed",
-      failureKind: completionFailure ? EMPTY_ROLE_RUN_FAILURE_KIND : undefined,
+      status,
+      outcome,
+      failureKind: completionFailure ? taskRunFailureKindForOutcome(outcome) : undefined,
       errorMessage: completionFailure,
       finishedAt,
       outputArtifacts,
@@ -660,15 +681,16 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
         ? undefined
         : createTaskRunCompletionSummary({
             run,
-            status: succeeded ? "succeeded" : "failed",
+            status,
             finishedAt,
+            outcome,
             outputArtifacts,
             summary: completionFailure ?? summarizeRoleRunResult(result),
           }),
     };
     input.graph.recordRun(finished);
     if (dryRun) input.graph.setTaskStatus(task.ref, originalStatus);
-    else input.graph.setTaskStatus(task.ref, succeeded ? "done" : "failed");
+    else input.graph.setTaskStatus(task.ref, taskStatusForRun(status));
     return finished;
   } catch (error) {
     if (error instanceof PiRoleRunTimeoutError && !dryRun) {
@@ -692,6 +714,40 @@ export async function runSparkTask(input: SparkTaskRunOptions): Promise<TaskRun>
       input.graph.recordRun(failed);
       input.graph.setTaskStatus(task.ref, "failed");
       return failed;
+    }
+    if (
+      !(error instanceof TaskClaimHeartbeatError) &&
+      (error instanceof PiRoleRunCancelledError || runSignal?.aborted)
+    ) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const finishedAt = nowIso();
+      const outcome: RoleRunCompletionOutcome = {
+        kind: "cancelled",
+        code: "role_run_cancelled",
+        reason: errorMessage,
+      };
+      const cancelled: TaskRun = {
+        ...run,
+        status: "cancelled",
+        failureKind: "runtime_cancelled",
+        errorMessage,
+        outcome,
+        finishedAt,
+        outputArtifacts: [],
+        completionSummary: dryRun
+          ? undefined
+          : createTaskRunCompletionSummary({
+              run,
+              status: "cancelled",
+              finishedAt,
+              outcome,
+              outputArtifacts: [],
+              summary: errorMessage,
+            }),
+      };
+      input.graph.recordRun(cancelled);
+      input.graph.setTaskStatus(task.ref, dryRun ? originalStatus : "cancelled");
+      return cancelled;
     }
     const errorMessage = error instanceof Error ? error.message : String(error);
     const finishedAt = nowIso();
@@ -747,6 +803,7 @@ function buildSparkTaskRoleInstruction(task: Task, graph: TaskGraph): string {
       [
         "Task plan (execution contract):",
         `- Objective: ${task.plan.objective}`,
+        "- Required terminal report: call role_report_outcome exactly once before ending. Use kind=completed only after all success criteria are satisfied; use kind=blocked, failed, or cancelled with a stable code and concrete reason otherwise.",
         renderInstructionList("Success criteria", task.plan.successCriteria),
         renderInstructionList("Evidence required", task.plan.evidenceRequired),
         renderInstructionList("Constraints", task.plan.constraints),
@@ -891,6 +948,7 @@ function createTaskRunCompletionSummary(input: {
   status: TaskRunCompletionSummary["status"];
   finishedAt: string;
   outputArtifacts: ArtifactRef[];
+  outcome?: RoleRunCompletionOutcome;
   summary: string;
 }): TaskRunCompletionSummary {
   return {
@@ -901,6 +959,7 @@ function createTaskRunCompletionSummary(input: {
     status: input.status,
     summary: boundCompletionSummary(input.summary),
     artifactRefs: [...input.outputArtifacts],
+    outcome: input.outcome ? { ...input.outcome } : undefined,
     createdAt: input.finishedAt,
   };
 }
@@ -1037,6 +1096,34 @@ function roleRunCompletionFailure(result: SparkRoleRunResult, dryRun: boolean): 
   return `role run finished with status ${result.record.status}`;
 }
 
+function taskRunStatusForOutcome(
+  succeeded: boolean,
+  outcome: RoleRunCompletionOutcome | undefined,
+): TaskRun["status"] {
+  if (succeeded) return "succeeded";
+  if (outcome?.kind === "blocked") return "blocked";
+  if (outcome?.kind === "cancelled") return "cancelled";
+  return "failed";
+}
+
+function taskRunFailureKindForOutcome(
+  outcome: RoleRunCompletionOutcome | undefined,
+): NonNullable<TaskRun["failureKind"]> {
+  if (outcome?.kind === "blocked") return "blocked";
+  if (outcome?.kind === "cancelled") return "runtime_cancelled";
+  if (outcome?.code === "provider_resolution_failed" || outcome?.code === "provider_failure") {
+    return "provider_failure";
+  }
+  return EMPTY_ROLE_RUN_FAILURE_KIND;
+}
+
+function taskStatusForRun(status: TaskRun["status"]): Task["status"] {
+  if (status === "succeeded") return "done";
+  if (status === "blocked") return "blocked";
+  if (status === "cancelled") return "cancelled";
+  return "failed";
+}
+
 export interface TaskClaimHeartbeatOptions {
   graph: TaskGraph;
   taskRef: TaskRef;
@@ -1124,6 +1211,8 @@ export async function runRoleInstructionOnly(
     sessionModel: options.sessionModel,
     env: effectiveRoleRunEnv(options.env),
     allowedTools: options.allowedTools,
+    phase: options.phase,
+    requireStructuredOutcome: options.requireStructuredOutcome ?? false,
     roleExecutor: options.roleExecutor,
     onRoleEvent: options.onRoleEvent,
   };
@@ -1149,6 +1238,8 @@ async function runNativeSparkRole(
       | "sessionModel"
       | "env"
       | "allowedTools"
+      | "phase"
+      | "requireStructuredOutcome"
       | "onRoleEvent"
       | "roleExecutor"
     >,
@@ -1177,6 +1268,8 @@ async function runNativeSparkRole(
     instruction: instruction.instruction,
     model,
     allowedTools: options.allowedTools ?? role.allowedTools,
+    phase: options.phase,
+    requireStructuredOutcome: options.requireStructuredOutcome ?? false,
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     signal: options.signal,
@@ -1204,6 +1297,7 @@ async function runNativeSparkRole(
     },
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
+    outcome: result.outcome ?? result.record.outcome,
     jsonEvents: result.jsonEvents ?? [],
   };
 }

@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   ProjectRef,
   RoleRef,
+  RoleRunCompletionOutcome,
   RunRef,
   TaskRef,
   TaskRun,
@@ -16,6 +17,7 @@ export type SparkRoleRunObservedStatus =
   | "waiting"
   | "running"
   | "done"
+  | "blocked"
   | "failed"
   | "cancelled"
   | "interrupted"
@@ -30,6 +32,7 @@ export type SparkRoleRunLifecycleEventType =
   | "waiting_for_user"
   | "replied"
   | "completed"
+  | "blocked"
   | "failed"
   | "stopped"
   | "interrupted"
@@ -115,6 +118,7 @@ export interface SparkRoleRunRegistryEntry {
   usage?: SparkRoleRunUsage;
   failureKind?: TaskRunFailureKind;
   errorMessage?: string;
+  outcome?: RoleRunCompletionOutcome;
   recoveryKind?: "interrupted_without_process" | "stale_without_process";
   events: SparkRoleRunLifecycleEvent[];
 }
@@ -144,6 +148,7 @@ const EMPTY_COUNTS: Record<SparkRoleRunObservedStatus, number> = {
   waiting: 0,
   running: 0,
   done: 0,
+  blocked: 0,
   failed: 0,
   cancelled: 0,
   interrupted: 0,
@@ -192,6 +197,7 @@ export function serializeSparkRoleRunRegistry(
       parentRunRefs: [...entry.parentRunRefs],
       childRunRefs: [...entry.childRunRefs],
       outputArtifacts: [...entry.outputArtifacts],
+      outcome: entry.outcome ? { ...entry.outcome } : undefined,
       usage: entry.usage ? { ...entry.usage } : undefined,
       events: entry.events.map((event) => ({
         ...event,
@@ -219,6 +225,8 @@ export function roleRunObservedStatus(run: TaskRun): SparkRoleRunObservedStatus 
   switch (run.status) {
     case "succeeded":
       return "done";
+    case "blocked":
+      return "blocked";
     case "failed":
     case "cancelled":
     case "queued":
@@ -273,6 +281,7 @@ function roleRunRegistryEntry(input: {
     usage: input.usage ? { ...input.usage } : undefined,
     failureKind: input.run.failureKind,
     errorMessage: input.run.errorMessage,
+    outcome: input.run.outcome ? { ...input.run.outcome } : undefined,
     recoveryKind: recoveryStatus?.recoveryKind,
     events,
   };
@@ -392,6 +401,7 @@ function roleRunLifecycleEvents(input: {
 
 function terminalLifecycleEvent(run: TaskRun): Pick<SparkRoleRunLifecycleEvent, "type" | "status"> {
   if (run.status === "succeeded") return { type: "completed", status: "done" };
+  if (run.status === "blocked") return { type: "blocked", status: "blocked" };
   if (run.status === "failed") return { type: "failed", status: "failed" };
   if (run.status === "cancelled") return { type: "stopped", status: "cancelled" };
   return { type: "waiting", status: roleRunObservedStatus(run) };
@@ -466,10 +476,12 @@ function lifecycleEventRank(type: SparkRoleRunLifecycleEventType): number {
       return 8;
     case "completed":
       return 9;
-    case "failed":
+    case "blocked":
       return 10;
-    case "stopped":
+    case "failed":
       return 11;
+    case "stopped":
+      return 12;
   }
 }
 

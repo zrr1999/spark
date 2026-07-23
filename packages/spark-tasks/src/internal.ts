@@ -1217,8 +1217,10 @@ export function normalizeTaskRun(run: TaskRun): TaskRun {
       ? {
           ...run.completionSummary,
           artifactRefs: [...run.completionSummary.artifactRefs],
+          outcome: run.completionSummary.outcome ? { ...run.completionSummary.outcome } : undefined,
         }
       : undefined,
+    outcome: run.outcome ? { ...run.outcome } : undefined,
   };
 }
 

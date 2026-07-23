@@ -10534,12 +10534,34 @@ function testExtensionRoleRunResult(
   } = {},
 ): ExtensionRoleRunResult {
   const status = options.status ?? "succeeded";
+  const outcome =
+    status === "succeeded"
+      ? {
+          kind: "completed" as const,
+          code: "test_role_completed",
+          reason: "Test role completed its assigned contract",
+        }
+      : status === "cancelled"
+        ? {
+            kind: "cancelled" as const,
+            code: "test_role_cancelled",
+            reason: "Test role was cancelled",
+          }
+        : status === "failed"
+          ? {
+              kind: "failed" as const,
+              code: "test_role_failed",
+              reason: "Test role failed",
+            }
+          : undefined;
   return {
     record: {
       ...request.record,
       status,
+      outcome,
       finishedAt: new Date().toISOString(),
     },
+    outcome,
     stdout: options.stdout ?? "",
     stderr: options.stderr ?? "",
     jsonEvents: options.jsonEvents ?? [],
