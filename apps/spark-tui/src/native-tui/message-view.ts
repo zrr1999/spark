@@ -72,6 +72,21 @@ export function messageViewToNativeMessages(message: SparkMessageView): SparkNat
       });
       continue;
     }
+    if (part.type === "image") {
+      messages.push({
+        role: message.role,
+        text: part.name ? `[image: ${part.name}]` : "[image]",
+        viewId: part.id,
+        streaming: false,
+        viewStatus: partStatusToMessageStatus(part.status),
+        customType: message.customType,
+        display: message.display,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+        details: { ...message.metadata, partStatus: part.status, partType: part.type },
+      });
+      continue;
+    }
     messages.push({
       role: "tool",
       text: part.summary?.trim() ?? "",

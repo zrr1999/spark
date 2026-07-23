@@ -2,6 +2,7 @@
  * Conversation part projection helpers for SparkAgentLoop.
  */
 import {
+  sparkImageConversationPartSchema,
   sparkTextPhaseFromSignature,
   summarizeToolCallArguments,
   type SparkConversationPart,
@@ -57,6 +58,21 @@ export function assistantConversationParts(
           metadata: {},
         },
       ];
+    }
+    if (
+      part.type === "image" &&
+      typeof part.data === "string" &&
+      typeof part.mimeType === "string"
+    ) {
+      const parsed = sparkImageConversationPartSchema.safeParse({
+        id,
+        type: "image",
+        mediaType: part.mimeType,
+        contentIndex: index,
+        status: partStatus,
+        metadata: {},
+      });
+      return parsed.success ? [parsed.data] : [];
     }
     if (
       part.type === "toolCall" &&

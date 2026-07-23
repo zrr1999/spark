@@ -4,6 +4,7 @@ import { visibleConversationParts } from "./components/conversation/conversation
 import { visibleThinkingChainSteps } from "./components/conversation/thinking-chain-view";
 import {
   activeSessionTimelineProcessItemId,
+  buildCanonicalSessionTimeline,
   buildSessionTimeline,
   latestSessionRetryCandidate,
   latestSessionRetryPrompt,
@@ -12,6 +13,21 @@ import {
 } from "./session-timeline";
 
 describe("session timeline", () => {
+  it("builds the product conversation from daemon transcript messages only", () => {
+    const timeline = buildCanonicalSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [message("u1", "user", "Canonical prompt", "2026-07-10T00:00:01.000Z")],
+    });
+
+    expect(timeline).toEqual([
+      expect.objectContaining({
+        id: "message:u1",
+        sourceMessageId: "u1",
+        body: "Canonical prompt",
+      }),
+    ]);
+  });
+
   it("windows historical rendering without splitting a user and assistant turn", () => {
     const items = [
       timelineItem("u1", "user"),

@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import {
   SPARK_PROTOCOL_VERSION,
+  SPARK_SESSION_MEDIA_MAX_BYTES,
+  sparkImageConversationPartSchema,
   parseSparkSessionView,
   sanitizeSparkDisplayError,
+  sparkSessionMediaReadRequestSchema,
+  sparkSessionMediaReadResultSchema,
   sparkTextPhaseFromSignature,
   summarizeToolCallArguments,
   summarizeToolResultContent,
@@ -12,6 +15,8 @@ import {
   type SparkJsonObject,
   type SparkMessageView,
   type SparkSessionRegistryRecord,
+  type SparkSessionMediaReadRequest,
+  type SparkSessionMediaReadResult,
   type SparkSessionUsage,
   type SparkSessionView,
   type SparkToolCallView,
@@ -60,9 +65,7 @@ export interface LoadSparkSessionSnapshotInput {
 export async function loadSparkSessionSnapshot(
   input: LoadSparkSessionSnapshotInput,
 ): Promise<SparkSessionView> {
-  const path =
-    input.session.sessionPath ??
-    (await findNativeSessionPath(input.sessionsRoot, input.session.sessionId));
+  const path = input.session.sessionPath;
   if (!path) {
     const gitBranch = input.session.cwd
       ? await (input.resolveGitBranch ?? resolveNativeSessionGitBranch)(input.session.cwd)
@@ -110,6 +113,70 @@ export async function loadSparkSessionSnapshot(
   });
 }
 
+export async function loadSparkSessionMediaChunk(
+  input: {
+    sessionsRoot: string;
+    session: SparkSessionRegistryRecord;
+  } & Omit<SparkSessionMediaReadRequest, "sessionId">,
+): Promise<SparkSessionMediaReadResult> {
+  const request = sparkSessionMediaReadRequestSchema.parse({
+    sessionId: input.session.sessionId,
+    messageId: input.messageId,
+    contentIndex: input.contentIndex,
+    offset: input.offset,
+    limit: input.limit,
+  });
+  const path = input.session.sessionPath;
+  if (!path) {
+    throw new SparkSessionRegistryError(
+      "session_media_not_found",
+      `native transcript was not found for ${input.session.sessionId}`,
+    );
+  }
+  const record = await loadNativeSessionRecord(path, input.session.sessionId);
+  const entry = activeBranchEntries(record.entries).find(
+    (candidate) => candidate.type === "message" && candidate.id === request.messageId,
+  );
+  const content = entry?.message?.content;
+  const value = Array.isArray(content) ? content[request.contentIndex] : undefined;
+  if (
+    !isRecord(value) ||
+    value.type !== "image" ||
+    typeof value.data !== "string" ||
+    !isDisplayImageMediaType(value.mimeType)
+  ) {
+    throw new SparkSessionRegistryError(
+      "session_media_not_found",
+      `image part ${request.messageId}:${request.contentIndex} was not found`,
+    );
+  }
+  const bytes = decodeCanonicalSessionImage(value.data);
+  if (
+    !bytes ||
+    bytes.byteLength > SPARK_SESSION_MEDIA_MAX_BYTES ||
+    request.offset >= bytes.length
+  ) {
+    throw new SparkSessionRegistryError(
+      "session_media_invalid",
+      `image part ${request.messageId}:${request.contentIndex} is invalid or out of bounds`,
+    );
+  }
+  const end = Math.min(bytes.length, request.offset + request.limit);
+  const complete = end === bytes.length;
+  return sparkSessionMediaReadResultSchema.parse({
+    sessionId: input.session.sessionId,
+    messageId: request.messageId,
+    contentIndex: request.contentIndex,
+    mediaType: value.mimeType,
+    ...(typeof value.name === "string" && value.name.trim() ? { name: value.name.trim() } : {}),
+    offset: request.offset,
+    sizeBytes: bytes.length,
+    data: bytes.subarray(request.offset, end).toString("base64"),
+    ...(complete ? {} : { nextOffset: end }),
+    complete,
+  });
+}
+
 function emptySessionSnapshot(
   session: SparkSessionRegistryRecord,
   gitBranch: string | undefined,
@@ -131,33 +198,6 @@ function emptySessionSnapshot(
       registryStatus: session.status,
     },
   });
-}
-
-async function findNativeSessionPath(
-  sessionsRoot: string,
-  sessionId: string,
-): Promise<string | undefined> {
-  let workspaceDirs;
-  try {
-    workspaceDirs = await readdir(sessionsRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  const suffix = `_${sessionId}.jsonl`;
-  const candidates: Array<{ path: string; modifiedMs: number }> = [];
-  for (const workspaceDir of workspaceDirs) {
-    if (!workspaceDir.isDirectory()) continue;
-    const dir = join(sessionsRoot, workspaceDir.name);
-    const files = await readdir(dir, { withFileTypes: true });
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith(suffix)) continue;
-      const path = join(dir, file.name);
-      candidates.push({ path, modifiedMs: (await stat(path)).mtimeMs });
-    }
-  }
-  candidates.sort((left, right) => right.modifiedMs - left.modifiedMs);
-  return candidates[0]?.path;
 }
 
 async function loadNativeSessionRecord(
@@ -646,6 +686,22 @@ function conversationParts(
         },
       ];
     }
+    if (
+      value.type === "image" &&
+      typeof value.data === "string" &&
+      typeof value.mimeType === "string"
+    ) {
+      const parsed = sparkImageConversationPartSchema.safeParse({
+        id: conversationPartId(entry.id, index),
+        type: "image",
+        mediaType: value.mimeType,
+        contentIndex: index,
+        ...(typeof value.name === "string" && value.name.trim() ? { name: value.name.trim() } : {}),
+        status: "complete",
+        metadata: {},
+      });
+      return parsed.success ? [parsed.data] : [];
+    }
     if (value.type !== "toolCall") return [];
     const toolCallId = stringField(value, "id");
     const toolName = stringField(value, "name");
@@ -665,6 +721,30 @@ function conversationParts(
     ];
   });
   return parts.length > 0 ? parts : providerErrorParts(entry);
+}
+
+function isDisplayImageMediaType(
+  value: unknown,
+): value is "image/bmp" | "image/gif" | "image/jpeg" | "image/png" | "image/webp" {
+  return (
+    value === "image/bmp" ||
+    value === "image/gif" ||
+    value === "image/jpeg" ||
+    value === "image/png" ||
+    value === "image/webp"
+  );
+}
+
+function decodeCanonicalSessionImage(data: string): Buffer | undefined {
+  if (
+    !data ||
+    data.length > Math.ceil((SPARK_SESSION_MEDIA_MAX_BYTES * 4) / 3) + 4 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(data)
+  ) {
+    return undefined;
+  }
+  const decoded = Buffer.from(data, "base64");
+  return decoded.toString("base64") === data ? decoded : undefined;
 }
 
 /**

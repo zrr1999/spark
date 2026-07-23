@@ -86,6 +86,7 @@ describe("migrations", () => {
       "runtime_channel_control_projections_workspace_idx",
       "runtime_ephemeral_secret_audit_runtime_created_idx",
       "events_ingest_sequence_unique",
+      "events_workspace_session_created_idx",
       "sessions_refresh_token_unique",
       "workspace_access_tokens_workspace_state_idx",
       "cockpit_access_tokens_state_idx",
@@ -116,6 +117,7 @@ describe("migrations", () => {
       "0016",
       "0017",
       "0018",
+      "0019",
     ]);
 
     const bindingColumns = db
@@ -137,7 +139,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(18);
+    expect(migrationCount.count).toBe(19);
     db.close();
   });
 
@@ -328,6 +330,24 @@ describe("migrations", () => {
         (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
        VALUES ('evt_legacy', NULL, NULL, 'server', NULL, 'legacy.event', NULL, NULL, '{}', ?)`,
     ).run(createdAt);
+    db.prepare(
+      `INSERT INTO workspaces
+        (id, slug, name, description, status, settings_json, created_at, updated_at)
+       VALUES ('ws_session', 'session-index', 'Session index', NULL, 'active', '{}', ?, ?)`,
+    ).run(createdAt, createdAt);
+    db.prepare(
+      `INSERT INTO events
+        (id, workspace_id, project_id, actor_kind, actor_id, kind, subject_kind, subject_id, payload_json, created_at)
+       VALUES ('evt_session', 'ws_session', NULL, 'runtime', NULL, 'daemon.view_event',
+               'view_model', 'evt_runtime', ?, ?)`,
+    ).run(
+      JSON.stringify({
+        type: "daemon.view_event",
+        sessionId: "sess_indexed",
+        view: { type: "session.message", sessionId: "sess_indexed" },
+      }),
+      createdAt,
+    );
 
     migrate(db, migrations);
 
@@ -335,6 +355,21 @@ describe("migrations", () => {
       .prepare("SELECT ingest_sequence AS sequence FROM events WHERE id = 'evt_legacy'")
       .get() as { sequence: number };
     expect(legacy.sequence).toBeGreaterThan(0);
+    expect(
+      db.prepare("SELECT session_id AS sessionId FROM events WHERE id = 'evt_session'").get(),
+    ).toEqual({ sessionId: "sess_indexed" });
+    const queryPlan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id
+         FROM events
+         WHERE workspace_id = ? AND session_id = ?
+         ORDER BY created_at DESC
+         LIMIT 100`,
+      )
+      .all("ws_session", "sess_indexed")
+      .map((row) => String(row.detail));
+    expect(queryPlan.join("\n")).toContain("events_workspace_session_created_idx");
 
     db.prepare(
       `INSERT INTO events

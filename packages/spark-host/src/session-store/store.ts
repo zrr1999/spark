@@ -53,6 +53,23 @@ export class SparkSessionStore {
     };
   }
 
+  /**
+   * Create the stable transcript location used by daemon-owned conversations.
+   *
+   * Interactive hosts may still create timestamped session generations, but a
+   * daemon registry record must always point at this one canonical path.
+   */
+  createCanonicalSession(options: NewSparkSessionOptions & { id: string }): SparkSessionRecord {
+    const record = this.createSession(options);
+    return { ...record, path: this.canonicalSessionPath(record.header.id) };
+  }
+
+  canonicalSessionPath(sessionId: string): string {
+    const normalized = sessionId.trim();
+    if (!normalized) throw new Error("Spark session id is required");
+    return join(this.sessionDir, `${encodeURIComponent(normalized)}.jsonl`);
+  }
+
   async save(record: SparkSessionRecord): Promise<void> {
     await writeJsonLinesAtomically(record.path, [record.header, ...record.entries]);
   }
@@ -121,11 +138,15 @@ export class SparkSessionStore {
   }
 
   async findById(sessionId: string): Promise<SparkSessionRecord | undefined> {
+    return (await this.findAllById(sessionId))[0];
+  }
+
+  async findAllById(sessionId: string): Promise<SparkSessionRecord[]> {
     const normalized = normalizeSessionRef(sessionId);
-    for (const info of await this.list()) {
-      if (info.id === sessionId || info.id === normalized) return await this.load(info.path);
-    }
-    return undefined;
+    const matches = (await this.list()).filter(
+      (info) => info.id === sessionId || info.id === normalized,
+    );
+    return await Promise.all(matches.map(async (info) => await this.load(info.path)));
   }
 
   async loadByRef(sessionRef: string): Promise<SparkSessionRecord> {

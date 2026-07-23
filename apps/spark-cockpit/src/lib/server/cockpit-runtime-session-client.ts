@@ -17,6 +17,8 @@ import {
   parseSparkSessionRegistryRecords,
   sparkSessionCreateRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionMediaReadRequestSchema,
+  sparkSessionMediaReadResultSchema,
   sparkSessionSnapshotRequestSchema,
   sparkSideThreadConfigureRequestSchema,
   sparkSideThreadEnsureRequestSchema,
@@ -36,6 +38,8 @@ import {
   type SparkSessionBindRequest,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
+  type SparkSessionMediaReadRequest,
+  type SparkSessionMediaReadResult,
   type SparkSessionRegistryRecord,
   type SparkSessionSnapshotRequest,
   type SparkSideThreadSnapshot,
@@ -89,6 +93,10 @@ export interface CockpitRuntimeSessionClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  media(
+    sessionId: string,
+    request: Omit<SparkSessionMediaReadRequest, "sessionId">,
+  ): Promise<SparkSessionMediaReadResult>;
   /**
    * Read-only Side Thread projection. Unlike ensure, this never creates a
    * child session; the Cockpit only asks after its nested panel is opened.
@@ -179,6 +187,7 @@ export function createCockpitRuntimeSessionClient(
     get: async (sessionId) => await getSession(database(), sessionId),
     snapshot: async (sessionId, options) =>
       await getSessionSnapshot(database(), sessionId, options),
+    media: async (sessionId, request) => await getSessionMedia(database(), sessionId, request),
     sideThreadSnapshot: async (parentSessionId, options) =>
       await getSideThreadSnapshot(database(), parentSessionId, options),
     ensureSideThread: async (input) => await ensureSideThread(database(), input),
@@ -370,6 +379,21 @@ async function getSessionSnapshot(
   // counts and cursors live in the exact command result and must not be rebuilt
   // from an already bounded view.
   return parseSessionSnapshotWindow(result);
+}
+
+async function getSessionMedia(
+  db: DatabaseSync,
+  sessionId: string,
+  input: Omit<SparkSessionMediaReadRequest, "sessionId">,
+): Promise<SparkSessionMediaReadResult> {
+  const request = sparkSessionMediaReadRequestSchema.parse({ sessionId, ...input });
+  const route = requireOnlineRoute(db, runtimeSessionRouteForSession(db, sessionId));
+  const result = await runRuntimeSessionControlCommand(db, {
+    route,
+    sessionId,
+    payload: { kind: "session.media.read.request", payload: publicJsonObject(request) },
+  });
+  return sparkSessionMediaReadResultSchema.parse(result);
 }
 
 async function getSideThreadSnapshot(

@@ -2913,6 +2913,18 @@ describe("Spark daemon local RPC", () => {
         ok: true,
         result: {
           sessionId: "sess_view",
+          messages: [],
+        },
+      });
+      await sessionRegistry.bindTranscriptPath({
+        sessionId: "sess_view",
+        sessionPath: fallbackPath,
+      });
+      const bound = await request("snapshot_bound");
+      expect(bound).toMatchObject({
+        ok: true,
+        result: {
+          sessionId: "sess_view",
           activeLeafId: "custom-visible",
           messages: [
             { id: "user-root", role: "user", text: "root question" },
@@ -2922,7 +2934,7 @@ describe("Spark daemon local RPC", () => {
           ],
         },
       });
-      expect(JSON.stringify(fallback)).not.toMatch(
+      expect(JSON.stringify(bound)).not.toMatch(
         /inactive answer|system-secret|tool-secret|secret-input|sessionPath/u,
       );
 
@@ -2949,8 +2961,9 @@ describe("Spark daemon local RPC", () => {
           message: { role: "user", content: "preferred transcript" },
         })}\n`,
       );
-      await sessionRegistry.recordRun({
+      await sessionRegistry.relocateTranscriptPath({
         sessionId: "sess_view",
+        expectedSessionPath: fallbackPath,
         sessionPath: preferredPath,
       });
       const preferred = await request("snapshot_preferred");

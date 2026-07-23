@@ -164,6 +164,18 @@ export const sparkThinkingConversationPartSchema = sparkConversationPartBaseSche
   redacted: z.boolean().optional(),
 });
 
+export const sparkImageConversationPartSchema = sparkConversationPartBaseSchema.extend({
+  type: z.literal("image"),
+  mediaType: z.enum(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]),
+  /**
+   * Zero-based native message-content index. Image bytes stay daemon-owned
+   * and are fetched through the bounded session-media command instead of
+   * crossing the runtime projection envelope.
+   */
+  contentIndex: z.number().int().nonnegative(),
+  name: z.string().trim().min(1).max(255).optional(),
+});
+
 export const sparkToolCallConversationPartSchema = sparkConversationPartBaseSchema.extend({
   type: z.literal("tool-call"),
   toolCallId: z.string().min(1),
@@ -182,6 +194,7 @@ export const sparkToolResultConversationPartSchema = sparkConversationPartBaseSc
 export const sparkConversationPartSchema = z.discriminatedUnion("type", [
   sparkTextConversationPartSchema,
   sparkThinkingConversationPartSchema,
+  sparkImageConversationPartSchema,
   sparkToolCallConversationPartSchema,
   sparkToolResultConversationPartSchema,
 ]);
@@ -668,6 +681,7 @@ export type SparkMessageStatus = z.infer<typeof sparkMessageStatusSchema>;
 export type SparkConversationPartStatus = z.infer<typeof sparkConversationPartStatusSchema>;
 export type SparkTextConversationPart = z.infer<typeof sparkTextConversationPartSchema>;
 export type SparkThinkingConversationPart = z.infer<typeof sparkThinkingConversationPartSchema>;
+export type SparkImageConversationPart = z.infer<typeof sparkImageConversationPartSchema>;
 export type SparkToolCallConversationPart = z.infer<typeof sparkToolCallConversationPartSchema>;
 export type SparkToolResultConversationPart = z.infer<typeof sparkToolResultConversationPartSchema>;
 export type SparkConversationPart = z.infer<typeof sparkConversationPartSchema>;

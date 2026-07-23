@@ -32,6 +32,8 @@ export function conversationPartsFromMessage(
     }
   }
 
+  parts = stripRenderedImagePlaceholders(parts);
+
   if (message.status === "error" && isBudgetExhaustedMessage(message)) {
     return [{ type: "notice", kind: "budget_exhausted" }];
   }
@@ -225,6 +227,23 @@ function normalizePart(
       : [];
   }
 
+  if (
+    type === "image" &&
+    typeof value.contentIndex === "number" &&
+    Number.isSafeInteger(value.contentIndex) &&
+    value.contentIndex >= 0 &&
+    isRenderableImageMediaType(value.mediaType)
+  ) {
+    return [
+      {
+        type: "image",
+        contentIndex: value.contentIndex,
+        mediaType: value.mediaType,
+        ...(typeof value.name === "string" && value.name.trim() ? { name: value.name.trim() } : {}),
+      },
+    ];
+  }
+
   if (type === "thinking" || type === "reasoning") {
     const redacted = value.redacted === true;
     const summary = redacted ? "" : (stringField(value, "summary") ?? stringField(value, "text"));
@@ -329,6 +348,37 @@ function normalizePart(
   }
 
   return [{ type: "unknown", label: boundedLabel(type) }];
+}
+
+function stripRenderedImagePlaceholders(parts: ConversationPart[]): ConversationPart[] {
+  let remainingImages = parts.filter((part) => part.type === "image").length;
+  if (remainingImages === 0) return parts;
+  return parts.flatMap((part): ConversationPart[] => {
+    if (part.type !== "text" || remainingImages === 0) return [part];
+    const lines = part.text.split("\n").filter((line) => {
+      if (remainingImages === 0 || !isImagePlaceholder(line)) return true;
+      remainingImages -= 1;
+      return false;
+    });
+    const text = lines.join("\n").replace(/^\n+|\n+$/gu, "");
+    return text ? [{ ...part, text }] : [];
+  });
+}
+
+function isImagePlaceholder(value: string): boolean {
+  return /^\s*(?:\[图片\]|\[image(?::[^\]]+)?\])\s*$/iu.test(value);
+}
+
+function isRenderableImageMediaType(
+  value: unknown,
+): value is Extract<ConversationPart, { type: "image" }>["mediaType"] {
+  return (
+    value === "image/bmp" ||
+    value === "image/gif" ||
+    value === "image/jpeg" ||
+    value === "image/png" ||
+    value === "image/webp"
+  );
 }
 
 function fallbackParts(message: SparkMessageView, displayText: string): ConversationPart[] {

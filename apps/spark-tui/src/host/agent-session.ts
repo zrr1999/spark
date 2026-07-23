@@ -233,11 +233,12 @@ export class SparkAgentSession {
       return this.services.sessionStore.forkSession(parent, { id: options.sessionId });
     }
     if (options.reset) {
-      return this.services.sessionStore.createSession({
+      const record = this.services.sessionStore.createSession({
         id: options.sessionId,
         visibility: options.sessionVisibility,
         purpose: options.sessionPurpose,
       });
+      return options.sessionPath ? { ...record, path: resolve(options.sessionPath) } : record;
     }
     if (options.sessionPath) {
       const path = resolve(options.sessionPath);

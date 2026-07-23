@@ -41,6 +41,43 @@ describe("Cockpit conversation view adapter", () => {
     ]);
   });
 
+  it("renders projected images and removes matching channel placeholder lines", () => {
+    const parts = conversationPartsFromMessage(
+      message({
+        role: "user",
+        text: "[图片]\n这是什么动物",
+        parts: [
+          {
+            id: "part-text",
+            type: "text",
+            text: "[图片]\n这是什么动物",
+            status: "complete",
+            metadata: {},
+          },
+          {
+            id: "part-image",
+            type: "image",
+            contentIndex: 1,
+            mediaType: "image/png",
+            name: "cat.png",
+            status: "complete",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    expect(parts).toEqual([
+      { type: "text", text: "这是什么动物", streaming: false },
+      {
+        type: "image",
+        contentIndex: 1,
+        mediaType: "image/png",
+        name: "cat.png",
+      },
+    ]);
+  });
+
   it("turns a terminal message failure into a visible error part", () => {
     const parts = conversationPartsFromMessage(
       message({

@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   channelAdapterFromExternalKey,
   normalizeChannelExternalKey,
@@ -79,6 +79,10 @@ export interface RecordSparkSessionRunInput {
   sessionId: string;
   sessionPath: string;
   now?: Date;
+}
+
+export interface RelocateSparkSessionTranscriptInput extends RecordSparkSessionRunInput {
+  expectedSessionPath?: string;
 }
 
 export interface ResolveBindingInput {
@@ -624,11 +628,14 @@ export class SparkSessionRegistry {
       );
     }
     const current = file.sessions[index]!;
-    const sessionPath = input.sessionPath.trim();
-    if (!sessionPath) {
+    const sessionPath = normalizedSessionPath(input.sessionPath, input.sessionId);
+    if (
+      current.sessionPath &&
+      normalizedSessionPath(current.sessionPath, input.sessionId) !== sessionPath
+    ) {
       throw new SparkSessionRegistryError(
-        "invalid_session_path",
-        `session path must not be blank: ${input.sessionId}`,
+        "session_transcript_conflict",
+        `session ${input.sessionId} is already bound to ${current.sessionPath}`,
       );
     }
     const observedAt = (input.now ?? new Date()).toISOString();
@@ -636,6 +643,84 @@ export class SparkSessionRegistry {
       ...current,
       sessionPath,
       status: current.status === "archived" ? "archived" : "ready",
+      updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
+  /** Bind a recovered or preallocated transcript without changing run status. */
+  async bindTranscriptPath(input: RecordSparkSessionRunInput): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === input.sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError(
+        "session_not_found",
+        `unknown session: ${input.sessionId}`,
+      );
+    }
+    const current = file.sessions[index]!;
+    const sessionPath = normalizedSessionPath(input.sessionPath, input.sessionId);
+    if (current.sessionPath) {
+      if (normalizedSessionPath(current.sessionPath, input.sessionId) !== sessionPath) {
+        throw new SparkSessionRegistryError(
+          "session_transcript_conflict",
+          `session ${input.sessionId} is already bound to ${current.sessionPath}`,
+        );
+      }
+      return current;
+    }
+    const observedAt = (input.now ?? new Date()).toISOString();
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      sessionPath,
+      updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
+    };
+    file.sessions[index] = updated;
+    await this.saveFile(file);
+    return updated;
+  }
+
+  /**
+   * Explicit transcript relocation used by daemon-owned repair tooling.
+   * Ordinary run completion must never use this path-changing operation.
+   */
+  async relocateTranscriptPath(
+    input: RelocateSparkSessionTranscriptInput,
+  ): Promise<SparkSessionRegistryRecord> {
+    const file = await this.loadFile();
+    const index = file.sessions.findIndex((session) => session.sessionId === input.sessionId);
+    if (index < 0) {
+      throw new SparkSessionRegistryError(
+        "session_not_found",
+        `unknown session: ${input.sessionId}`,
+      );
+    }
+    const current = file.sessions[index]!;
+    if (current.relation?.kind === "side_thread") {
+      throw new SparkSessionRegistryError(
+        "side_thread_mutation_forbidden",
+        `relocate side-thread transcript through its generation control: ${input.sessionId}`,
+      );
+    }
+    const expectedPath = input.expectedSessionPath
+      ? normalizedSessionPath(input.expectedSessionPath, input.sessionId)
+      : undefined;
+    const currentPath = current.sessionPath
+      ? normalizedSessionPath(current.sessionPath, input.sessionId)
+      : undefined;
+    if (currentPath !== expectedPath) {
+      throw new SparkSessionRegistryError(
+        "session_transcript_cas_failed",
+        `session ${input.sessionId} transcript changed before relocation`,
+      );
+    }
+    const sessionPath = normalizedSessionPath(input.sessionPath, input.sessionId);
+    const observedAt = (input.now ?? new Date()).toISOString();
+    const updated: SparkSessionRegistryRecord = {
+      ...current,
+      sessionPath,
       updatedAt: observedAt > current.updatedAt ? observedAt : current.updatedAt,
     };
     file.sessions[index] = updated;
@@ -868,6 +953,17 @@ function sameSessionScope(left: SparkSessionScope, right: SparkSessionScope): bo
 function normalizeSessionRole(value: string | undefined): string | undefined {
   const normalized = value?.replace(/\s+/gu, " ").trim();
   return normalized || undefined;
+}
+
+function normalizedSessionPath(value: string, sessionId: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new SparkSessionRegistryError(
+      "invalid_session_path",
+      `session path must not be blank: ${sessionId}`,
+    );
+  }
+  return resolve(normalized);
 }
 
 interface ChannelBindingSelector {

@@ -50,6 +50,7 @@
         {#each host.renderedTimelineItems as item (item.id)}
           <ConversationMessage
             {item}
+            sessionId={host.selected.sessionId}
             active={item.id === host.activeProcessItemId}
             userLabel={host.copy.you}
             assistantLabel={host.copy.spark}

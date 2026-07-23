@@ -45,6 +45,7 @@ import type {
 } from "../core/types.ts";
 import type { SparkDaemonModelControl } from "../model-control.ts";
 import type { DaemonSessionRegistry } from "../session-registry.ts";
+import { ensureDaemonSessionTranscript } from "../session-transcript-control.ts";
 import { ChannelReplyEventProjector } from "../channels/reply-stream.ts";
 import type { ChannelReplyDeliveryStore } from "../channels/reply-delivery.ts";
 import { assignCompletedSessionRole } from "./session-title.ts";
@@ -87,7 +88,7 @@ export interface SparkDaemonTaskExecutorOptions {
     DaemonSessionRegistry,
     "recordRun" | "recordTurnQueued" | "recordTurnSettled"
   > &
-    Partial<Pick<DaemonSessionRegistry, "get" | "setRoleIfMissing">>;
+    Partial<Pick<DaemonSessionRegistry, "bindTranscriptPath" | "get" | "setRoleIfMissing">>;
   createSparkHeadlessSessionExecutor?: CreateSparkHeadlessSessionExecutorFn;
   driverControl?: {
     schedule(
@@ -713,7 +714,11 @@ export async function executeSparkDaemonSessionRunTask(
   options: SparkDaemonTaskExecutorOptions & { executeSession: SparkHeadlessSessionExecutor },
   driver?: SparkHostDriverContext,
 ): Promise<unknown> {
-  const sessionContext = await sessionContextForTask(task, options.sessionRegistry);
+  const sessionContext = await sessionContextForTask(
+    task,
+    options.sessionRegistry,
+    options.paths.piAgentDir,
+  );
   const systemPrompt = await systemPromptForSession(
     task,
     options,
@@ -958,6 +963,7 @@ export function sessionSourceForTask(
 async function sessionContextForTask(
   task: SparkDaemonSessionRunTask,
   registry: SparkDaemonTaskExecutorOptions["sessionRegistry"],
+  sparkHome: string | undefined,
 ): Promise<{
   surface?: "local" | "channel";
   role?: string;
@@ -966,11 +972,19 @@ async function sessionContextForTask(
 }> {
   const session = await registry?.get?.(task.sessionId);
   const role = session?.role?.trim();
+  const sessionPath =
+    !task.hiddenExecution && session && sparkHome && registry?.bindTranscriptPath
+      ? await ensureDaemonSessionTranscript({
+          session,
+          sparkHome,
+          registry: { bindTranscriptPath: registry.bindTranscriptPath },
+        })
+      : session?.sessionPath;
   if (task.channelReply) {
     return {
       surface: "channel",
       ...(role ? { role } : {}),
-      ...(session?.sessionPath ? { sessionPath: session.sessionPath } : {}),
+      ...(sessionPath ? { sessionPath } : {}),
     };
   }
   if (!session) return {};
@@ -978,7 +992,7 @@ async function sessionContextForTask(
     surface: session.bindings.length > 0 ? "channel" : "local",
     ...(role ? { role } : {}),
     ...(session.relation?.kind === "side_thread" ? { sideThread: true } : {}),
-    ...(session.sessionPath ? { sessionPath: session.sessionPath } : {}),
+    ...(sessionPath ? { sessionPath } : {}),
   };
 }
 

@@ -48,6 +48,19 @@ export type SessionTimelineItem = ConversationMessageView & {
 
 export const SESSION_TIMELINE_PAGE_SIZE = 32;
 
+/** Build the conversation strictly from the daemon-owned transcript projection. */
+export function buildCanonicalSessionTimeline(input: {
+  messages: SparkMessageView[];
+  fallbackTimestamp: string;
+}): SessionTimelineItem[] {
+  return buildSessionTimeline({
+    messages: input.messages,
+    commands: [],
+    reports: [],
+    fallbackTimestamp: input.fallbackTimestamp,
+  });
+}
+
 /**
  * Bound the amount of historical conversation UI mounted at once. Session
  * snapshots remain complete; this only windows the expensive Markdown and
@@ -182,6 +195,7 @@ export function buildSessionTimeline(input: {
     incrementCount(canonicalFallbackMatches, fallbackMatchKey(actor, displayText));
     items.push({
       id: `message:${message.id}`,
+      sourceMessageId: message.id,
       actor,
       body: conversationItemBody(parts, displayText),
       title: null,
@@ -203,11 +217,11 @@ export function buildSessionTimeline(input: {
   // carry a canonical message ID, so they cannot be reconciled safely once a
   // session snapshot exists. Keep them only as an empty-snapshot compatibility
   // fallback; the activity panel still exposes them as internal run details.
-  const legacySubmittedMessages = new Map<string, number>();
+  const fallbackSubmittedMessages = new Map<string, number>();
   if (canonicalMessageIds.size === 0) {
     for (const [commandIndex, command] of input.commands.entries()) {
       const body = command.goal?.trim() || command.title?.trim() || command.id;
-      incrementCount(legacySubmittedMessages, normalizeMessage(body));
+      incrementCount(fallbackSubmittedMessages, normalizeMessage(body));
       items.push({
         id: `command:${command.id}`,
         actor: "user",
@@ -253,7 +267,7 @@ export function buildSessionTimeline(input: {
       canonicalMessageIds.size === 0 &&
       actor === "user" &&
       isDirectTurnFallback(report) &&
-      consumeCount(legacySubmittedMessages, normalizeMessage(report.text))
+      consumeCount(fallbackSubmittedMessages, normalizeMessage(report.text))
     ) {
       continue;
     }
