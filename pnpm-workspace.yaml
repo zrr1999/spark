@@ -2,6 +2,9 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# Keep pnpm run/exec read-only while prek temporarily hides unstaged manifests.
+verifyDepsBeforeRun: warn
+
 allowBuilds:
   "@google/genai": true
   better-sqlite3: true
