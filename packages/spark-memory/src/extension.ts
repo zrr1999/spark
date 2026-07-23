@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
@@ -62,6 +63,7 @@ export interface SparkMemoryExtensionApi {
   sendMessage?(
     message: {
       customType: string;
+      deliveryId?: string;
       content: string;
       display?: boolean;
       details?: Record<string, unknown>;
@@ -651,11 +653,14 @@ export function registerSparkMemoryCheckpointEvents(
       limit: 25,
     });
     if (checkpoint.entries.length === 0) return;
+    const checkpointContent = renderSparkMemoryCheckpoint(checkpoint);
+    const deliveryId = memoryCheckpointDeliveryId(sessionIdFromContext(ctx), checkpointContent);
     const message = {
       customType: "spark-memory-checkpoint",
-      content: renderSparkMemoryCheckpoint(checkpoint),
+      deliveryId,
+      content: checkpointContent,
       display: false,
-      details: { checkpoint },
+      details: { checkpoint, deliveryId },
     };
     if (!isRecord(_event) || _event.consumeMessage !== true) {
       // Deliver as a hidden next-turn message so the checkpoint rides the next
@@ -869,6 +874,19 @@ function successfulFullCompaction(
   const sessionId =
     typeof event.sessionId === "string" && event.sessionId.trim() ? event.sessionId : undefined;
   return { ...(sessionId ? { sessionId } : {}), summary, details: entry.details };
+}
+
+function sessionIdFromContext(ctx: unknown): string {
+  const sessionId =
+    typeof (ctx as { sessionId?: unknown })?.sessionId === "string"
+      ? (ctx as { sessionId: string }).sessionId.trim()
+      : "";
+  return sessionId || "spark-agent";
+}
+
+function memoryCheckpointDeliveryId(sessionId: string, content: string): string {
+  const digest = createHash("sha256").update(sessionId).update("\0").update(content).digest("hex");
+  return `spark-memory-checkpoint:${digest}`;
 }
 
 function optionalCwd(ctx: unknown): string | undefined {

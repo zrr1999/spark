@@ -195,6 +195,7 @@ export type SparkAgentLifecycleSource = "agentLoop" | "triggerTurn";
 export interface SparkTurnOutboxEnvelope {
   kind: "custom" | "user";
   sessionId?: string;
+  deliveryId?: string;
   customType?: string;
   content: string | Array<{ type: string; [key: string]: unknown }>;
   display?: boolean;
@@ -233,6 +234,8 @@ export const DEFAULT_SPARK_AGENT_LOOP_STREAM_TIMEOUT_MS = 0;
 export const DEFAULT_SPARK_AGENT_LOOP_STREAM_IDLE_TIMEOUT_MS = 45 * 60_000;
 export const DEFAULT_SPARK_AGENT_LOOP_TOOL_TIMEOUT_MS = 300_000;
 export const DEFAULT_SPARK_AGENT_LOOP_INTERACTION_TIMEOUT_MS = 60_000;
+const MAX_CONSUMED_DELIVERY_IDS_PER_SESSION = 256;
+const MAX_CONSUMED_DELIVERY_ID_SESSIONS = 64;
 export const DEFAULT_SPARK_AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS = 4;
 
 export type SparkToolApprovalReviewOutcome = "approved" | "needs_changes" | "blocked";
@@ -387,6 +390,8 @@ export class SparkAgentLoop {
   private readonly promptManifestOptions: SparkPromptManifestOptions;
   private readonly promptItems: SparkPromptItem[] = [];
   private readonly deferredOutboxBySession = new Map<string, SparkTurnOutboxEnvelope[]>();
+  private readonly deferredOutboxDeliveryIdsBySession = new Map<string, Set<string>>();
+  private readonly consumedOutboxDeliveryIdsBySession = new Map<string, Set<string>>();
   private readonly deferredTriggerOutbox: SparkTurnOutboxEnvelope[] = [];
   private state: SparkAgentLoopState = "idle";
   private currentPhase: SparkAgentPhase | undefined;
@@ -1298,10 +1303,15 @@ export class SparkAgentLoop {
     const deferred = options.includeNextTurn
       ? (this.deferredOutboxBySession.get(this.viewSessionId) ?? [])
       : [];
-    if (options.includeNextTurn) this.deferredOutboxBySession.delete(this.viewSessionId);
+    if (options.includeNextTurn) {
+      this.deferredOutboxBySession.delete(this.viewSessionId);
+      this.deferredOutboxDeliveryIdsBySession.delete(this.viewSessionId);
+    }
     const envelopes = [...deferred, ...incoming];
     for (const envelope of envelopes) {
       const envelopeSessionId = envelope.sessionId ?? this.viewSessionId;
+      const deliveryId = envelope.deliveryId?.trim();
+      if (deliveryId && this.hasConsumedDeliveryId(envelopeSessionId, deliveryId)) continue;
       if (envelopeSessionId !== this.viewSessionId) {
         this.deferOutboxEnvelope(envelopeSessionId, envelope);
         continue;
@@ -1346,14 +1356,46 @@ export class SparkAgentLoop {
         if (item.visibility === "visible") this.publish({ type: "runtime_message", item });
         appended += 1;
       }
+      if (deliveryId) this.rememberConsumedDeliveryId(envelopeSessionId, deliveryId);
     }
     return appended;
   }
 
   private deferOutboxEnvelope(sessionId: string, envelope: SparkTurnOutboxEnvelope): void {
+    const deliveryId = envelope.deliveryId?.trim();
+    if (deliveryId) {
+      const pendingIds =
+        this.deferredOutboxDeliveryIdsBySession.get(sessionId) ?? new Set<string>();
+      if (pendingIds.has(deliveryId)) return;
+      pendingIds.add(deliveryId);
+      this.deferredOutboxDeliveryIdsBySession.set(sessionId, pendingIds);
+    }
     const pending = this.deferredOutboxBySession.get(sessionId) ?? [];
     pending.push(envelope);
     this.deferredOutboxBySession.set(sessionId, pending);
+  }
+
+  private hasConsumedDeliveryId(sessionId: string, deliveryId: string): boolean {
+    return this.consumedOutboxDeliveryIdsBySession.get(sessionId)?.has(deliveryId) ?? false;
+  }
+
+  private rememberConsumedDeliveryId(sessionId: string, deliveryId: string): void {
+    const existing = this.consumedOutboxDeliveryIdsBySession.get(sessionId);
+    const deliveryIds = existing ?? new Set<string>();
+    if (existing) this.consumedOutboxDeliveryIdsBySession.delete(sessionId);
+    if (deliveryIds.has(deliveryId)) deliveryIds.delete(deliveryId);
+    deliveryIds.add(deliveryId);
+    while (deliveryIds.size > MAX_CONSUMED_DELIVERY_IDS_PER_SESSION) {
+      const oldestDeliveryId = deliveryIds.values().next().value;
+      if (oldestDeliveryId === undefined) break;
+      deliveryIds.delete(oldestDeliveryId);
+    }
+    this.consumedOutboxDeliveryIdsBySession.set(sessionId, deliveryIds);
+    while (this.consumedOutboxDeliveryIdsBySession.size > MAX_CONSUMED_DELIVERY_ID_SESSIONS) {
+      const oldestSessionId = this.consumedOutboxDeliveryIdsBySession.keys().next().value;
+      if (oldestSessionId === undefined) break;
+      this.consumedOutboxDeliveryIdsBySession.delete(oldestSessionId);
+    }
   }
 
   private transition(next: SparkAgentLoopState): void {

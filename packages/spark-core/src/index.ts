@@ -63,6 +63,8 @@ export type SparkHostRuntimeMessageTrust = "trusted" | "untrusted";
 
 export interface SparkHostRuntimeMessage {
   customType: string;
+  /** Stable producer-supplied identity used for idempotent outbox delivery. */
+  deliveryId?: string;
   content: string;
   display?: boolean;
   details?: Record<string, unknown>;

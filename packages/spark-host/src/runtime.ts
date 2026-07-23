@@ -131,6 +131,10 @@ const NOT_IMPLEMENTED = (name: string): Error =>
 
 const TOOL_EFFECTS = new Set<ToolEffect>(["read", "local_write", "external_write", "destructive"]);
 
+function outboxDeliveryKey(sessionId: string | undefined, deliveryId: string): string {
+  return `${sessionId ?? "spark-agent"}\u0000${deliveryId}`;
+}
+
 function resolveHookEffects(
   options: SparkHostHookOptions | undefined,
 ): readonly ToolEffect[] | undefined {
@@ -165,6 +169,7 @@ export class SparkHostRuntime implements SparkHostAPI {
   private readonly commands: RegisteredCommandMap = new Map();
   private readonly listeners: EventListenerMap = new Map();
   private readonly outbox: OutboxEnvelope[] = [];
+  private readonly outboxDeliveryKeys = new Set<string>();
   private triggerTurnHandler: (() => void | Promise<void>) | undefined;
   private readonly messageRenderers = new Map<string, SparkHostMessageRenderer>();
   private readonly toolRegistrationListeners = new Set<ToolRegistrationListener>();
@@ -264,9 +269,13 @@ export class SparkHostRuntime implements SparkHostAPI {
     message: SparkHostRuntimeMessage,
     options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean },
   ): void => {
+    const deliveryId = message.deliveryId?.trim() || undefined;
+    const deliveryKey = deliveryId ? outboxDeliveryKey(this.sessionId, deliveryId) : undefined;
+    if (deliveryKey && this.outboxDeliveryKeys.has(deliveryKey)) return;
     const envelope: OutboxEnvelope = {
       kind: "custom",
       sessionId: this.sessionId,
+      deliveryId,
       customType: message.customType,
       content: message.content,
       display: message.display,
@@ -277,6 +286,7 @@ export class SparkHostRuntime implements SparkHostAPI {
       enqueuedAt: Date.now(),
     };
     this.outbox.push(envelope);
+    if (deliveryKey) this.outboxDeliveryKeys.add(deliveryKey);
     this.uiTransport.customMessage?.({
       customType: message.customType,
       content: message.content,
@@ -436,7 +446,13 @@ export class SparkHostRuntime implements SparkHostAPI {
    * to inject custom or user messages into the next assistant turn.
    */
   drainOutbox(): OutboxEnvelope[] {
-    return this.outbox.splice(0, this.outbox.length);
+    const drained = this.outbox.splice(0, this.outbox.length);
+    for (const envelope of drained) {
+      if (envelope.deliveryId) {
+        this.outboxDeliveryKeys.delete(outboxDeliveryKey(envelope.sessionId, envelope.deliveryId));
+      }
+    }
+    return drained;
   }
 
   /** Snapshot the outbox without consuming it (handy for tests). */

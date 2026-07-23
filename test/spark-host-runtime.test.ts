@@ -315,6 +315,34 @@ test("SparkHostRuntime emit fires registered listeners with a fresh context", as
   assert.equal(typeof seen[0]!.ui, "object");
 });
 
+test("SparkHostRuntime deduplicates delivery ids per session until drain", () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-dedupe-test" });
+  const message = {
+    customType: "spark-memory-checkpoint",
+    deliveryId: "checkpoint:generation-1",
+    content: "checkpoint",
+    display: false,
+  };
+
+  host.setSessionId("session-a");
+  host.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
+  host.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
+  host.setSessionId("session-b");
+  host.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
+
+  assert.equal(host.peekOutbox().length, 2);
+  assert.deepEqual(
+    host.drainOutbox().map((entry) => [entry.sessionId, entry.deliveryId]),
+    [
+      ["session-a", message.deliveryId],
+      ["session-b", message.deliveryId],
+    ],
+  );
+  host.setSessionId("session-a");
+  host.sendMessage(message, { deliverAs: "nextTurn", triggerTurn: false });
+  assert.equal(host.peekOutbox().length, 1, "a drained delivery can be handed to the loop");
+});
+
 test("SparkHostRuntime sendMessage and sendUserMessage push envelopes into the outbox", () => {
   const host = new SparkHostRuntime({ cwd: "/tmp/spark-host-runtime-test" });
   host.sendMessage(
