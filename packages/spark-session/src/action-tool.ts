@@ -691,6 +691,56 @@ function normalizeSendWait(value: unknown): "accepted" | "completed" {
   return value;
 }
 
+function assertContinuationParams(
+  params: Record<string, unknown>,
+  kind: SparkSessionMailKind,
+  wait: "accepted" | "completed",
+): void {
+  if (kind !== "request" || wait !== "completed") {
+    throw new Error("session continuation requires kind=request and wait=completed");
+  }
+  const allowed = new Set(["invocationId", "kind", "wait", "timeoutMs"]);
+  const rejected = Object.keys(params).filter((field) => !allowed.has(field));
+  if (rejected.length > 0) {
+    throw new Error(
+      `session continuation accepts only invocationId, kind=request, wait=completed, and timeoutMs; rejected ${rejected.join(", ")}`,
+    );
+  }
+}
+
+function validatedChannelOriginBinding(
+  ctx: SparkSessionToolContext,
+): NonNullable<SparkSessionMailMessage["originBinding"]> {
+  const binding = ctx.channelBinding;
+  if (!binding) throw new Error("originating channel request is missing immutable origin binding");
+  const workspaceId = requiredString(
+    binding.workspaceId,
+    "originating channel request requires immutable workspaceId",
+  );
+  const adapterId = requiredString(
+    binding.adapterId,
+    "originating channel request requires immutable adapterId",
+  );
+  const externalKey = requiredString(
+    binding.externalKey,
+    "originating channel request requires immutable externalKey",
+  );
+  const recipient = requiredString(
+    binding.recipient,
+    "originating channel request requires immutable recipient",
+  );
+  return {
+    workspaceId,
+    adapter: binding.adapter,
+    adapterId,
+    ...(binding.adapterAccountIdentity
+      ? { adapterAccountIdentity: binding.adapterAccountIdentity }
+      : {}),
+    externalKey,
+    recipient,
+  };
+}
+
 function normalizePayload(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null) return {};
   if (!isRecord(value)) throw new Error("session payload must be a JSON object");
@@ -889,10 +939,11 @@ function turnOriginBinding(
   if (!binding) return undefined;
   const workspaceId = binding.workspaceId.trim();
   const adapterId = binding.adapterId?.trim();
+  const externalKey = binding.externalKey.trim();
   const recipient = binding.recipient.trim();
-  if (!workspaceId || !adapterId || !recipient) {
+  if (!workspaceId || !adapterId || !externalKey || !recipient) {
     throw new Error(
-      "originating channel request requires immutable workspaceId, adapterId, and recipient",
+      "originating channel request requires immutable workspaceId, adapterId, externalKey, and recipient",
     );
   }
   return {
@@ -903,7 +954,7 @@ function turnOriginBinding(
       ...(binding.adapterAccountIdentity
         ? { adapterAccountIdentity: binding.adapterAccountIdentity }
         : {}),
-      externalKey: binding.externalKey,
+      externalKey,
       recipient,
     },
   };

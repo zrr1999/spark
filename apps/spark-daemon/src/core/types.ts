@@ -58,14 +58,14 @@ export interface SparkDaemonSessionRunTask {
   assignment?: SparkAssignment;
   /** Direct request message metadata persisted on the target user turn. */
   messageMetadata?: Record<string, unknown>;
-  /** When set, daemon sends the assistant reply back through channel notify. */
+  /** Complete immutable channel origin. Channel-origin tasks fail closed when this is incomplete. */
   channelReply?: {
     workspaceId: string;
-    /** Platform semantics. Optional only for tasks persisted before adapter instances existed. */
     adapter?: ChannelAdapterType;
     adapterId: string;
     /** Rename-stable provider account identity frozen with the inbound turn. */
     adapterAccountIdentity?: string;
+    externalKey?: string;
     recipient: string;
   };
   /** Inbound platform facts for this turn; never part of the persisted user message body. */
@@ -142,6 +142,7 @@ function parseChannelReply(value: unknown): SparkDaemonSessionRunTask["channelRe
   const adapter = channelAdapterType(record.adapter);
   const adapterId = nonEmptyString(record.adapterId);
   const adapterAccountIdentity = nonEmptyString(record.adapterAccountIdentity);
+  const externalKey = nonEmptyString(record.externalKey);
   const recipient = nonEmptyString(record.recipient);
   if (!workspaceId || !adapterId || !recipient) return undefined;
   return {
@@ -149,6 +150,7 @@ function parseChannelReply(value: unknown): SparkDaemonSessionRunTask["channelRe
     ...(adapter ? { adapter } : {}),
     adapterId,
     ...(adapterAccountIdentity ? { adapterAccountIdentity } : {}),
+    ...(externalKey ? { externalKey } : {}),
     recipient,
   };
 }

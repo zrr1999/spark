@@ -37,7 +37,18 @@ describe("daemon session control admission", () => {
       daemonId: "origin-binding-test",
       daemonCwd: root,
     });
-    await sessionRegistry.create({ sessionId: "session-worker", scope: { kind: "daemon" } });
+    const workspace = registerWorkspace(db, {
+      serverUrl: "https://cockpit.example",
+      serverBindingId: "workspace-original",
+      workspaceName: "origin",
+      localPath: root,
+    });
+    await sessionRegistry.create({
+      sessionId: "session-worker",
+      scope: { kind: "workspace", workspaceId: workspace.id },
+      workspaceId: workspace.id,
+      cwd: root,
+    });
     try {
       const originBinding = {
         workspaceId: "workspace-original",

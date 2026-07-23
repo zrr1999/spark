@@ -589,6 +589,11 @@ export function channelReplyDeliveryForCompletion(
 ): SparkDaemonChannelReplyDeliveryInput | undefined {
   const channelReply = task.channelReply;
   if (!channelReply) return undefined;
+  const adapter = channelReply.adapter;
+  const externalKey = channelReply.externalKey;
+  if (!adapter || !channelReply.adapterId || !externalKey || !channelReply.recipient) {
+    throw new Error("channel-origin task has incomplete frozen binding");
+  }
   // Inline streams either already presented the answer or own a recoverable
   // retry row. Do not enqueue a competing ordinary-message delivery.
   if (kind === "final" && channelReplyOwnedFromResult(result)) return undefined;
@@ -606,15 +611,17 @@ export function channelReplyDeliveryForCompletion(
     ...(channelReply.adapterAccountIdentity
       ? { adapterAccountIdentity: channelReply.adapterAccountIdentity }
       : {}),
-    ...(task.channelContext?.externalKey ? { externalKey: task.channelContext.externalKey } : {}),
+    externalKey,
     target: channelReplyTarget(task),
     text,
   };
 }
 
 function channelReplyTarget(task: SparkDaemonSessionRunTask): ChannelReplyTarget {
+  const binding = completeChannelBinding(task);
+  if (!binding) throw new Error("channel-origin delivery requires a frozen binding");
   return {
-    recipient: task.channelReply?.recipient ?? "",
+    recipient: binding.recipient,
     ...(task.channelContext?.senderId ? { senderId: task.channelContext.senderId } : {}),
     ...(task.channelContext?.messageId ? { messageId: task.channelContext.messageId } : {}),
     ...(task.prompt.trim() ? { preview: task.prompt.trim().slice(0, 240) } : {}),
@@ -658,6 +665,7 @@ export async function executeSparkDaemonSessionRunTask(
     sessionContext.sideThread,
   );
   const messageMetadata = sessionRunMessageMetadata(task, context.invocationId);
+  const binding = completeChannelBinding(task);
   return await options.executeSession({
     cwd: task.cwd ?? options.cwd ?? process.cwd(),
     sparkHome: options.paths.piAgentDir,
@@ -677,19 +685,9 @@ export async function executeSparkDaemonSessionRunTask(
     ...(messageMetadata ? { messageMetadata } : {}),
     ...(sessionContext.surface ? { sessionSurface: sessionContext.surface } : {}),
     sessionSource: sessionSourceForTask(task),
-    ...(task.channelReply && task.channelContext
+    ...(binding
       ? {
-          channelBinding: {
-            workspaceId: task.channelReply.workspaceId,
-            adapter:
-              task.channelReply.adapter ?? sessionChannelAdapter(task.channelReply.adapterId),
-            externalKey: task.channelContext.externalKey,
-            recipient: task.channelReply.recipient,
-            adapterId: task.channelReply.adapterId,
-            ...(task.channelReply.adapterAccountIdentity
-              ? { adapterAccountIdentity: task.channelReply.adapterAccountIdentity }
-              : {}),
-          },
+          channelBinding: binding,
         }
       : {}),
     invocationId: context.invocationId,
@@ -714,6 +712,33 @@ export async function executeSparkDaemonSessionRunTask(
       : {}),
     onEvent: (event) => emitHeadlessEvent(event, task, context),
   });
+}
+
+function completeChannelBinding(task: SparkDaemonSessionRunTask) {
+  const reply = task.channelReply;
+  if (!reply) return undefined;
+  if (
+    !reply.adapter ||
+    !reply.externalKey ||
+    !reply.adapterId ||
+    !reply.workspaceId ||
+    !reply.recipient
+  ) {
+    throw new Error("channel-origin task has incomplete frozen binding");
+  }
+  if (task.channelContext && task.channelContext.externalKey !== reply.externalKey) {
+    throw new Error("channel-origin task externalKey does not match frozen binding");
+  }
+  return {
+    workspaceId: reply.workspaceId,
+    adapter: reply.adapter,
+    externalKey: reply.externalKey,
+    recipient: reply.recipient,
+    adapterId: reply.adapterId,
+    ...(reply.adapterAccountIdentity
+      ? { adapterAccountIdentity: reply.adapterAccountIdentity }
+      : {}),
+  };
 }
 
 function sessionRunPrompt(
@@ -743,23 +768,22 @@ function sessionRunMessageMetadata(
       surface: source === "channel" ? "channel" : "local",
     },
   };
-  const channel = task.channelReply ? task.channelContext : undefined;
+  const binding = task.channelReply ? completeChannelBinding(task) : undefined;
+  const channel = binding ? task.channelContext : undefined;
   const channelMetadata = channel
     ? {
         origin: {
           kind: "user",
           host: "channel",
           surface: "channel",
-          adapter:
-            task.channelReply!.adapter ?? sessionChannelAdapter(task.channelReply!.adapterId),
-          externalKey: channel.externalKey,
+          adapter: binding!.adapter,
+          externalKey: binding!.externalKey,
           ...(channel.senderId ? { senderId: channel.senderId } : {}),
           ...(channel.senderName ? { senderName: channel.senderName } : {}),
         },
         channel: {
-          adapter:
-            task.channelReply!.adapter ?? sessionChannelAdapter(task.channelReply!.adapterId),
-          externalKey: channel.externalKey,
+          adapter: binding!.adapter,
+          externalKey: binding!.externalKey,
           ...(channel.senderId ? { senderId: channel.senderId } : {}),
           ...(channel.senderName ? { senderName: channel.senderName } : {}),
           ...(channel.chatId ? { chatId: channel.chatId } : {}),
@@ -792,13 +816,6 @@ function sessionQuestionChainForTask(task: SparkDaemonSessionRunTask): string[] 
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
-}
-
-function sessionChannelAdapter(adapterId: string): "feishu" | "infoflow" | "qqbot" {
-  if (adapterId === "feishu" || adapterId === "infoflow" || adapterId === "qqbot") {
-    return adapterId;
-  }
-  throw new Error(`Unsupported session channel adapter: ${adapterId}`);
 }
 
 export function sessionSourceForTask(
@@ -864,7 +881,10 @@ async function systemPromptForChannelSession(
       SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
     ]);
   }
-  const externalKey = task.channelContext?.externalKey;
+  const externalKey = reply.externalKey;
+  if (task.channelContext && task.channelContext.externalKey !== externalKey) {
+    throw new Error("channel-origin task externalKey does not match frozen binding");
+  }
   const scope =
     externalKey?.startsWith("infoflow:group:") ||
     externalKey?.startsWith("qqbot:group:") ||
@@ -874,17 +894,14 @@ async function systemPromptForChannelSession(
       ? "group"
       : "user";
 
-  if (reply.adapterId === "infoflow") {
-    const bindingKey =
-      externalKey ??
-      (scope === "group" ? `infoflow:${reply.recipient}` : `infoflow:user:${reply.recipient}`);
+  if (reply.adapter === "infoflow") {
     const infoflow = await loadInfoflowAdapterConfig(options, reply.workspaceId);
     return composeAgentSystemPrompt([
       DEFAULT_SPARK_IDENTITY_PROMPT,
       renderInfoflowInternalSystemPrompt({
         ...(infoflow ? { config: infoflow } : {}),
         scope,
-        externalKey: bindingKey,
+        externalKey,
       }),
       infoflow ? resolveInfoflowCustomSystemPrompt(infoflow) : undefined,
       SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
@@ -892,7 +909,7 @@ async function systemPromptForChannelSession(
     ]);
   }
 
-  if (reply.adapterId === "qqbot") {
+  if (reply.adapter === "qqbot") {
     const qqbot = await loadQqbotAdapterConfig(options, reply.workspaceId);
     const custom = qqbot?.system_prompt?.trim();
     return composeAgentSystemPrompt([
@@ -910,11 +927,15 @@ async function systemPromptForChannelSession(
   return composeAgentSystemPrompt([
     DEFAULT_SPARK_IDENTITY_PROMPT,
     renderSparkChannelSurfacePrompt({
-      adapter: reply.adapterId,
+      adapter: reply.adapter ?? failIncompleteChannelBinding(),
       scope,
     }),
     SPARK_CHANNEL_SESSION_EXECUTION_PROMPT,
   ]);
+}
+
+function failIncompleteChannelBinding(): never {
+  throw new Error("channel-origin task has incomplete frozen binding");
 }
 
 async function systemPromptForSession(

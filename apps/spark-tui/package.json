@@ -30,6 +30,7 @@
     "@zendev-lab/spark-cue": "workspace:^",
     "@zendev-lab/spark-extension": "workspace:^",
     "@zendev-lab/spark-files": "workspace:^",
+    "@zendev-lab/spark-fusion": "workspace:^",
     "@zendev-lab/spark-graft": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",

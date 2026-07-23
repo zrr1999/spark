@@ -51,6 +51,26 @@ describe("daemon native session execution", () => {
     );
   });
 
+  it("fails closed before model execution for an incomplete frozen channel binding", async () => {
+    const executeSession = vi.fn(async () => ({ assistantText: "must not run" }));
+    const task = {
+      type: "session.run" as const,
+      sessionId: "sess_incomplete_binding",
+      prompt: "do not route by fallback",
+      channelReply: {
+        workspaceId: "workspace-qq",
+        adapterId: "qq-main",
+        recipient: "c2c:user-1",
+      },
+      channelContext: { externalKey: "qqbot:c2c:user-1" },
+    };
+
+    await expect(
+      executeSparkDaemonSessionRunTask(task, context(task), { paths, executeSession }),
+    ).rejects.toThrow(/channel-origin task .*frozen binding/u);
+    expect(executeSession).not.toHaveBeenCalled();
+  });
+
   it("streams display-safe assistant text and tool lifecycle to a channel reply card", async () => {
     const appendText = vi.fn();
     const notifyToolStart = vi.fn();
@@ -64,7 +84,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "group:10838226",
+        externalKey: "infoflow:group:10838226",
       },
       channelContext: {
         externalKey: "infoflow:group:10838226",
@@ -165,7 +187,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-qq",
         adapterId: "qqbot",
+        adapter: "qqbot",
         recipient: "c2c:user-1",
+        externalKey: "qqbot:c2c:user-1",
       },
       channelContext: {
         externalKey: "qqbot:c2c:user-1",
@@ -260,7 +284,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "group:10838226",
+        externalKey: "infoflow:group:10838226",
       },
       channelContext: {
         externalKey: "infoflow:group:10838226",
@@ -304,7 +330,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const executor = createChannelAwareTaskExecutor({
@@ -342,7 +370,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const executor = createChannelAwareTaskExecutor({
@@ -377,7 +407,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const fail = vi.fn(async () => undefined);
@@ -418,7 +450,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-qq",
         adapterId: "qqbot",
+        adapter: "qqbot",
         recipient: "c2c:user-1",
+        externalKey: "qqbot:c2c:user-1",
       },
       channelContext: {
         externalKey: "qqbot:c2c:user-1",
@@ -468,7 +502,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:user:alice",
       },
       channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
@@ -494,7 +530,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-qq",
         adapterId: "qqbot",
+        adapter: "qqbot",
         recipient: "c2c:user-1",
+        externalKey: "qqbot:c2c:user-1",
       },
       channelContext: {
         externalKey: "qqbot:c2c:user-1",
@@ -668,7 +706,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-qq",
         adapterId: "qqbot",
+        adapter: "qqbot",
         recipient: "c2c:user-1",
+        externalKey: "qqbot:test:frozen",
       },
     };
     const complete = vi.fn(async () => undefined);
@@ -706,7 +746,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:user:alice",
       },
       channelContext: { externalKey: "infoflow:user:alice", senderId: "alice" },
     };
@@ -749,7 +791,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const executeSession = vi.fn(async () => ({ assistantText: "done" }));
@@ -791,7 +835,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const appendText = vi.fn();
@@ -856,7 +902,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const executor = createChannelAwareTaskExecutor({
@@ -905,7 +953,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "alice",
+        externalKey: "infoflow:test:frozen",
       },
     };
     const defer = vi.fn();
@@ -970,7 +1020,9 @@ describe("daemon native session execution", () => {
       channelReply: {
         workspaceId: "workspace-infoflow",
         adapterId: "infoflow",
+        adapter: "infoflow",
         recipient: "group:10838226",
+        externalKey: "infoflow:group:10838226",
       },
       channelContext: {
         externalKey: "infoflow:group:10838226",
@@ -1103,6 +1155,7 @@ describe("daemon native session execution", () => {
         adapterId: "qqbot-account-a",
         adapterAccountIdentity: "channel-account:qqbot:account-a",
         recipient: "qq:user:42",
+        externalKey: "qqbot:user:42",
       },
       channelContext: {
         externalKey: "qqbot:user:42",

@@ -163,6 +163,62 @@ module.exports = {
       },
     },
     {
+      name: "spark-fusion-foundation-only",
+      comment:
+        "spark-fusion is a host-neutral leaf orchestration capability and may depend only on " +
+        "spark-core among workspace packages.",
+      severity: "error",
+      from: {
+        path: "^packages/spark-fusion/",
+      },
+      to: {
+        path: [
+          "^apps/",
+          "^packages/(?!spark-(?:core|fusion)(?:/|$))",
+          "node_modules/.*/@zendev-lab/(?!spark-(?:core|fusion)(?:/|$))",
+          "/node_modules/@zendev-lab/(?!spark-(?:core|fusion)(?:/|$))",
+          "^@zendev-lab/(?!spark-(?:core|fusion)(?:/|$))",
+        ].join("|"),
+      },
+    },
+    {
+      name: "spark-repro-no-host-or-product",
+      comment:
+        "spark-repro owns host-neutral state and policy only. Hosts compose optional Fusion; " +
+        "spark-repro must not import it, host/workflow runtimes, Pi product code, or apps.",
+      severity: "error",
+      from: {
+        path: "^packages/spark-repro/",
+      },
+      to: {
+        path: [
+          "^apps/",
+          "^packages/pi-",
+          "^packages/spark-(?:ai|extension|fusion|host|runtime|turn|workflows)(?:/|$)",
+          "node_modules/.*/@zendev-lab/pi-",
+          "/node_modules/@zendev-lab/pi-",
+          "^@zendev-lab/pi-",
+          "node_modules/.*/@zendev-lab/spark-(?:ai|cli|cockpit|daemon|extension|fusion|host|runtime|tui-app|turn|workflows)(?:/|$)",
+          "/node_modules/@zendev-lab/spark-(?:ai|cli|cockpit|daemon|extension|fusion|host|runtime|tui-app|turn|workflows)(?:/|$)",
+          "^@zendev-lab/spark-(?:ai|cli|cockpit|daemon|extension|fusion|host|runtime|tui-app|turn|workflows)(?:/|$)",
+          "node_modules/.*/@earendil-works/pi-",
+          "/node_modules/@earendil-works/pi-",
+          "^@earendil-works/pi-",
+        ].join("|"),
+      },
+    },
+    {
+      name: "fusion-repro-no-circular",
+      comment: "Fusion and reproduction capability packages must remain acyclic.",
+      severity: "error",
+      from: {
+        path: "^packages/spark-(fusion|repro)/",
+      },
+      to: {
+        circular: true,
+      },
+    },
+    {
       name: "spark-extension-no-product-adapters",
       comment: "spark-extension must not depend on product coordination or app adapter packages.",
       severity: "error",

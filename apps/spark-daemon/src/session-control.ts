@@ -224,11 +224,13 @@ export async function executeSparkDaemonSessionControl(
       if (!session && request.scope !== "any") {
         throw new Error("Spark daemon session registry is not available.");
       }
+      if (session) assertOriginBindingTarget(parsed.originBinding, session);
       const route: { cwd?: string; workspaceId?: string } = session
         ? sessionTurnRoute(options.db, session, parsed.assignment)
         : parsed.assignment?.target.workspaceId
           ? { workspaceId: parsed.assignment.target.workspaceId }
           : {};
+      assertOriginBindingRoute(parsed.originBinding, session, route);
       const idempotencyKey = parsed.idempotencyKey ?? request.idempotencyKey;
       const store = new SparkInvocationStore(options.db);
       const existing = idempotencyKey ? store.findByIdempotencyKey(idempotencyKey) : undefined;
@@ -275,6 +277,7 @@ export async function executeSparkDaemonSessionControl(
                     ...(parsed.originBinding.adapterAccountIdentity
                       ? { adapterAccountIdentity: parsed.originBinding.adapterAccountIdentity }
                       : {}),
+                    externalKey: parsed.originBinding.externalKey,
                     recipient: parsed.originBinding.recipient,
                   },
                   channelContext: { externalKey: parsed.originBinding.externalKey },
@@ -552,6 +555,22 @@ function assertOrdinarySessionVisible(
   );
 }
 
+function assertOriginBindingTarget(
+  binding: ReturnType<typeof parseTurnSubmitPayload>["originBinding"],
+  session: SparkSessionRegistryRecord,
+): void {
+  if (!binding) return;
+  if (session.scope.kind !== "workspace" || session.scope.workspaceId !== binding.workspaceId) {
+    throw new SparkSessionRegistryError(
+      "session_scope_mismatch",
+      `target session ${session.sessionId} does not belong to frozen workspace ${binding.workspaceId}`,
+    );
+  }
+  if (!binding.externalKey.startsWith(`${binding.adapter}:`)) {
+    throw new Error("origin binding adapter identity does not match externalKey");
+  }
+}
+
 function parseTurnSubmitPayload(payload: Record<string, unknown>, sessionId?: string) {
   const parsed = sparkTurnSubmitRequestSchema.parse({
     ...payload,
@@ -653,6 +672,20 @@ function sessionTurnRoute(
     );
   }
   return { cwd: cwd.trim(), workspaceId };
+}
+
+function assertOriginBindingRoute(
+  binding: ReturnType<typeof parseTurnSubmitPayload>["originBinding"],
+  session: SparkSessionRegistryRecord | undefined,
+  route: { workspaceId?: string },
+): void {
+  if (!binding) return;
+  if (!session || session.scope.kind !== "workspace" || route.workspaceId !== binding.workspaceId) {
+    throw new SparkSessionRegistryError(
+      "session_scope_mismatch",
+      `originating binding workspace ${binding.workspaceId} does not match session workspace`,
+    );
+  }
 }
 
 function submitInvocationTask(

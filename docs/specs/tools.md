@@ -40,6 +40,28 @@ TUI and Cockpit use the same daemon-owned Side Thread contract; presentation sta
 
 Direct role/session calls do not create task attribution.
 
+## Deliberation
+
+- `fusion({ action: "deliberate" })` is an opt-in Spark-native capability that runs two to four
+  bounded leaf opinions concurrently and asks one bounded Judge leaf for strict structured
+  comparison. The calling session model remains the Writer; Fusion never writes the user-facing
+  final answer itself.
+- Panel and Judge leaves have no tools and cannot recurse into Fusion. Input and perspective text
+  are untrusted data under fixed system briefs. Invalid prose is not accepted as structured
+  success, and one surviving panel never becomes fabricated consensus.
+- Fusion is approval-gated, sequential at the public tool boundary, and absent from the default
+  extension profile because one call fans data out to multiple model invocations. Enable it
+  explicitly with `--extension @zendev-lab/spark-fusion/extension` or equivalent host config.
+- In `reproduce` and `scale`, consider Fusion only after runtime evidence localizes the first
+  divergence and multiple plausible hypotheses remain, evidence conflicts, or the latest verdict
+  is inconclusive. Skip it when the next single-variable experiment is already clear and cheap.
+  Send only a bounded current evidence summary with original evidence refs, and do not repeat a
+  consultation until evidence or hypotheses materially change.
+- Fusion failure is non-blocking: continue SOLO. Its result may recommend one cheap
+  single-variable experiment, but the main repro session remains the sole writer and executor.
+  Fusion cannot confirm a runtime claim, emit a verdict, satisfy proof or a gate, or create
+  evidence or a Product Artifact; Product Artifact kinds remain exactly `issue | pr | preview`.
+
 ## Evidence and context
 
 - `ask` is the only structured question surface; cancellation is not approval.

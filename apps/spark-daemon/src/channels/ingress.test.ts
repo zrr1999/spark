@@ -266,6 +266,7 @@ describe("channel ingress", () => {
         workspaceId: "workspace-1",
         adapter: "infoflow",
         adapterId: "infoflow",
+        externalKey: "infoflow:user:user-1",
         recipient: "user-1",
       },
       channelContext: {
@@ -417,6 +418,7 @@ describe("channel ingress", () => {
           workspaceId: "ws_demo",
           adapter: "feishu",
           adapterId: "feishu",
+          externalKey: "feishu:chat:oc_demo",
           recipient: "oc_demo",
         },
         channelContext: {
@@ -518,6 +520,7 @@ describe("channel ingress", () => {
       channelReply: {
         workspaceId: "ws_qq",
         adapterId: "qqbot",
+        externalKey: "qqbot:c2c:openid_u1",
         recipient: "c2c:openid_u1",
       },
       channelContext: {

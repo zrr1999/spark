@@ -19,6 +19,7 @@ test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin exten
     "@zendev-lab/spark-ask/extension",
     "@zendev-lab/spark-cue/extension",
     "@zendev-lab/spark-files/extension",
+    "@zendev-lab/spark-fusion/extension",
     "@zendev-lab/spark-ai/models-extension",
     "@zendev-lab/spark-memory/extension",
     "@zendev-lab/spark-roles/extension",
@@ -27,9 +28,11 @@ test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin exten
     "@zendev-lab/spark-graft/extension",
     "@zendev-lab/spark-extension/extension",
   ];
-  const defaultExpected = builtinExpected.filter(
-    (specifier) => specifier !== "@zendev-lab/spark-graft/extension",
-  );
+  const optInExtensions = new Set([
+    "@zendev-lab/spark-fusion/extension",
+    "@zendev-lab/spark-graft/extension",
+  ]);
+  const defaultExpected = builtinExpected.filter((specifier) => !optInExtensions.has(specifier));
   assert.deepEqual(
     loadBuiltinExtensionFactories().map((entry) => entry.specifier),
     builtinExpected,
@@ -37,8 +40,8 @@ test("loadBuiltinExtensionFactories exposes the retained Spark CLI builtin exten
   assert.deepEqual([...DEFAULT_SPARK_EXTENSION_SPECS], defaultExpected);
 });
 
-test("default Spark extension profile leaves Graft available only for explicit opt-in", async () => {
-  const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-default-no-graft" });
+test("default Spark extension profile leaves optional capabilities available only for opt-in", async () => {
+  const host = new SparkHostRuntime({ cwd: "/tmp/spark-extension-loader-default-opt-in" });
   const result = await new SparkExtensionLoader({ api: host }).load();
 
   assert.equal(
@@ -47,6 +50,14 @@ test("default Spark extension profile leaves Graft available only for explicit o
   );
   assert.equal(
     host.getAllTools().some((tool) => tool.name.startsWith("graft_")),
+    false,
+  );
+  assert.equal(
+    result.outcomes.some((outcome) => outcome.specifier === "@zendev-lab/spark-fusion/extension"),
+    false,
+  );
+  assert.equal(
+    host.getAllTools().some((tool) => tool.name === "fusion"),
     false,
   );
 });
@@ -66,12 +77,22 @@ test("root Pi extension list and native builtins both expose self-extension tool
     rootPackage.pi?.extensions?.includes("./packages/spark-graft/src/extension-entry.ts"),
     false,
   );
+  assert.equal(
+    rootPackage.pi?.extensions?.some((entry) => entry.includes("spark-fusion")),
+    false,
+  );
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-memory/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-session/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
   assert.equal(
     (DEFAULT_SPARK_EXTENSION_SPECS as readonly string[]).includes(
       "@zendev-lab/spark-graft/extension",
+    ),
+    false,
+  );
+  assert.equal(
+    (DEFAULT_SPARK_EXTENSION_SPECS as readonly string[]).includes(
+      "@zendev-lab/spark-fusion/extension",
     ),
     false,
   );
@@ -94,6 +115,8 @@ test("source-distributed Spark TUI resolves builtins through declared package ex
     );
     assert.match(loaderSource, new RegExp(`from ["']${specifier.replaceAll("/", "\\/")}["']`, "u"));
   }
+  assert.ok(tuiPackage.dependencies?.["@zendev-lab/spark-fusion"]);
+  assert.match(loaderSource, /from ["']@zendev-lab\/spark-fusion\/extension["']/u);
   assert.doesNotMatch(loaderSource, /packages\/[^/]+\/src\//u);
   assert.doesNotMatch(
     loaderSource,
@@ -135,6 +158,7 @@ test("SparkExtensionLoader loads builtin factories through explicit imports", as
       "@zendev-lab/spark-ask/extension",
       "@zendev-lab/spark-cue/extension",
       "@zendev-lab/spark-files/extension",
+      "@zendev-lab/spark-fusion/extension",
       "@zendev-lab/spark-ai/models-extension",
       "@zendev-lab/spark-memory/extension",
       "@zendev-lab/spark-roles/extension",
@@ -155,6 +179,7 @@ test("SparkExtensionLoader loads builtin factories through explicit imports", as
   assert.ok(!tools.includes("ask_flow"));
   assert.ok(tools.includes("cue_exec"));
   assert.ok(tools.includes("read"));
+  assert.ok(tools.includes("fusion"));
   assert.ok(tools.includes("models"));
   assert.ok(tools.includes("memory"));
   assert.ok(tools.includes("role"));

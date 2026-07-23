@@ -109,6 +109,30 @@ function throwingStream(error: Error, calls: { count: number }): SparkProviderSt
   }) as SparkProviderStreamFunction;
 }
 
+function abortableStream(started: PromiseWithResolvers<void>): SparkProviderStreamFunction {
+  return ((_model, _context, options) => {
+    const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+    async function* iterate() {
+      yield { type: "start" as const };
+    }
+    const stream = iterate() as unknown as AsyncIterable<never> & { result(): Promise<never> };
+    stream.result = async () => {
+      started.resolve();
+      await new Promise<never>((_resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("request aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+      });
+      throw new Error("unreachable");
+    };
+    return stream as unknown as ReturnType<SparkProviderStreamFunction>;
+  }) as SparkProviderStreamFunction;
+}
+
 function bindingFor(
   stream: SparkProviderStreamFunction,
   profile = sampleProfile(),
@@ -285,4 +309,20 @@ test("runSparkLeaf degrades when aborted before execution", async () => {
   assert.equal(result.degraded, true);
   assert.equal(result.reasonCode, "aborted");
   assert.equal(bindingCalls, 0);
+});
+
+test("runSparkLeaf preserves aborted classification for an in-flight cancellation", async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers<void>();
+  const resultPromise = runSparkLeaf(
+    { ...baseRequest, signal: controller.signal },
+    { resolveBinding: () => bindingFor(abortableStream(started)) },
+  );
+
+  await started.promise;
+  controller.abort();
+  const result = await resultPromise;
+
+  assert.equal(result.degraded, true);
+  assert.equal(result.reasonCode, "aborted");
 });

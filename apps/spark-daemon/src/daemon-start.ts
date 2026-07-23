@@ -930,6 +930,7 @@ function prepareChannelIngress(
             cwd,
             channelReply: {
               ...assignment.channelReply,
+              externalKey: assignment.externalKey,
               adapterAccountIdentity: assignment.adapterAccountIdentity,
             },
             ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),

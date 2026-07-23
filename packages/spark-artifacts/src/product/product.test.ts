@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  PRODUCT_ARTIFACT_KINDS,
   defaultProductArtifactStore,
   issueBodyFromSnapshot,
   parseForgeUrl,
@@ -13,6 +14,10 @@ import {
 } from "./index.ts";
 
 describe("product artifact kinds", () => {
+  it("keeps the public kind surface limited to issue, pr, and preview", () => {
+    expect(PRODUCT_ARTIFACT_KINDS).toEqual(["issue", "pr", "preview"]);
+  });
+
   it("stores preview with continuous versioned updates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "spark-product-preview-"));
     const store = defaultProductArtifactStore(dir);

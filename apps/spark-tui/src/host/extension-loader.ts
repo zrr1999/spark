@@ -5,6 +5,7 @@ import type { SparkHostAPI } from "@zendev-lab/spark-core";
 import sparkAskExtension from "@zendev-lab/spark-ask/extension";
 import sparkCueExtension from "@zendev-lab/spark-cue/extension";
 import sparkFilesExtension from "@zendev-lab/spark-files/extension";
+import sparkFusionExtension from "@zendev-lab/spark-fusion/extension";
 import sparkMemoryExtension from "@zendev-lab/spark-memory/extension";
 import sparkRolesExtension from "@zendev-lab/spark-roles/extension";
 import sparkSessionExtension from "@zendev-lab/spark-session/extension";
@@ -20,6 +21,7 @@ export type SparkBuiltinExtensionName =
   | "@zendev-lab/spark-ask"
   | "@zendev-lab/spark-cue"
   | "@zendev-lab/spark-files"
+  | "@zendev-lab/spark-fusion"
   | "@zendev-lab/spark-graft"
   | "@zendev-lab/spark-memory"
   | "@zendev-lab/spark-roles"
@@ -69,6 +71,11 @@ const BUILTIN_EXTENSION_FACTORIES: readonly SparkBuiltinCapabilityFactory[] = [
     name: "@zendev-lab/spark-files",
     specifier: "@zendev-lab/spark-files/extension",
     factory: sparkFilesExtension as SparkCapabilityFactory,
+  },
+  {
+    name: "@zendev-lab/spark-fusion",
+    specifier: "@zendev-lab/spark-fusion/extension",
+    factory: sparkFusionExtension as SparkCapabilityFactory,
   },
   {
     name: "@zendev-lab/spark-ai",

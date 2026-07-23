@@ -39,6 +39,30 @@ export function loadMigrations(): Migration[] {
     });
 }
 
+function repairLegacyWorkspaceSchema(db: DatabaseSync): void {
+  const table = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workspaces' LIMIT 1")
+    .get() as { sql?: string } | undefined;
+  if (!table?.sql || /\bslug\b/u.test(table.sql)) return;
+
+  // A historical daemon schema could be opened at the Cockpit path. Keep its
+  // rows and leases usable while adding the Cockpit workspace identity fields.
+  db.exec(`
+    ALTER TABLE workspaces ADD COLUMN slug TEXT;
+    ALTER TABLE workspaces ADD COLUMN name TEXT;
+    ALTER TABLE workspaces ADD COLUMN description TEXT;
+    ALTER TABLE workspaces ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';
+  `);
+  db.exec(`
+    UPDATE workspaces
+    SET slug = COALESCE(NULLIF(local_workspace_key, ''), 'workspace-' || id),
+        name = COALESCE(NULLIF(display_name, ''), NULLIF(local_workspace_key, ''), id),
+        description = NULL,
+        status = CASE WHEN status = 'archived' THEN 'archived' ELSE 'active' END,
+        updated_at = COALESCE(updated_at, created_at);
+  `);
+}
+
 function findRepoRoot(start: string): string {
   let current = resolve(start);
 
@@ -77,6 +101,8 @@ export function migrate(db: DatabaseSync, migrations = loadMigrations()): void {
     if (!schemaMigrationsExists) {
       db.exec(bootstrapMigration.sql);
     }
+
+    repairLegacyWorkspaceSchema(db);
 
     const bootstrapAppliedAt = new Date().toISOString();
     db.prepare(

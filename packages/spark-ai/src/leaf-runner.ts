@@ -146,6 +146,9 @@ export async function runSparkLeaf(
     return { degraded: false, text, model: binding.sparkModelId };
   } catch (error) {
     // Never surface raw provider text/credentials: map to a stable reason code.
+    // An in-flight cancellation may be wrapped by the route resolver, so check
+    // the caller signal before classifying the provider/route failure.
+    if (request.signal?.aborted) return degraded("aborted");
     if (error instanceof SparkRouteExecutionError) return degraded("model-call-failed");
     return degraded("route-unavailable");
   }

@@ -21,6 +21,7 @@ export interface SparkSessionMailChannelTarget {
 export interface SparkSessionMailOriginBinding extends SparkSessionMailChannelTarget {
   workspaceId: string;
   adapter: "feishu" | "infoflow" | "qqbot";
+  adapterId: string;
   recipient: string;
 }
 
@@ -653,11 +654,12 @@ function normalizeOriginBinding(value: unknown): SparkSessionMailOriginBinding {
   }
   const record = value as Record<string, unknown>;
   const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId.trim() : "";
+  const adapterId = target.adapterId?.trim();
   const recipient = typeof record.recipient === "string" ? record.recipient.trim() : "";
-  if (!workspaceId || !recipient) {
-    throw new Error("originating channel binding requires workspaceId and recipient");
+  if (!workspaceId || !adapterId || !recipient) {
+    throw new Error("originating channel binding requires workspaceId, adapterId, and recipient");
   }
-  return { ...target, workspaceId, adapter: target.adapter, recipient };
+  return { ...target, workspaceId, adapter: target.adapter, adapterId, recipient };
 }
 
 function normalizeDeliveryTargets(

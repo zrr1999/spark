@@ -62,8 +62,9 @@ export interface ChannelIngressAssignment {
   channelReply: {
     workspaceId: string;
     /** Platform semantics; adapterId remains the configured instance route. */
-    adapter?: ChannelAdapterType;
+    adapter: ChannelAdapterType;
     adapterId: string;
+    externalKey: string;
     recipient: string;
   };
   /** Platform facts for this inbound turn, kept out of the canonical user message body. */
@@ -460,6 +461,7 @@ export function createChannelIngressController(input: {
           workspaceId: input.workspaceId,
           adapter: channel,
           adapterId: incomingAdapter.adapterId,
+          externalKey: enrichedMessage.externalKey,
           recipient: replyRecipient,
         },
         channelContext: channelContextFromIncoming(enrichedMessage),

@@ -29,6 +29,8 @@
       "@zendev-lab/spark-cue/extension": ["./packages/spark-cue/src/extension/index.ts"],
       "@zendev-lab/spark-files": ["./packages/spark-files/src/index.ts"],
       "@zendev-lab/spark-files/extension": ["./packages/spark-files/src/extension.ts"],
+      "@zendev-lab/spark-fusion": ["./packages/spark-fusion/src/index.ts"],
+      "@zendev-lab/spark-fusion/extension": ["./packages/spark-fusion/src/extension.ts"],
       "@zendev-lab/spark-graft": ["./packages/spark-graft/src/index.ts"],
       "@zendev-lab/spark-graft/extension": ["./packages/spark-graft/src/extension.ts"],
       "@zendev-lab/spark-loop": ["./packages/spark-loop/src/index.ts"],

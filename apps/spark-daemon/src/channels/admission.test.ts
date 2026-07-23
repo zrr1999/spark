@@ -97,7 +97,7 @@ describe("channel inbound durable admission", () => {
             assignment: assignment.assignment,
             workspaceId: "ws-overlap",
             cwd: "/workspace",
-            channelReply: assignment.channelReply,
+            channelReply: { ...assignment.channelReply, externalKey: assignment.externalKey },
             ...(assignment.channelContext ? { channelContext: assignment.channelContext } : {}),
           };
           invocationIds.push(submitChannelInboundInvocation(store, assignment, task).invocationId);
@@ -165,9 +165,11 @@ describe("channel inbound durable admission", () => {
       externalKey: "qqbot:c2c:user-private",
       adapterAccountIdentity: "channel-account:qqbot:account-a",
       channelReply: {
+        adapter: "qqbot" as const,
         workspaceId: "ws-overlap",
         adapterId: "qqbot",
         recipient: "c2c:user-private",
+        externalKey: "qqbot:test:frozen",
       },
       channelContext: {
         externalKey: "qqbot:c2c:user-private",
@@ -187,7 +189,7 @@ describe("channel inbound durable admission", () => {
         cwd: "/workspace/original",
         assignment: assignment.assignment,
         workspaceId: "ws-overlap",
-        channelReply: assignment.channelReply,
+        channelReply: { ...assignment.channelReply, externalKey: assignment.externalKey },
         channelContext: assignment.channelContext,
       };
       const replayProjection: SparkDaemonTask = {
@@ -226,8 +228,10 @@ describe("channel inbound durable admission", () => {
       externalKey: "qqbot:c2c:shared-user",
       adapterAccountIdentity: "channel-account:qqbot:account-a",
       channelReply: {
+        adapter: "qqbot" as const,
         workspaceId: "ws-overlap",
         adapterId: "qqbot-account-a",
+        externalKey: "qqbot:c2c:shared-user",
         recipient: "c2c:shared-user",
       },
       channelContext: {
@@ -248,7 +252,7 @@ describe("channel inbound durable admission", () => {
         workspaceId: "ws-overlap",
         cwd: "/workspace",
         // v1 rows predate stable account identity, but retained the configured adapter id.
-        channelReply: assignment.channelReply,
+        channelReply: { ...assignment.channelReply, externalKey: assignment.externalKey },
         channelContext: assignment.channelContext,
       };
       const legacyKey = legacyChannelInboundInvocationIdempotencyKey(assignment);
@@ -276,6 +280,7 @@ describe("channel inbound durable admission", () => {
         sessionId: otherAccount.sessionId,
         channelReply: {
           ...otherAccount.channelReply,
+          externalKey: otherAccount.externalKey,
           adapterAccountIdentity: otherAccount.adapterAccountIdentity,
         },
       };
@@ -302,8 +307,10 @@ describe("channel inbound durable admission", () => {
       source: { kind: "channel", channel: "infoflow" },
       externalKey: "infoflow:user:user-private",
       channelReply: {
+        adapter: "infoflow" as const,
         workspaceId: "ws-overlap",
         adapterId: "infoflow",
+        externalKey: "infoflow:user:user-private",
         recipient: "user-private",
       },
     } satisfies ChannelIngressAssignment;
@@ -321,7 +328,7 @@ describe("channel inbound durable admission", () => {
         assignment: assignment.assignment,
         workspaceId: "ws-overlap",
         cwd: "/workspace",
-        channelReply: assignment.channelReply,
+        channelReply: { ...assignment.channelReply, externalKey: assignment.externalKey },
       };
       const first = submitChannelInboundInvocation(store, assignment, task);
       const second = submitChannelInboundInvocation(store, assignment, task);

@@ -592,6 +592,21 @@ export function renderReproTickInstruction(repro: SparkSessionRepro): string {
       "- If a failure, missing credential, unclear expected behavior, or ambiguous fix path needs a user decision, call ask before inventing a workaround.",
       "- Record the matching artifact-backed requirement proof before advancing.",
     );
+
+    if (stage.name === "reproduce" || stage.name === "scale") {
+      lines.push(
+        "",
+        "Selective Fusion policy (reproduce/scale only):",
+        '- If the fusion tool is available, consider fusion({ action: "deliberate", question: "...", context: "..." }) only after the first divergence has been localized with durable runtime evidence and at least one condition holds: at least two plausible falsifiable hypotheses remain, the evidence conflicts, or the latest runtime_verdict is inconclusive.',
+        "- Skip Fusion when the next single-variable experiment is already clear and cheap.",
+        "- Pass only a bounded summary of the current first divergence, active hypotheses, constraints, and observed evidence with their original evidence: refs. Never pass the full transcript, raw logs, or stale context.",
+        "- Do not repeat a Fusion consultation unless the evidence or active hypotheses materially changed.",
+        "- If Fusion is unavailable, partial, or failed, continue SOLO; consultation must never block reproduction.",
+        "- Ask Fusion only to recommend the cheapest single-variable experiment that discriminates the active hypotheses. The main repro session remains the sole writer and executor: it must run the experiment and derive runtime_verdict=confirmed | rejected | inconclusive from new runtime evidence.",
+        "- Fusion is advisory: it must not write code, execute experiments, confirm or reject hypotheses or causality, emit a runtime verdict, satisfy repro proof or a gate, or create/register a Product Artifact.",
+        "- A Fusion call or result is neither internal evidence nor a Product Artifact. Product Artifact kinds remain exactly issue, pr, and preview.",
+      );
+    }
   }
   return lines.filter((line): line is string => line !== undefined).join("\n");
 }
