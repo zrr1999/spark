@@ -177,5 +177,5 @@ Maintainer validation:
 ```console
 pnpm exec node --experimental-strip-types --test test/spark-cursor-provider.test.ts test/spark-auth.test.ts test/spark-config.test.ts
 pnpm --filter @zendev-lab/spark-ai run check
-pnpm run check:tsc
+pnpm run typecheck
 ```

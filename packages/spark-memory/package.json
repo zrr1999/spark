@@ -22,9 +22,6 @@
     "./reflection-session-scanner": "./src/reflection-session-scanner.ts",
     "./reflection-synthesis-engine": "./src/reflection-synthesis-engine.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-artifacts": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",

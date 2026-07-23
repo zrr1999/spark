@@ -23,7 +23,7 @@ Target package topology follows type-first names:
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: SvelteKit sync, package boundary guard (`dependency-cruiser` via `pnpm run check:boundaries`), `vp check`, root Vitest suite (`test/**/*.test.ts` via `vitest.root.config.ts`), workspace package checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run check:tsc` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test:file -- test/name.test.ts`. Package-specific tests use `pnpm --filter <package> run test`.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: architecture and distribution policy, package boundaries, docs, formatting/lint, repo-wide typecheck, root Vitest (`test/**/*.test.ts` via `vitest.root.config.ts`), package-local checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run typecheck` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test test/name.test.ts` (without a `--` separator, which Vite+ would forward). Package-specific tests use `pnpm --filter <package> run test`; workspace `check` scripts exist only when the package adds tests or another local invariant beyond the root typecheck.
 - **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
 
 ## Useful commands
@@ -32,16 +32,16 @@ Target package topology follows type-first names:
 | ---------------------------------------- | ---------------------------------------------------------------- |
 | `pnpm install`                           | Install dependencies                                             |
 | `pnpm run check`                         | Run the root validation gate                                     |
-| `vp check`                               | Format + lint + type check (same path CI expects via pre-commit) |
-| `pnpm run check:tsc`                     | Typecheck only (`vp check --no-fmt --no-lint`)                   |
-| `pnpm run check:daemon-readiness`        | Emit the Spark daemon readiness audit report                     |
-| `pnpm run check:zellij-harness`          | Emit the native TUI/zellij harness capability audit report       |
-| `pnpm run check:security`                | Audit dependencies for high/critical advisories via npm registry |
-| `pnpm run check:distribution`            | Guard one public npm product and private source workspaces        |
-| `pnpm run test:npm-product`              | Pack, clean-install, and smoke the complete npm product           |
+| `pnpm run fix`                           | Format, lint-fix, and typecheck the complete workspace            |
+| `pnpm run typecheck`                     | Typecheck root TypeScript, Cockpit, and daemon                    |
+| `pnpm run smoke`                         | Pack, clean-install, and smoke the complete npm product           |
+| `pnpm run audit`                         | Audit dependencies for high/critical advisories via npm registry |
+| `pnpm run report:hygiene`                | Generate advisory Knip, duplication, and complexity reports       |
 | `pnpm test`                              | Root Vitest suite (`test/**/*.test.ts`)                          |
-| `pnpm test:file -- <path>`               | Run one root Vitest file                                         |
+| `pnpm test <path>`                       | Run one root Vitest file                                         |
 | `pnpm run test:mutation`                 | Leaf-package mutation CE (10 packages: L0 retry/protocol/cockpit-db/system + L1 channels/cockpit-coordination/session/artifacts/repro/i18n) |
+| `node --experimental-strip-types scripts/spark-daemon-readiness.mts` | Emit the Spark daemon readiness audit report |
+| `node --experimental-strip-types scripts/spark-zellij-harness.mts` | Run the native TUI/zellij harness |
 | `pnpm run build`                         | Build the Spark daemon CLI and Spark Cockpit web app             |
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
@@ -51,7 +51,7 @@ Target package topology follows type-first names:
 ## CI
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + prek pass with `vp-check` skipped (avoids duplicating `vp check` already covered by ci-verify).
-- `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check` + clean-installed npm-product smoke.
+- `.github/workflows/ci-verify.yml` — `pnpm install` + `pnpm run check` + `pnpm run smoke`.
 - `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
@@ -69,7 +69,7 @@ Target package topology follows type-first names:
 ## Notes for agents
 
 - Public/default repo-owned tools should use canonical `tool({ action })` surfaces when operations share one domain/state/permission/render/result contract; do not keep fragmented duplicate aliases public, and render action tools as `tool action=<value> ...`.
-- Prefer `vp fmt` / `vp check` before committing when touching TS/Markdown; pre-commit runs `vp check --fix`.
+- Prefer `pnpm run fix` before committing when touching TS/Markdown; pre-commit runs the same command.
 - Do not commit secrets or `.env` files.
 - **State directories** — Workspace agent runtime lives under `.spark/` (durable memory under `.spark/memory/`, including `learnings/`, `reflections/`, and `recall-candidates.json`). User-level Spark paths use explicit `SPARK_HOME` when set, otherwise the standard XDG config/data/cache/state/runtime roots via `resolveSparkUserPaths()` and `resolveSparkPaths()`. Public role, skill, and workflow definitions remain under `$HOME/.agents/`. Learning / recall / reflection capability code lives in `@zendev-lab/spark-memory` (not separate `spark-learnings` / `spark-recall` packages). Legacy `.learnings/` and `.spark/reflections/` are migrated into `.spark/memory/` when needed.
 - Boundary checks should keep retained `pi-*` kernel adapters independent from Spark product/Cockpit packages, keep Spark shared packages independent from the `spark-extension` composition root, and keep both independent from Cockpit/daemon adapter packages.

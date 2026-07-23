@@ -15,9 +15,6 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-tasks": "workspace:^"

@@ -172,6 +172,19 @@ for (const [specifier, targets] of Object.entries(tsconfig.compilerOptions?.path
   }
 }
 
+for (const { path, manifest } of workspacePackages) {
+  if (path !== "apps/spark-daemon" && manifest.scripts?.check === "vp check --no-fmt --no-lint .") {
+    failures.push(
+      `${path} duplicates the root typecheck with a boilerplate check script. Keep workspace scripts only when they add package-local validation.`,
+    );
+  }
+  if (manifest.scripts?.["test:mutation"] === "stryker run") {
+    failures.push(
+      `${path} duplicates the root mutation runner. Invoke the package's Stryker config through scripts/run-leaf-mutation.mjs instead.`,
+    );
+  }
+}
+
 if (failures.length > 0) {
   console.error(
     ["Architecture ratchet failed:", ...failures.map((failure) => `- ${failure}`)].join("\n"),

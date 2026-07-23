@@ -63,7 +63,7 @@ const tasks: TaskPlanInput[] = [
         "packages/spark-host/src/types.ts",
       ],
       successCriteria: [
-        "`pnpm run check:tsc` reports exit code 0 for packages exporting Compact V2 config/metadata types.",
+        "`pnpm run typecheck` reports exit code 0 for packages exporting Compact V2 config/metadata types.",
         "Unit tests assert targetReduction defaults to 0.4 and compact model defaults to the active session model when unset, with suite exit code 0.",
         "Schema/unit tests validate persisted compact metadata includes summaryVersion, tokenSource (reported|tokenizer|estimated), fallbackReason, and measuredReductionRatio.",
       ],
@@ -75,7 +75,7 @@ const tasks: TaskPlanInput[] = [
         "Inspect current compact options and session_before_compact / session_compact event payloads in apps/spark-tui and related packages.",
         "Implement Compact V2 config types for microThreshold, fullThreshold, targetReduction, minUsefulReduction, and compactModel.",
         "Add durable compact outcome metadata fields and serialization helpers for summaryVersion/tokenSource/fallbackReason/measuredReductionRatio.",
-        "Add unit tests for defaults and metadata round-trip, then run package typecheck with pnpm run check:tsc.",
+        "Add unit tests for defaults and metadata round-trip, then run package typecheck with pnpm run typecheck.",
       ],
     }),
   },
@@ -277,11 +277,11 @@ const tasks: TaskPlanInput[] = [
         "Complete Compact V2 acceptance by running the compact/turn/memory/session test suites, package typecheck/build, and publishing config documentation for thresholds, targetReduction, compact model, and tokenSource labels.",
       successCriteria: [
         "Focused Compact, spark-turn, spark-memory, and spark-session test commands complete with exit code 0.",
-        "`pnpm run check:tsc` and Compact-related package build commands complete with exit code 0.",
+        "`pnpm run typecheck` and Compact-related package build commands complete with exit code 0.",
         "Docs file for Compact V2 config describes micro/full thresholds, default targetReduction 0.4, configurable compact model, and tokenSource semantics with no unresolved TODO markers.",
       ],
       evidenceRequired: [
-        "Command logs with exit code 0 for the focused test suites plus check:tsc/build.",
+        "Command logs with exit code 0 for the focused test suites plus typecheck/build.",
         "git diff for the Compact V2 configuration documentation file path under docs/.",
       ],
       items: [

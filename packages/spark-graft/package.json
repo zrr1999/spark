@@ -22,9 +22,6 @@
     "./sandbox": "./src/sandbox-entry.ts",
     "./graft-client": "./src/graft-client.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-roles": "workspace:^",

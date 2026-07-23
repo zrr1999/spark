@@ -14,9 +14,6 @@
     "README.md"
   ],
   "type": "module",
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-daemon": "workspace:^",
     "@zendev-lab/spark-i18n": "workspace:^",

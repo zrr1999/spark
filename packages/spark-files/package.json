@@ -20,9 +20,6 @@
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
   },
-  "scripts": {
-    "check": "vp check --no-fmt --no-lint ."
-  },
   "dependencies": {
     "@zendev-lab/spark-core": "workspace:^",
     "diff": "^8.0.4",

@@ -52,9 +52,9 @@ Node `>=26 <27` is required. The source monorepo and its workspaces stay private
 ```text
 pnpm install
 pnpm run check
-pnpm run test:npm-product
+pnpm run smoke
 pnpm run preview
-pnpm run check:zellij-harness -- --session spark
+node --experimental-strip-types scripts/spark-zellij-harness.mts --session spark
 ```
 
 pnpm `>=11 <12` is required for source development. Maintainers can run `pnpm run publish` to execute the full validation and clean-install smoke before publishing only the generated `@zendev-lab/spark` artifact. `.spark/` (including `.spark/memory/`) is local runtime state and should remain uncommitted unless explicitly exported. Legacy `.learnings/` directories are also ignored if present.

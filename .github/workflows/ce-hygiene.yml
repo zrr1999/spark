@@ -33,13 +33,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Knip unused report
-        run: |
-          mkdir -p reports
-          pnpm exec knip --no-progress --no-config-hints --reporter json > reports/knip-report.json || true
-
-      - name: jscpd duplication report
-        run: pnpm exec jscpd --config .jscpd.json apps packages || true
+      - name: Generate hygiene reports
+        run: pnpm run report:hygiene
 
       - name: Upload hygiene CE reports
         if: always()
@@ -48,6 +43,8 @@ jobs:
           name: hygiene-ce-reports
           path: |
             reports/knip-report.json
+            reports/knip-console.txt
             reports/jscpd/
+            reports/complexity.txt
           if-no-files-found: ignore
           retention-days: 14

@@ -32,6 +32,7 @@ for (const workspaceRoot of ["apps", "packages"]) {
   for (const entry of await readdir(resolve(root, workspaceRoot), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const manifestPath = join(root, workspaceRoot, entry.name, "package.json");
+    if (!(await exists(manifestPath))) continue;
     const workspace = JSON.parse(await readFile(manifestPath, "utf8"));
     if (workspace.private !== true)
       failures.push(`${workspace.name}: source workspace must be private`);
@@ -40,17 +41,6 @@ for (const workspaceRoot of ["apps", "packages"]) {
     }
   }
 }
-for (const [name, script] of Object.entries({
-  "build:npm-product": "node scripts/build-npm-product.mjs",
-  "check:npm-product": "node scripts/check-npm-product.mjs",
-  "test:npm-product": "node scripts/smoke-npm-product.mjs",
-  "publish:npm-product":
-    "pnpm publish dist/npm-package --access public --registry=https://registry.npmjs.org/",
-  publish: "pnpm run check && pnpm run test:npm-product && pnpm run publish:npm-product",
-})) {
-  if (rootManifest.scripts?.[name] !== script) failures.push(`${name} must be ${script}`);
-}
-
 if (await exists(productManifestPath)) {
   const manifest = JSON.parse(await readFile(productManifestPath, "utf8"));
   if (manifest.name !== "@zendev-lab/spark")
