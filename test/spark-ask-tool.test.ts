@@ -14,7 +14,7 @@ import {
 import {
   createSparkAskToolRequest,
   runSparkAskTool,
-} from "../packages/pi-extension/src/extension/spark-ask-tool.ts";
+} from "../packages/spark-extension/src/extension/spark-ask-tool.ts";
 
 type AskArtifactBodyForTest = {
   summary?: string;

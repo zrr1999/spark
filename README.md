@@ -1,6 +1,6 @@
 # spark
 
-Spark is a controlled coding-agent suite for Pi and Spark-native hosts. The public command dispatcher exposes three surfaces:
+Spark is a controlled coding-agent suite with native TUI, daemon, and Cockpit hosts. The public command dispatcher exposes three surfaces:
 
 ```text
 spark tui
@@ -12,7 +12,7 @@ spark cockpit
 - `spark daemon` owns persistent sessions, SQLite invocations, channels, and local execution.
 - `spark cockpit` owns project/task/goal/review/workflow coordination and launches the web UI.
 
-The Pi extension and native hosts expose the same canonical capability tools. `role` manages reusable definitions and fresh anonymous calls; `session` owns persistent lifecycle, continuity, bindings, calls, and mail.
+The single `@zendev-lab/spark-extension` composition root exposes the canonical capability tools to native and structurally compatible hosts. `role` manages reusable definitions and fresh anonymous calls; `session` owns persistent lifecycle, continuity, bindings, calls, and mail.
 
 ## Common commands
 

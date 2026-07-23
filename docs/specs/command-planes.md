@@ -33,7 +33,7 @@ spark <plane> <resource> <verb> [args...]
 | cross-surface schemas and semantics | `spark-protocol` | each transport performs validation and translation only |
 | projects, tasks, goals, reviews, workflows, and evidence coordination | `spark-cockpit-coordination` and the capability package named for the domain | Cockpit routes and UI are replaceable projections |
 | terminal presentation and interaction | `apps/spark-tui` behind `spark-tui` / `spark-text` boundaries | no durable business-state ownership |
-| Pi product compatibility | `pi-extension`, frozen | may consume Spark foundation packages; must not become an owner for new native behavior |
+| extension composition | `spark-extension` | compatible loaders may call the same host-neutral contract; no second facade owns behavior |
 
 Generated UI is artifact-backed data, never executable MDX, JS, JSX, imports, exports, or raw HTML. Public action-tool names remain canonical. Serialized `.spark/` markers change only through an explicit, idempotent migration with compatibility tests.
 
@@ -43,7 +43,7 @@ The default place for a change is inside its existing owner. Create another work
 
 Before adding a second adapter or surface, first move shared validation and semantics into the existing protocol/owner API. Transports remain thin, projections must be rebuildable, and caches cannot become admission or execution truth. Compatibility adapters have written exit criteria and do not receive new product behavior.
 
-`pnpm run check:architecture` is the mechanical growth ratchet. During the early product phase its ceilings are 48 `apps/*` + `packages/*` workspaces and 4,000 lines per production source file, and it rejects additions to the frozen root Pi extension manifest. The headroom allows a small number of evidence-backed owner boundaries without pinning the ceiling to today's count. These remain ceilings, not design targets: an oversized module should still be split at a domain/adapter boundary before it reaches the limit. Raising a ceiling requires an architecture rationale in the same change; deleting a package or Pi manifest entry never requires lowering a frozen allowlist first.
+`pnpm run check:architecture` is the mechanical growth ratchet. During the early product phase its ceilings are recorded in `architecture/packages.json` plus a 4,000-line production-file limit, and it rejects additions to the frozen compatibility extension manifest. The headroom allows a small number of evidence-backed owner boundaries without pinning every ceiling to today's count. These remain ceilings, not design targets: an oversized module should still be split at a domain/adapter boundary before it reaches the limit. Raising a ceiling requires an architecture rationale in the same change; deleting a package or compatibility manifest entry never requires lowering a frozen allowlist first.
 
 ### Open-source adoption
 

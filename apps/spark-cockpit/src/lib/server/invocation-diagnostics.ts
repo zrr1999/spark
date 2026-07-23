@@ -11,7 +11,7 @@ import {
 import {
   requestSparkDaemonLocalRpc,
   SparkDaemonLocalRpcUnavailableError,
-} from "@zendev-lab/spark-system";
+} from "@zendev-lab/spark-daemon-client";
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_DIAGNOSTIC_EVENTS = 100;

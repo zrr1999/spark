@@ -5,7 +5,7 @@ import { defaultWorkflowRunStore, sparkWorkflowRunStorePath } from "@zendev-lab/
 import {
   defaultSparkWorkflowRunStore,
   sparkWorkflowRunStorePath as shimWorkflowRunStorePath,
-} from "../packages/pi-extension/src/extension/spark-workflow-run-store.ts";
+} from "../packages/spark-extension/src/extension/spark-workflow-run-store.ts";
 
 test("workflow-run store shim delegates to spark-workflows single owner", () => {
   const cwd = "/tmp/spark-workflow-ownership";

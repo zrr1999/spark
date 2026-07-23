@@ -1,6 +1,10 @@
 # @zendev-lab/spark-system
 
-Filesystem path, private-file permission, command, and local runtime helpers shared by Spark packages.
+Filesystem path, private-file permission, command, SQLite, and local runtime primitives shared by Spark packages.
+
+Daemon RPC transport and protocol-aware client code lives in
+`@zendev-lab/spark-daemon-client`; this package deliberately has no Spark
+workspace dependencies.
 
 ## Paths
 

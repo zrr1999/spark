@@ -10,7 +10,7 @@ import {
 import {
   requestSparkDaemonLocalRpc,
   type SparkDaemonLocalRpcClientOptions,
-} from "@zendev-lab/spark-system/daemon-local-rpc";
+} from "@zendev-lab/spark-daemon-client/local-rpc";
 
 export interface SparkDaemonManagedSessionsClient {
   create(input: SparkSessionCreateRequest): Promise<SparkSessionRegistryRecord>;

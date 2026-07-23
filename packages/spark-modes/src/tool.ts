@@ -9,7 +9,7 @@ import type { Mode, ModeRenderContext } from "./types.ts";
  * `toolName({ action })` to change the current lens, and the tool returns the
  * new mode's requirements as its result.
  *
- * Spark native hosts register this as `phase` (see pi-extension
+ * Spark native hosts register this as `phase` (see spark-extension
  * `registerSparkPhaseTool`); the library default remains `mode` for host-
  * neutral callers. Render as `phase action=<value>` / `mode action=<value>`.
  *

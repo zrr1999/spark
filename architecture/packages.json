@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "maxWorkspacePackages": 38,
+  "packages": {
+    "@zendev-lab/spark-cli": {
+      "path": "apps/spark-cli",
+      "layer": "application",
+      "owner": "cli",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-cockpit": {
+      "path": "apps/spark-cockpit",
+      "layer": "application",
+      "owner": "cockpit",
+      "stability": "supported",
+      "stateWriter": "cockpit"
+    },
+    "@zendev-lab/spark-daemon": {
+      "path": "apps/spark-daemon",
+      "layer": "application",
+      "owner": "daemon",
+      "stability": "supported",
+      "stateWriter": "daemon"
+    },
+    "@zendev-lab/spark-tui-app": {
+      "path": "apps/spark-tui",
+      "layer": "application",
+      "owner": "tui",
+      "stability": "supported",
+      "stateWriter": "host"
+    },
+    "@zendev-lab/spark-acp-spike": {
+      "path": "packages/spark-acp-spike",
+      "layer": "experiment",
+      "owner": "protocol-experiments",
+      "stability": "experimental",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-ai": {
+      "path": "packages/spark-ai",
+      "layer": "capability",
+      "owner": "ai",
+      "stability": "supported",
+      "stateWriter": "user"
+    },
+    "@zendev-lab/spark-artifacts": {
+      "path": "packages/spark-artifacts",
+      "layer": "capability",
+      "owner": "artifacts",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-ask": {
+      "path": "packages/spark-ask",
+      "layer": "capability",
+      "owner": "interaction",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-channels": {
+      "path": "packages/spark-channels",
+      "layer": "adapter",
+      "owner": "channels",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-cockpit-coordination": {
+      "path": "packages/spark-cockpit-coordination",
+      "layer": "private-adapter",
+      "owner": "cockpit",
+      "stability": "private",
+      "stateWriter": "cockpit"
+    },
+    "@zendev-lab/spark-cockpit-db": {
+      "path": "packages/spark-cockpit-db",
+      "layer": "private-adapter",
+      "owner": "cockpit",
+      "stability": "private",
+      "stateWriter": "cockpit"
+    },
+    "@zendev-lab/spark-cockpit-i18n": {
+      "path": "packages/spark-cockpit-i18n",
+      "layer": "private-adapter",
+      "owner": "cockpit",
+      "stability": "private",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-core": {
+      "path": "packages/spark-core",
+      "layer": "foundation",
+      "owner": "host-contract",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-cue": {
+      "path": "packages/spark-cue",
+      "layer": "adapter",
+      "owner": "execution-adapters",
+      "stability": "supported",
+      "stateWriter": "external"
+    },
+    "@zendev-lab/spark-daemon-client": {
+      "path": "packages/spark-daemon-client",
+      "layer": "client",
+      "owner": "daemon",
+      "stability": "internal",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-extension": {
+      "path": "packages/spark-extension",
+      "layer": "composition",
+      "owner": "extension-host",
+      "stability": "supported",
+      "stateWriter": "host"
+    },
+    "@zendev-lab/spark-files": {
+      "path": "packages/spark-files",
+      "layer": "capability",
+      "owner": "files",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-fusion": {
+      "path": "packages/spark-fusion",
+      "layer": "capability",
+      "owner": "fusion",
+      "stability": "internal",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-graft": {
+      "path": "packages/spark-graft",
+      "layer": "adapter",
+      "owner": "execution-adapters",
+      "stability": "internal",
+      "stateWriter": "external"
+    },
+    "@zendev-lab/spark-host": {
+      "path": "packages/spark-host",
+      "layer": "runtime",
+      "owner": "extension-host",
+      "stability": "supported",
+      "stateWriter": "host"
+    },
+    "@zendev-lab/spark-i18n": {
+      "path": "packages/spark-i18n",
+      "layer": "foundation",
+      "owner": "localization",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-loop": {
+      "path": "packages/spark-loop",
+      "layer": "capability",
+      "owner": "goals",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-mcp-spike": {
+      "path": "packages/spark-mcp-spike",
+      "layer": "experiment",
+      "owner": "protocol-experiments",
+      "stability": "experimental",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-memory": {
+      "path": "packages/spark-memory",
+      "layer": "capability",
+      "owner": "memory",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-modes": {
+      "path": "packages/spark-modes",
+      "layer": "capability",
+      "owner": "modes",
+      "stability": "supported",
+      "stateWriter": "host"
+    },
+    "@zendev-lab/spark-protocol": {
+      "path": "packages/spark-protocol",
+      "layer": "contract",
+      "owner": "protocol",
+      "stability": "supported",
+      "stateWriter": "none",
+      "allowedWorkspaceDependencies": []
+    },
+    "@zendev-lab/spark-repro": {
+      "path": "packages/spark-repro",
+      "layer": "capability",
+      "owner": "reproduction",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-retry": {
+      "path": "packages/spark-retry",
+      "layer": "foundation",
+      "owner": "runtime-primitives",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-roles": {
+      "path": "packages/spark-roles",
+      "layer": "capability",
+      "owner": "roles",
+      "stability": "supported",
+      "stateWriter": "host"
+    },
+    "@zendev-lab/spark-runtime": {
+      "path": "packages/spark-runtime",
+      "layer": "runtime",
+      "owner": "task-execution",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-session": {
+      "path": "packages/spark-session",
+      "layer": "capability",
+      "owner": "sessions",
+      "stability": "supported",
+      "stateWriter": "daemon"
+    },
+    "@zendev-lab/spark-system": {
+      "path": "packages/spark-system",
+      "layer": "foundation",
+      "owner": "system-primitives",
+      "stability": "supported",
+      "stateWriter": "none",
+      "allowedWorkspaceDependencies": []
+    },
+    "@zendev-lab/spark-tasks": {
+      "path": "packages/spark-tasks",
+      "layer": "capability",
+      "owner": "tasks",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    },
+    "@zendev-lab/spark-text": {
+      "path": "packages/spark-text",
+      "layer": "foundation",
+      "owner": "presentation-primitives",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-tui": {
+      "path": "packages/spark-tui",
+      "layer": "adapter",
+      "owner": "presentation",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-turn": {
+      "path": "packages/spark-turn",
+      "layer": "runtime",
+      "owner": "turn-runtime",
+      "stability": "supported",
+      "stateWriter": "none"
+    },
+    "@zendev-lab/spark-web": {
+      "path": "packages/spark-web",
+      "layer": "capability",
+      "owner": "web",
+      "stability": "supported",
+      "stateWriter": "user"
+    },
+    "@zendev-lab/spark-workflows": {
+      "path": "packages/spark-workflows",
+      "layer": "capability",
+      "owner": "workflows",
+      "stability": "supported",
+      "stateWriter": "workspace"
+    }
+  }
+}

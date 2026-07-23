@@ -34,12 +34,12 @@ import {
 import {
   registerSparkWorkflowRunTool,
   workflowAgentTelemetryFromRoleRun,
-} from "../packages/pi-extension/src/extension/spark-workflow-run-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-workflow-run-tool-registration.ts";
 import {
   buildSparkDynamicWorkflowDashboardView,
   formatSparkDynamicWorkflowRunLine,
   renderSparkDynamicWorkflowDashboardText,
-} from "../packages/pi-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
+} from "../packages/spark-extension/src/extension/spark-dynamic-workflow-run-rendering.ts";
 
 test("spark-workflows package stays isolated from runtime execution packages", async () => {
   const pkg = JSON.parse(await readFile("packages/spark-workflows/package.json", "utf8")) as {

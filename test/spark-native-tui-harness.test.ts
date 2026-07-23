@@ -29,7 +29,7 @@ import { createSparkPiParitySlashCommands } from "../apps/spark-tui/src/cli/pi-p
 import type { SparkDaemonModelAuthClient } from "../apps/spark-tui/src/cli/model-control.ts";
 import { SparkSessionMailStore } from "../apps/spark-tui/src/host/session-mail-store.ts";
 import { createSparkTuiActionBarComponent } from "../apps/spark-tui/src/tui/action-bar.ts";
-import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 const ESC = String.fromCharCode(27);

@@ -9,7 +9,7 @@ import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
 import type { WorkflowRunStatusSummary } from "@zendev-lab/spark-workflows";
 import type { ActiveSparkRoleRunProcess } from "@zendev-lab/spark-runtime";
 import { TaskGraph } from "@zendev-lab/spark-tasks";
-import { evaluateSparkTaskClaimRecovery } from "../packages/pi-extension/src/extension/task-claim-recovery.ts";
+import { evaluateSparkTaskClaimRecovery } from "../packages/spark-extension/src/extension/task-claim-recovery.ts";
 import { sessionDirectoryNameForKey } from "@zendev-lab/spark-loop";
 
 const IDLE_WORKFLOW_STATUS: WorkflowRunStatusSummary = {

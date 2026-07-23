@@ -28,6 +28,7 @@
     "@zendev-lab/spark-channels": "workspace:^",
     "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-cue": "workspace:^",
+    "@zendev-lab/spark-daemon-client": "workspace:^",
     "@zendev-lab/spark-extension": "workspace:^",
     "@zendev-lab/spark-files": "workspace:^",
     "@zendev-lab/spark-fusion": "workspace:^",

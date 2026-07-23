@@ -2,7 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
+import type {
+  SparkSessionRegistryRecord,
+  SparkSessionSendRequest,
+  SparkTurnSubmitResult,
+} from "@zendev-lab/spark-protocol";
 import { executeSparkSessionAction } from "./action-tool.ts";
 import { SparkSessionMailStore } from "./mail-store.ts";
 
@@ -16,6 +20,38 @@ async function createMailStore(): Promise<SparkSessionMailStore> {
   const sparkHome = await mkdtemp(join(tmpdir(), "spark-session-action-"));
   roots.push(sparkHome);
   return new SparkSessionMailStore({ sparkHome });
+}
+
+async function sessionSendRpc(
+  mailStore: SparkSessionMailStore,
+  params: SparkSessionSendRequest,
+  target: SparkSessionRegistryRecord,
+  submitted?: SparkTurnSubmitResult,
+) {
+  const sent = await mailStore.send({
+    toSessionId: params.toSessionId,
+    fromSessionId: params.fromSessionId,
+    kind: params.kind,
+    intent: params.intent,
+    payload: params.payload,
+    idempotencyKey: params.idempotencyKey,
+    body: params.body,
+    source: params.source,
+    ...(params.correlationId ? { correlationId: params.correlationId } : {}),
+    ...(params.subject !== undefined ? { subject: params.subject } : {}),
+    ...(params.originBinding ? { originBinding: params.originBinding } : {}),
+  });
+  const message = submitted
+    ? await mailStore.recordRequestAdmission(params.toSessionId, sent.message.id, submitted)
+    : sent.message;
+  return {
+    message,
+    filePath: sent.path,
+    created: sent.created,
+    executionTriggered: Boolean(submitted),
+    target,
+    ...(submitted ? { submitted } : {}),
+  };
 }
 
 function session(
@@ -86,6 +122,17 @@ describe("session list and inbox progressive disclosure", () => {
       fromSessionId: "sess_sender",
       body: "second detail",
     });
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "session.inbox") {
+        const input = params as { sessionId: string; includeAcked: boolean };
+        return {
+          messages: await mailStore.list(input.sessionId, {
+            includeAcked: input.includeAcked,
+          }),
+        };
+      }
+      throw new Error(`unexpected RPC method: ${method}`);
+    });
 
     const first = await executeSparkSessionAction(
       {
@@ -95,7 +142,7 @@ describe("session list and inbox progressive disclosure", () => {
         signal: new AbortController().signal,
         ctx: { sessionId: "sess_inbox" },
       },
-      { mailStore: () => mailStore },
+      { request: request as never },
     );
     const text = first.content[0]!.text;
     expect(text).toContain(
@@ -125,12 +172,22 @@ describe("persistent session channel routing", () => {
         const sessionId = (params as { sessionId: string }).sessionId;
         return sessionId === origin.sessionId ? origin : worker;
       }
-      if (method === "turn.submit") {
-        return {
-          invocationId: "inv_routing",
-          status: "queued",
-          acceptedAt: "2026-07-15T00:00:00.000Z",
-        };
+      if (method === "session.send") {
+        const input = params as SparkSessionSendRequest;
+        const submitted =
+          input.kind === "request"
+            ? {
+                invocationId: "inv_routing",
+                status: "queued" as const,
+                acceptedAt: "2026-07-15T00:00:00.000Z",
+              }
+            : undefined;
+        return await sessionSendRpc(
+          mailStore,
+          input,
+          input.toSessionId === worker.sessionId ? worker : origin,
+          submitted,
+        );
       }
       throw new Error(`unexpected RPC method: ${method}`);
     });
@@ -159,7 +216,7 @@ describe("persistent session channel routing", () => {
           },
         },
       },
-      { request: request as never, mailStore: () => mailStore },
+      { request: request as never },
     );
 
     const [requestMessage] = await mailStore.list(worker.sessionId, { includeAcked: true });
@@ -180,9 +237,9 @@ describe("persistent session channel routing", () => {
     };
     expect(requestMessage?.originBinding).not.toMatchObject(driftedBinding);
     expect(request).toHaveBeenCalledWith(
-      "turn.submit",
+      "session.send",
       expect.objectContaining({
-        sessionId: worker.sessionId,
+        toSessionId: worker.sessionId,
         originBinding: {
           workspaceId: "workspace-qq-A",
           adapter: "qqbot",
@@ -191,14 +248,9 @@ describe("persistent session channel routing", () => {
           externalKey: "qqbot:user:A",
           recipient: "c2c:user:A",
         },
-        messageMetadata: expect.objectContaining({
-          sessionMail: expect.objectContaining({
-            fromSessionId: origin.sessionId,
-            toSessionId: worker.sessionId,
-            kind: "request",
-            notifyOnCompletion: true,
-          }),
-        }),
+        fromSessionId: origin.sessionId,
+        kind: "request",
+        notifyOnCompletion: true,
       }),
       expect.anything(),
     );
@@ -220,7 +272,7 @@ describe("persistent session channel routing", () => {
             sessionSource: "session",
           },
         },
-        { request: request as never, mailStore: () => mailStore },
+        { request: request as never },
       ),
     ).resolves.toMatchObject({ details: { executionTriggered: false } });
     expect(await mailStore.list(origin.sessionId, { includeAcked: true })).toHaveLength(1);
@@ -246,10 +298,21 @@ describe("blocking session requests", () => {
     };
   }
 
-  function baseRequest(handler: (method: string, params: Record<string, unknown>) => unknown) {
+  function baseRequest(
+    mailStore: SparkSessionMailStore,
+    handler: (method: string, params: Record<string, unknown>) => unknown,
+  ) {
     return vi.fn(async (method: string, params: unknown) => {
       if (method === "session.get") {
         return (params as { sessionId: string }).sessionId === origin.sessionId ? origin : worker;
+      }
+      if (method === "session.send") {
+        const input = params as SparkSessionSendRequest;
+        const submitted =
+          input.kind === "request"
+            ? ((await handler(method, params as Record<string, unknown>)) as SparkTurnSubmitResult)
+            : undefined;
+        return await sessionSendRpc(mailStore, input, worker, submitted);
       }
       return await handler(method, params as Record<string, unknown>);
     });
@@ -270,13 +333,13 @@ describe("blocking session requests", () => {
         signal,
         ctx: { sessionId: origin.sessionId },
       },
-      { request: request as never, mailStore: () => mailStore, ...extras },
+      { request: request as never, ...extras },
     );
   }
 
   it("defaults to notification and rejects notification completion waits", async () => {
     const mailStore = await createMailStore();
-    const request = baseRequest((method) => {
+    const request = baseRequest(mailStore, (method) => {
       throw new Error(`unexpected RPC method: ${method}`);
     });
 
@@ -287,7 +350,11 @@ describe("blocking session requests", () => {
       wait: "accepted",
       message: { kind: "notification" },
     });
-    expect(request).not.toHaveBeenCalledWith("turn.submit", expect.anything(), expect.anything());
+    expect(request).toHaveBeenCalledWith(
+      "session.send",
+      expect.objectContaining({ kind: "notification", notifyOnCompletion: false }),
+      expect.anything(),
+    );
     await expect(
       send({ kind: "notification", wait: "completed" }, request, mailStore, {}, "invalid-wait"),
     ).rejects.toThrow("session notification cannot wait for completion");
@@ -295,8 +362,8 @@ describe("blocking session requests", () => {
 
   it("keeps request wait=accepted asynchronous", async () => {
     const mailStore = await createMailStore();
-    const request = baseRequest((method) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_accepted",
           status: "queued",
@@ -313,11 +380,9 @@ describe("blocking session requests", () => {
       submitted: { invocationId: "inv_accepted" },
     });
     expect(request).toHaveBeenCalledWith(
-      "turn.submit",
+      "session.send",
       expect.objectContaining({
-        messageMetadata: expect.objectContaining({
-          sessionMail: expect.objectContaining({ notifyOnCompletion: true }),
-        }),
+        notifyOnCompletion: true,
       }),
       expect.anything(),
     );
@@ -325,8 +390,8 @@ describe("blocking session requests", () => {
 
   it("disables completion notify for wait=completed requests", async () => {
     const mailStore = await createMailStore();
-    const request = baseRequest((method) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_waitcompleted",
           status: "queued",
@@ -347,11 +412,9 @@ describe("blocking session requests", () => {
 
     await send({ kind: "request", wait: "completed" }, request, mailStore);
     expect(request).toHaveBeenCalledWith(
-      "turn.submit",
+      "session.send",
       expect.objectContaining({
-        messageMetadata: expect.objectContaining({
-          sessionMail: expect.objectContaining({ notifyOnCompletion: false }),
-        }),
+        notifyOnCompletion: false,
       }),
       expect.anything(),
     );
@@ -359,8 +422,8 @@ describe("blocking session requests", () => {
 
   it("returns a result completed before waiter registration or after daemon restart", async () => {
     const mailStore = await createMailStore();
-    const request = baseRequest((method) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_durable",
           status: "queued",
@@ -392,8 +455,8 @@ describe("blocking session requests", () => {
   it("times out without cancelling the persistent invocation", async () => {
     const mailStore = await createMailStore();
     let now = 0;
-    const request = baseRequest((method) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_timeout",
           status: "queued",
@@ -423,8 +486,8 @@ describe("blocking session requests", () => {
     let now = 0;
     let statusCalls = 0;
     let continuationStarted = false;
-    const request = baseRequest((method, params) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method, params) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_continue",
           status: "queued",
@@ -479,7 +542,6 @@ describe("blocking session requests", () => {
       },
       {
         request: request as never,
-        mailStore: () => mailStore,
         sleep: async () => undefined,
         now: () => now,
       },
@@ -490,7 +552,7 @@ describe("blocking session requests", () => {
       waitTimedOut: false,
       result: { status: "succeeded" },
     });
-    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "session.send")).toHaveLength(1);
 
     const repeated = await executeSparkSessionAction(
       {
@@ -507,7 +569,6 @@ describe("blocking session requests", () => {
       },
       {
         request: request as never,
-        mailStore: () => mailStore,
         sleep: async () => undefined,
         now: () => now,
       },
@@ -540,9 +601,6 @@ describe("blocking session requests", () => {
       }
       throw new Error(`unexpected continuation RPC method: ${method} ${JSON.stringify(params)}`);
     });
-    const mailStore = vi.fn(() => {
-      throw new Error("continuation must not access mail store");
-    });
     let now = 0;
     const continuation = async (timeoutMs: number, toolCallId: string) =>
       await executeSparkSessionAction(
@@ -560,7 +618,6 @@ describe("blocking session requests", () => {
         },
         {
           request: request as never,
-          mailStore,
           now: () => now,
           sleep: async (ms) => void (now += ms),
         },
@@ -587,15 +644,14 @@ describe("blocking session requests", () => {
       waitTimedOut: false,
     });
     expect(terminalReads).toBe(2);
-    expect(request.mock.calls.filter(([method]) => method === "turn.submit")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "session.send")).toHaveLength(0);
     expect(request.mock.calls.filter(([method]) => method === "session.get")).toHaveLength(0);
-    expect(mailStore).not.toHaveBeenCalled();
   });
 
   it("returns terminal failure details", async () => {
     const mailStore = await createMailStore();
-    const request = baseRequest((method) => {
-      if (method === "turn.submit") {
+    const request = baseRequest(mailStore, (method) => {
+      if (method === "session.send") {
         return {
           invocationId: "inv_failed",
           status: "queued",
@@ -628,9 +684,9 @@ describe("blocking session requests", () => {
       ["first", "inv_first"],
       ["second", "inv_second"],
     ]);
-    const request = baseRequest((method, params) => {
-      if (method === "turn.submit") {
-        const invocationId = invocationByPrompt.get(String(params.prompt));
+    const request = baseRequest(mailStore, (method, params) => {
+      if (method === "session.send") {
+        const invocationId = invocationByPrompt.get(String(params.body));
         if (!invocationId) throw new Error("unknown prompt");
         return {
           invocationId,

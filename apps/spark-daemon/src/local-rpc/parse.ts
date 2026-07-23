@@ -17,6 +17,9 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionGetRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionInboxRequestSchema,
+  sparkSessionMailMutationRequestSchema,
+  sparkSessionSendRequestSchema,
   sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
   sparkSideThreadConfigureRequestSchema,
@@ -95,6 +98,27 @@ export function parseLocalRpcRequest(line: string): LocalRpcRequest {
       id: value.id,
       method: value.method,
       params: parseLocalSessionNotificationDeliverParams(value.params),
+    });
+  }
+  if (value.method === "session.send") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionSendRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.inbox") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionInboxRequestSchema.parse(value.params),
+    });
+  }
+  if (value.method === "session.mail.read" || value.method === "session.mail.ack") {
+    return withSparkCommand({
+      id: value.id,
+      method: value.method,
+      params: sparkSessionMailMutationRequestSchema.parse(value.params),
     });
   }
   if (value.method === "human.interaction.respond") {

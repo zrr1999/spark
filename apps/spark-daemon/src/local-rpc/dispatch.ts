@@ -115,6 +115,10 @@ export async function handleLocalRpcLine(
       case "session.bind":
       case "session.unbind":
       case "session.archive":
+      case "session.send":
+      case "session.inbox":
+      case "session.mail.read":
+      case "session.mail.ack":
       case "session.model.set":
       case "session.thinking.set":
         return await handleSessionRequest(ctx, request);

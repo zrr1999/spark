@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SparkDaemonLocalRpcUnavailableError } from "@zendev-lab/spark-system";
+import { SparkDaemonLocalRpcUnavailableError } from "@zendev-lab/spark-daemon-client";
 import { loadInvocationDiagnosticsForCockpit } from "./invocation-diagnostics";
 
 const NOW = "2026-07-15T12:00:00.000Z";

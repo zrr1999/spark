@@ -8,7 +8,7 @@ import { stableId } from "../packages/spark-core/src/index.ts";
 import { callLeafOrDegrade } from "../packages/spark-core/src/index.ts";
 import { DEFAULT_SPARK_PROVIDER_SPECS } from "../packages/spark-ai/src/control/provider-catalog.ts";
 import { parseSparkCliArgs, parseSparkCliCommand } from "../apps/spark-tui/src/cli.ts";
-import { saveSessionPhase } from "../packages/pi-extension/src/extension/current-project-state.ts";
+import { saveSessionPhase } from "../packages/spark-extension/src/extension/current-project-state.ts";
 import {
   assistantMessageToText,
   createProviderRegistryWorkflowModelRunner,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { resolveSparkPaths, type SparkPaths } from "./paths.ts";
+import { resolveSparkPaths, type SparkPaths } from "@zendev-lab/spark-system";
 
 export interface SparkDaemonLocalRpcClientOptions {
   paths?: Pick<SparkPaths, "runtimeDir">;

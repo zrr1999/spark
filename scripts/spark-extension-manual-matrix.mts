@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import {
   renderSparkWidgetLines,
   type SparkWidgetTheme,
@@ -15,11 +16,11 @@ import {
 import type {
   SparkRegisteredToolConfig,
   SparkToolContext,
-} from "../packages/pi-extension/src/extension/spark-tool-registration.ts";
+} from "../packages/spark-extension/src/extension/spark-tool-registration.ts";
 import type {
   ReviewerRunner,
   ReviewInput,
-} from "../packages/pi-extension/src/extension/reviewer-runner.ts";
+} from "../packages/spark-extension/src/extension/reviewer-runner.ts";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -37,7 +38,9 @@ for (let index = 2; index < process.argv.length; index += 1) {
     args.set(key, true);
   }
 }
-const outputPath = String(args.get("output") || "/tmp/spark-pi-extension-manual-matrix.json");
+const outputPath = String(
+  args.get("output") || join(homedir(), "spark-extension-manual-matrix.json"),
+);
 const keep = args.get("keep") === true;
 
 interface StepResult {
@@ -209,6 +212,9 @@ async function step(name: string, fn: () => unknown): Promise<StepResult> {
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
+function sortStrings(values: string[]): string[] {
+  return values.sort((left, right) => left.localeCompare(right));
+}
 function tool(api: ManualPiApi, name: string): SparkRegisteredToolConfig {
   const config = api.publicTools.get(name) ?? api.internalTools.get(name);
   if (!config) throw new Error(`tool not registered: ${name}`);
@@ -222,7 +228,7 @@ async function execTool(
 ): Promise<any> {
   const config = tool(api, name);
   return config.execute(
-    `manual-${name}-${Math.random().toString(16).slice(2)}`,
+    `manual-${name}-${randomUUID()}`,
     params,
     new AbortController().signal,
     async () => undefined,
@@ -237,7 +243,7 @@ function textOf(result: any): string {
   );
 }
 
-const tempRoot = await mkdtemp(join(tmpdir(), "spark-pi-extension-manual-"));
+const tempRoot = await mkdtemp(join(homedir(), ".spark-extension-manual-"));
 const piHome = join(tempRoot, "pi-home");
 const workspace = join(tempRoot, "workspace");
 const steps: StepResult[] = [];
@@ -267,7 +273,7 @@ try {
   await writeFile(
     join(workspace, "package.json"),
     JSON.stringify(
-      { name: "manual-pi-extension-workspace", private: true, type: "module" },
+      { name: "manual-spark-extension-workspace", private: true, type: "module" },
       null,
       2,
     ),
@@ -285,7 +291,7 @@ try {
 
   const api = new ManualPiApi();
   sparkExtension(api as any);
-  const sessionKey = "session:manual-pi-extension";
+  const sessionKey = "session:manual-spark-extension";
   const widgetRegistrations: unknown[] = [];
   const ctx: SparkToolContext = {
     cwd: workspace,
@@ -314,8 +320,8 @@ try {
 
   steps.push(
     await step("extension registers expected Pi surfaces", () => {
-      const publicTools = Array.from(api.publicTools.keys()).sort();
-      const internalTools = Array.from(api.internalTools.keys()).sort();
+      const publicTools = sortStrings(Array.from(api.publicTools.keys()));
+      const internalTools = sortStrings(Array.from(api.internalTools.keys()));
       const requiredPublic = [
         "goal",
         "loop",
@@ -348,10 +354,10 @@ try {
       return {
         publicTools,
         internalTools,
-        commands: Array.from(api.commands.keys()).sort(),
-        events: Array.from(api.events.keys()).sort(),
-        shortcuts: Array.from(api.shortcuts.keys()).sort(),
-        renderers: Array.from(api.renderers.keys()).sort(),
+        commands: sortStrings(Array.from(api.commands.keys())),
+        events: sortStrings(Array.from(api.events.keys())),
+        shortcuts: sortStrings(Array.from(api.shortcuts.keys())),
+        renderers: sortStrings(Array.from(api.renderers.keys())),
       };
     }),
   );
@@ -364,7 +370,7 @@ try {
         {
           action: "project_use",
           title: "Manual Pi Extension Matrix",
-          purpose: "exercise current pi-extension",
+          purpose: "exercise current spark-extension",
         },
         ctx,
       );
@@ -748,13 +754,13 @@ try {
         "learning",
         {
           action: "record",
-          id: "manual-pi-extension-matrix",
+          id: "manual-spark-extension-matrix",
           title: "Manual Pi extension matrix",
-          statement: "Current pi-extension manual matrix executed in temp workspace.",
+          statement: "Current spark-extension manual matrix executed in temp workspace.",
           category: "tool",
           location: "workspace",
           rationale: "manual validation",
-          applicability: "pi-extension smoke",
+          applicability: "spark-extension smoke",
           evidenceRefs: [],
           tags: ["manual-matrix"],
           confidence: 0.8,
@@ -769,22 +775,22 @@ try {
         ctx,
       );
       assert(
-        /manual-pi-extension-matrix|Manual Pi extension matrix/u.test(textOf(learningSearch)),
+        /manual-spark-extension-matrix|Manual Spark extension matrix/u.test(textOf(learningSearch)),
         textOf(learningSearch),
       );
       const learningList = await execTool(api, "learning", { action: "list", limit: 5 }, ctx);
       assert(
-        /Manual Pi extension matrix|manual-pi-extension-matrix/u.test(textOf(learningList)),
+        /Manual Spark extension matrix|manual-spark-extension-matrix/u.test(textOf(learningList)),
         textOf(learningList),
       );
       const learningRead = await execTool(
         api,
         "learning",
-        { action: "read", ref: "artifact:manual-pi-extension-matrix" },
+        { action: "read", ref: "artifact:manual-spark-extension-matrix" },
         ctx,
       );
       assert(
-        /Current pi-extension manual matrix/u.test(textOf(learningRead)),
+        /Current spark-extension manual matrix/u.test(textOf(learningRead)),
         textOf(learningRead),
       );
       const exportPath = join(tempRoot, "learnings.md");
@@ -810,13 +816,13 @@ try {
         "learning",
         {
           action: "record",
-          id: "manual-pi-extension-matrix-reject",
+          id: "manual-spark-extension-matrix-reject",
           title: "Manual matrix reject candidate",
           statement: "Temporary reject candidate.",
           category: "tool",
           location: "workspace",
           rationale: "manual validation",
-          applicability: "pi-extension smoke",
+          applicability: "spark-extension smoke",
           evidenceRefs: [],
           tags: ["manual-matrix"],
           confidence: 0.5,
@@ -829,7 +835,7 @@ try {
         "learning",
         {
           action: "reject",
-          ref: "artifact:manual-pi-extension-matrix-reject",
+          ref: "artifact:manual-spark-extension-matrix-reject",
           reason: "manual matrix reject action smoke",
         },
         ctx,

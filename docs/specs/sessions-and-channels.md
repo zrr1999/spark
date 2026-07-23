@@ -70,9 +70,18 @@ The visible user content remains the exact human/request body. Origin and mail-e
 
 - `kind=request` persists an envelope, then asynchronously submits the exact body as one user turn to an unarchived local session. It may wait behind work already active for that session, never scans older inbox entries, and cannot target channel sessions. Default `wait=accepted` returns after acceptance; when that target invocation becomes terminal, the daemon submits one durable completion-summary turn on the originating sender (`notifyOnCompletion=true`) so the parent synthesizes immediately. `wait=completed` polls the durable invocation for a bounded terminal response and sets `notifyOnCompletion=false` to avoid a double wake. Wait timeout stops only the sender wait; the target invocation continues.
 - `kind=notification` persists without triggering the target and cannot wait for completion.
-- Inbox/read/ack access only the current session. Idempotency keys are unique across mailboxes.
+- Inbox/read/ack access only the current session and cross daemon-owned RPC
+  methods; extension hosts never open mailbox files. Idempotency keys are
+  unique across mailboxes.
 
-Mailbox persistence and invocation acceptance are an at-least-once internal boundary. Failure after persistence reports the stored message ID. This does not imply blind platform resend: outbound effects follow the fail-closed policy below. Completion-notify admission reuses the normal invocation store (it may wait behind work already active for the sender).
+Mailbox persistence and invocation acceptance form one daemon-owned,
+idempotent `session.send` admission path. A request record moves from `pending`
+to an accepted invocation receipt; replay with the same mail idempotency key
+repairs a crash between the file write and SQLite admission without creating a
+second message or invocation. This does not imply blind platform resend:
+outbound effects follow the fail-closed policy below. Completion-notify
+admission reuses the normal invocation store (it may wait behind work already
+active for the sender).
 
 ## Channel policy
 

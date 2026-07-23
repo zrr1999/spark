@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { TASK_STATUSES } from "@zendev-lab/spark-core";
 import { sparkModelRefSchema, sparkThinkingLevelSchema } from "./model-control.ts";
 import { sparkSessionPendingTurnSchema } from "./session-assignment.ts";
 
@@ -23,6 +22,7 @@ export * from "./runtime-v1/ephemeral-secret.ts";
 export * from "./runtime-v1/messages.ts";
 export * from "./runtime-v1/registration.ts";
 export * from "./session-assignment.ts";
+export * from "./session-mail.ts";
 export * from "./side-thread.ts";
 export * from "./state-ownership.ts";
 export * from "./tool-display.ts";
@@ -63,6 +63,15 @@ export type SparkJsonObject = z.infer<typeof sparkJsonObjectSchema>;
 export const sparkProtocolVersionSchema = z.literal(SPARK_PROTOCOL_VERSION);
 export const sparkIsoDateTimeSchema = z.string().datetime({ offset: true });
 export const sparkRefSchema = z.string().min(1);
+export const sparkTaskViewStatuses = [
+  "pending",
+  "ready",
+  "running",
+  "blocked",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
 
 export const sparkViewModelStatusSchema = z.enum([
   "idle",
@@ -233,7 +242,7 @@ export const sparkTaskViewSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   kind: z.string().optional(),
-  status: z.enum(TASK_STATUSES),
+  status: z.enum(sparkTaskViewStatuses),
   owner: z.string().optional(),
   projectRef: sparkRefSchema.optional(),
   todos: z.array(sparkTaskTodoViewSchema).default([]),

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
-import sparkExtension from "../packages/pi-extension/src/extension/index.ts";
+import sparkExtension from "../packages/spark-extension/src/extension/index.ts";
 import type { SparkWidgetTheme, SparkWidgetTui } from "../packages/spark-host/src/spark-widget.ts";
 import { RoleRegistry, builtinRoleRef } from "@zendev-lab/spark-roles";
 import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";

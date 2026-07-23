@@ -1,17 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  SparkSessionMailStore,
-  sessionMailStatus,
-  type SparkSessionMailKind,
-  type SparkSessionMailMessage,
-} from "./mail-store.ts";
+import { sessionMailStatus } from "./mail-store.ts";
 import {
   parseSparkSessionRegistryRecord,
   parseSparkSessionRegistryRecords,
+  sparkSessionInboxResultSchema,
+  sparkSessionMailMutationResultSchema,
+  sparkSessionSendResultSchema,
   type SparkChannelAdapter,
   type SparkSessionCreateRequest,
   type SparkSessionListRequest,
+  type SparkSessionMailKind,
+  type SparkSessionMailMessage,
   sparkTurnSubmitResultSchema,
   sparkTurnResultSchema,
   sparkTurnStatusResultSchema,
@@ -20,7 +20,7 @@ import {
   type SparkTurnResult,
   type SparkTurnStatusResult,
 } from "@zendev-lab/spark-protocol";
-import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-system/daemon-local-rpc";
+import { requestSparkDaemonLocalRpc } from "@zendev-lab/spark-daemon-client/local-rpc";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -81,7 +81,6 @@ export interface SparkSessionToolContext {
 
 export interface SparkSessionActionDeps {
   request?: typeof requestSparkDaemonLocalRpc;
-  mailStore?: (ctx: SparkSessionToolContext) => SparkSessionMailStore;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
 }
@@ -237,7 +236,6 @@ export async function executeSparkSessionAction(
       if (kind === "request" && wait === "accepted" && params.timeoutMs !== undefined) {
         throw new Error("session request timeoutMs requires wait=completed");
       }
-      const store = mailStoreForContext(ctx, deps);
       const intent =
         optionalString(params.intent, "intent") ??
         (kind === "request" ? "work.request" : "session.notification");
@@ -264,43 +262,43 @@ export async function executeSparkSessionAction(
       if (kind === "request" && projectSession(targetSession).surface !== "local") {
         throw new Error("session request targets must be local sessions");
       }
-      const sent = await store.send({
-        toSessionId,
-        fromSessionId: current,
-        kind,
-        intent,
-        payload,
-        correlationId: optionalString(params.correlationId, "correlationId"),
-        idempotencyKey: sessionSendIdempotencyKey({
-          currentSessionId: current,
-          toolCallId: input.toolCallId,
-        }),
-        subject: optionalString(params.subject, "subject"),
-        body: message,
-        ...(kind === "request" && ctx.sessionSurface === "channel" && ctx.channelBinding
-          ? {
-              originBinding: {
-                workspaceId: requiredString(
-                  ctx.channelBinding.workspaceId,
-                  "originating channel request requires workspaceId",
-                ),
-                adapter: ctx.channelBinding.adapter,
-                externalKey: ctx.channelBinding.externalKey,
-                recipient: requiredString(
-                  ctx.channelBinding.recipient,
-                  "originating channel request requires recipient",
-                ),
-                ...(ctx.channelBinding.adapterId
-                  ? { adapterId: ctx.channelBinding.adapterId }
-                  : {}),
-                ...(ctx.channelBinding.adapterAccountIdentity
-                  ? { adapterAccountIdentity: ctx.channelBinding.adapterAccountIdentity }
-                  : {}),
-              },
-            }
-          : {}),
-        source: "tool",
-      });
+      const correlationId = optionalString(params.correlationId, "correlationId");
+      const subject = optionalString(params.subject, "subject");
+      const admitted = sparkSessionSendResultSchema.parse(
+        await request<unknown>(
+          "session.send",
+          {
+            toSessionId,
+            fromSessionId: current,
+            kind,
+            intent,
+            payload,
+            idempotencyKey: sessionSendIdempotencyKey({
+              currentSessionId: current,
+              toolCallId: input.toolCallId,
+            }),
+            body: message ?? "",
+            origin: {
+              surface: ctx.sessionSurface ?? "local",
+              host: ctx.sessionSource ?? (ctx.sessionSurface === "channel" ? "channel" : "session"),
+            },
+            notifyOnCompletion: kind === "request" && wait === "accepted",
+            source: "tool",
+            ...(correlationId ? { correlationId } : {}),
+            ...(subject ? { subject } : {}),
+            ...(kind === "request" && ctx.sessionSurface === "channel"
+              ? { originBinding: validatedChannelOriginBinding(ctx) }
+              : {}),
+            ...(ctx.invocationId ? { parentInvocationId: ctx.invocationId } : {}),
+          },
+          { signal },
+        ),
+      );
+      const sent = {
+        message: admitted.message,
+        path: admitted.filePath,
+        created: admitted.created,
+      };
       if (kind === "notification") {
         return sessionResult(
           `Notified ${sent.message.id} for ${toSessionId}; the target session was not queued.`,
@@ -316,30 +314,10 @@ export async function executeSparkSessionAction(
           },
         );
       }
-      let submitted: SparkTurnSubmitResult;
-      try {
-        submitted = parseTurnSubmitResult(
-          await request<unknown>(
-            "turn.submit",
-            {
-              sessionId: toSessionId,
-              prompt: sent.message.body,
-              idempotencyKey: `session.mail:${sent.message.id}`,
-              ...(turnOriginBinding(sent.message.originBinding, ctx) ?? {}),
-              messageMetadata: sessionRequestMessageMetadata({
-                ctx,
-                message: sent.message,
-                // wait=accepted (default) auto-wakes the sender on terminal;
-                // wait=completed already returns the result inline.
-                notifyOnCompletion: wait === "accepted",
-              }),
-            },
-            { signal },
-          ),
-        );
-      } catch (error) {
+      const submitted = admitted.submitted;
+      if (!submitted) {
         throw new Error(
-          `session ${kind} stored ${sent.message.id} for ${toSessionId}, but invocation acceptance was not confirmed: ${error instanceof Error ? error.message : String(error)}`,
+          `Spark daemon stored ${sent.message.id} but returned no invocation admission receipt`,
         );
       }
       if (wait === "completed") {
@@ -383,7 +361,9 @@ export async function executeSparkSessionAction(
       const includeAcked = optionalBoolean(params.includeAcked, false, "includeAcked");
       const limit = normalizeLimit(params.limit);
       const offset = normalizeOffset(params.offset);
-      const allMessages = await mailStoreForContext(ctx, deps).list(sessionId, { includeAcked });
+      const allMessages = sparkSessionInboxResultSchema.parse(
+        await request<unknown>("session.inbox", { sessionId, includeAcked }, { signal }),
+      ).messages;
       const messages = allMessages.slice(offset, offset + limit).map((message) => ({
         ...withMailStatus(message),
         preview: previewMailBody(message.body),
@@ -402,11 +382,13 @@ export async function executeSparkSessionAction(
     case "ack": {
       const sessionId = await currentInboxSessionId(params.sessionId, ctx, action);
       const messageId = requiredString(params.messageId, `session ${action} requires messageId`);
-      const store = mailStoreForContext(ctx, deps);
-      const message =
-        action === "read"
-          ? await store.read(sessionId, messageId)
-          : await store.ack(sessionId, messageId);
+      const message = sparkSessionMailMutationResultSchema.parse(
+        await request<unknown>(
+          action === "read" ? "session.mail.read" : "session.mail.ack",
+          { sessionId, messageId },
+          { signal },
+        ),
+      ).message;
       const result = withMailStatus(message);
       return sessionResult(renderMailMessage(action, result), {
         action,
@@ -604,16 +586,6 @@ function assertChannelWorkspaceTarget(
       `message-platform session ${action} targets must be sessions in the current workspace`,
     );
   }
-}
-
-function mailStoreForContext(
-  ctx: SparkSessionToolContext,
-  deps: SparkSessionActionDeps,
-): SparkSessionMailStore {
-  return (
-    deps.mailStore?.(ctx) ??
-    new SparkSessionMailStore(ctx.sparkStateRoot ? { sparkHome: ctx.sparkStateRoot } : undefined)
-  );
 }
 
 async function targetSessionId(
@@ -932,54 +904,6 @@ function sessionOriginMessageMetadata(
   };
 }
 
-function turnOriginBinding(
-  binding: SparkSessionMailMessage["originBinding"],
-  _ctx: SparkSessionToolContext,
-): { originBinding: Record<string, string> } | undefined {
-  if (!binding) return undefined;
-  const workspaceId = binding.workspaceId.trim();
-  const adapterId = binding.adapterId?.trim();
-  const externalKey = binding.externalKey.trim();
-  const recipient = binding.recipient.trim();
-  if (!workspaceId || !adapterId || !externalKey || !recipient) {
-    throw new Error(
-      "originating channel request requires immutable workspaceId, adapterId, externalKey, and recipient",
-    );
-  }
-  return {
-    originBinding: {
-      workspaceId,
-      adapter: binding.adapter,
-      adapterId,
-      ...(binding.adapterAccountIdentity
-        ? { adapterAccountIdentity: binding.adapterAccountIdentity }
-        : {}),
-      externalKey,
-      recipient,
-    },
-  };
-}
-
-function sessionRequestMessageMetadata(input: {
-  ctx: SparkSessionToolContext;
-  message: SparkSessionMailMessage;
-  notifyOnCompletion: boolean;
-}): Record<string, unknown> {
-  return {
-    ...sessionOriginMessageMetadata(input.ctx, input.message.fromSessionId),
-    sessionMail: {
-      messageId: input.message.id,
-      kind: input.message.kind,
-      intent: input.message.intent,
-      correlationId: input.message.correlationId,
-      fromSessionId: input.message.fromSessionId,
-      toSessionId: input.message.toSessionId,
-      notifyOnCompletion: input.notifyOnCompletion,
-      ...(input.ctx.invocationId ? { parentInvocationId: input.ctx.invocationId } : {}),
-    },
-  };
-}
-
 function normalizeRequestTimeoutMs(value: unknown): number {
   if (value === undefined || value === null) return DEFAULT_REQUEST_TIMEOUT_MS;
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
@@ -1044,7 +968,7 @@ async function waitForRequestResult(input: {
 
 function completedRequestResult(input: {
   action: "send";
-  sent?: Awaited<ReturnType<SparkSessionMailStore["send"]>>;
+  sent?: { message: SparkSessionMailMessage; path: string; created: boolean };
   targetSession?: SparkSessionRegistryRecord;
   submitted?: SparkTurnSubmitResult;
   invocationId: string;

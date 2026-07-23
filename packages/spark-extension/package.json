@@ -2,7 +2,7 @@
   "name": "@zendev-lab/spark-extension",
   "version": "0.1.0",
   "private": true,
-  "description": "Spark-native extension host boundary. Thin facade over capability packages and the Pi-compatible policy surface.",
+  "description": "Spark-native extension composition and policy boundary.",
   "license": "MIT",
   "author": "zrr1999",
   "files": [
@@ -12,15 +12,28 @@
   ],
   "type": "module",
   "exports": {
-    "./extension": "./src/extension.ts",
+    "./extension": "./src/extension/index.ts",
     "./host-support": "./src/host-support.ts"
   },
   "scripts": {
     "check": "vp check --no-fmt --no-lint ."
   },
   "dependencies": {
-    "@zendev-lab/pi-extension": "workspace:^",
+    "@zendev-lab/spark-artifacts": "workspace:^",
+    "@zendev-lab/spark-ask": "workspace:^",
+    "@zendev-lab/spark-core": "workspace:^",
     "@zendev-lab/spark-host": "workspace:^",
-    "@zendev-lab/spark-roles": "workspace:^"
+    "@zendev-lab/spark-i18n": "workspace:^",
+    "@zendev-lab/spark-loop": "workspace:^",
+    "@zendev-lab/spark-memory": "workspace:^",
+    "@zendev-lab/spark-modes": "workspace:^",
+    "@zendev-lab/spark-repro": "workspace:^",
+    "@zendev-lab/spark-roles": "workspace:^",
+    "@zendev-lab/spark-runtime": "workspace:^",
+    "@zendev-lab/spark-tasks": "workspace:^",
+    "@zendev-lab/spark-text": "workspace:^",
+    "@zendev-lab/spark-workflows": "workspace:^",
+    "es-toolkit": "catalog:",
+    "typebox": "catalog:"
   }
 }

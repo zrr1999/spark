@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import type { TaskRun, TaskRunCompletionSummary } from "../packages/spark-core/src/index.ts";
-import { projectHiddenRoleRunInboxEntry } from "../packages/pi-extension/src/extension/role-run-completions.ts";
+import { projectHiddenRoleRunInboxEntry } from "../packages/spark-extension/src/extension/role-run-completions.ts";
 
 const now = "2026-07-07T12:00:00.000Z";
 const recentCutoffMs = Date.parse("2026-07-01T00:00:00.000Z");

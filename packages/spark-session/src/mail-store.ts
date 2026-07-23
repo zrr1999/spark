@@ -2,59 +2,30 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeJsonFileAtomic } from "@zendev-lab/spark-core";
+import type {
+  SparkSessionMailChannelTarget,
+  SparkSessionMailDelivery,
+  SparkSessionMailDeliveryReceipt,
+  SparkSessionMailDeliveryStatus,
+  SparkSessionMailKind,
+  SparkSessionMailMessage,
+  SparkSessionMailOriginBinding,
+  SparkSessionMailVisibility,
+  SparkProtocolJsonValue,
+  SparkTurnSubmitResult,
+} from "@zendev-lab/spark-protocol";
 import { resolveSparkHome } from "@zendev-lab/spark-system";
 
-export type SparkSessionMailKind = "request" | "notification";
-export type SparkSessionMailVisibility = "internal" | "user";
-export type SparkSessionMailDelivery = "mailbox" | "channel";
-export type SparkSessionMailDeliveryStatus = "pending" | "delivered" | "failed" | "uncertain";
-
-export interface SparkSessionMailChannelTarget {
-  adapter: string;
-  externalKey: string;
-  /** Runtime/config adapter id. Kept for legacy routing diagnostics. */
-  adapterId?: string;
-  /** Stable provider-account identity; preferred over the mutable adapter id. */
-  adapterAccountIdentity?: string;
-}
-
-export interface SparkSessionMailOriginBinding extends SparkSessionMailChannelTarget {
-  workspaceId: string;
-  adapter: "feishu" | "infoflow" | "qqbot";
-  adapterId: string;
-  recipient: string;
-}
-
-export interface SparkSessionMailDeliveryReceipt extends SparkSessionMailChannelTarget {
-  status: SparkSessionMailDeliveryStatus;
-  attemptCount: number;
-  lastAttemptAt: string | null;
-  deliveredAt: string | null;
-  lastError: string | null;
-  receipt: unknown;
-}
-
-export interface SparkSessionMailMessage {
-  id: string;
-  toSessionId: string;
-  fromSessionId: string;
-  kind: SparkSessionMailKind;
-  visibility: SparkSessionMailVisibility;
-  delivery: SparkSessionMailDelivery;
-  deliveries: SparkSessionMailDeliveryReceipt[];
-  originBinding?: SparkSessionMailOriginBinding;
-  intent: string;
-  payload: Record<string, unknown>;
-  correlationId: string;
-  replyToMessageId: string | null;
-  idempotencyKey: string | null;
-  subject: string | null;
-  body: string;
-  createdAt: string;
-  readAt: string | null;
-  ackedAt: string | null;
-  source: "cli" | "tui" | "tool";
-}
+export type {
+  SparkSessionMailChannelTarget,
+  SparkSessionMailDelivery,
+  SparkSessionMailDeliveryReceipt,
+  SparkSessionMailDeliveryStatus,
+  SparkSessionMailKind,
+  SparkSessionMailMessage,
+  SparkSessionMailOriginBinding,
+  SparkSessionMailVisibility,
+} from "@zendev-lab/spark-protocol";
 
 export interface SparkSessionMailboxFile {
   version: 1;
@@ -173,6 +144,9 @@ export class SparkSessionMailStore {
           readAt: null,
           ackedAt: null,
           source: input.source ?? "cli",
+          ...(kind === "request"
+            ? { requestAdmission: { status: "pending" as const, updatedAt: this.nowIso() } }
+            : {}),
         };
         mailbox.messages.push(message);
         await this.save(toSessionId, mailbox);
@@ -240,6 +214,38 @@ export class SparkSessionMailStore {
       readAt: message.readAt ?? this.nowIso(),
       ackedAt: message.ackedAt ?? this.nowIso(),
     }));
+  }
+
+  async recordRequestAdmission(
+    toSessionId: string,
+    messageId: string,
+    submitted: SparkTurnSubmitResult,
+  ): Promise<SparkSessionMailMessage> {
+    return await this.updateMessage(toSessionId, messageId, (message) => {
+      if (message.kind !== "request") {
+        throw new Error(`Spark session mail ${message.id} is not an executable request`);
+      }
+      const existing = message.requestAdmission;
+      if (
+        existing?.status === "accepted" &&
+        (existing.invocationId !== submitted.invocationId ||
+          existing.acceptedAt !== submitted.acceptedAt)
+      ) {
+        throw new Error(
+          `Spark session mail ${message.id} was admitted with a different invocation`,
+        );
+      }
+      if (existing?.status === "accepted") return message;
+      return {
+        ...message,
+        requestAdmission: {
+          status: "accepted",
+          invocationId: submitted.invocationId,
+          acceptedAt: submitted.acceptedAt,
+          updatedAt: this.nowIso(),
+        },
+      };
+    });
   }
 
   async recordChannelDelivery(
@@ -404,9 +410,12 @@ export class SparkSessionMailStore {
         const fallback = typeof raw.toSessionId === "string" ? raw.toSessionId : entry.name;
         for (const message of normalizeMailbox(raw, fallback).messages) {
           const existing = messages.get(message.id);
-          if (!existing || mailStatusRank(message) >= mailStatusRank(existing)) {
+          if (!existing) {
             messages.set(message.id, message);
+            continue;
           }
+          assertSameStoredMessage(existing, message);
+          messages.set(message.id, mergeStoredMessageState(existing, message));
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -445,10 +454,14 @@ export class SparkSessionMailStore {
           const duplicate = matches.get(message.id);
           if (duplicate) {
             assertSameStoredMessage(duplicate.message, message);
-            const duplicateRank = mailStatusRank(duplicate.message);
-            const candidateRank = mailStatusRank(message);
-            if (candidateRank < duplicateRank || (candidateRank === duplicateRank && !canonical))
-              continue;
+            const preferred =
+              canonical && !duplicate.canonical ? { message, path, canonical } : duplicate;
+            const other = preferred === duplicate ? message : duplicate.message;
+            matches.set(message.id, {
+              ...preferred,
+              message: mergeStoredMessageState(preferred.message, other),
+            });
+            continue;
           }
           matches.set(message.id, { message, path, canonical });
         }
@@ -608,7 +621,37 @@ function normalizeMailMessage(value: unknown): SparkSessionMailMessage | undefin
     readAt: typeof record.readAt === "string" ? record.readAt : null,
     ackedAt: typeof record.ackedAt === "string" ? record.ackedAt : null,
     source: record.source === "tui" || record.source === "tool" ? record.source : "cli",
+    ...(normalizeRequestAdmission(record.requestAdmission, record.kind)
+      ? { requestAdmission: normalizeRequestAdmission(record.requestAdmission, record.kind)! }
+      : {}),
   };
+}
+
+function normalizeRequestAdmission(
+  value: unknown,
+  kind: unknown,
+): SparkSessionMailMessage["requestAdmission"] {
+  if (kind !== "request") return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { status: "pending", updatedAt: new Date(0).toISOString() };
+  }
+  const record = value as Record<string, unknown>;
+  const updatedAt =
+    typeof record.updatedAt === "string" ? record.updatedAt : new Date(0).toISOString();
+  if (
+    record.status === "accepted" &&
+    typeof record.invocationId === "string" &&
+    record.invocationId.trim() &&
+    typeof record.acceptedAt === "string"
+  ) {
+    return {
+      status: "accepted",
+      invocationId: record.invocationId,
+      acceptedAt: record.acceptedAt,
+      updatedAt,
+    };
+  }
+  return { status: "pending", updatedAt };
 }
 
 function normalizeMailKind(value: unknown): SparkSessionMailKind {
@@ -624,7 +667,7 @@ function normalizeVisibility(value: unknown): SparkSessionMailVisibility {
   throw new Error("Spark session mail visibility must be internal or user");
 }
 
-function normalizePayload(value: unknown): Record<string, unknown> {
+function normalizePayload(value: unknown): Record<string, SparkProtocolJsonValue> {
   if (value === undefined || value === null) return {};
   if (typeof value !== "object" || Array.isArray(value))
     throw new Error("Spark session mail payload must be a JSON object");
@@ -634,7 +677,7 @@ function normalizePayload(value: unknown): Record<string, unknown> {
     const parsed = JSON.parse(serialized) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("payload must serialize to a JSON object");
-    return parsed as Record<string, unknown>;
+    return parsed as Record<string, SparkProtocolJsonValue>;
   } catch (error) {
     throw new Error(
       `Spark session mail payload must be JSON-serializable: ${
@@ -838,16 +881,45 @@ function assertSameStoredMessage(
     ...message,
     readAt: null,
     ackedAt: null,
+    requestAdmission: undefined,
   });
   if (JSON.stringify(withoutMutableStatus(left)) !== JSON.stringify(withoutMutableStatus(right))) {
     throw new Error(`Spark session mail ${left.id} differs across mailbox files`);
   }
 }
 
-function mailStatusRank(message: SparkSessionMailMessage): number {
-  if (message.ackedAt) return 2;
-  if (message.readAt) return 1;
-  return 0;
+function mergeStoredMessageState(
+  preferred: SparkSessionMailMessage,
+  other: SparkSessionMailMessage,
+): SparkSessionMailMessage {
+  const preferredAdmission = preferred.requestAdmission;
+  const otherAdmission = other.requestAdmission;
+  if (
+    preferredAdmission?.status === "accepted" &&
+    otherAdmission?.status === "accepted" &&
+    (preferredAdmission.invocationId !== otherAdmission.invocationId ||
+      preferredAdmission.acceptedAt !== otherAdmission.acceptedAt)
+  ) {
+    throw new Error(`Spark session mail ${preferred.id} has conflicting invocation admissions`);
+  }
+  const requestAdmission =
+    preferredAdmission?.status === "accepted"
+      ? preferredAdmission
+      : otherAdmission?.status === "accepted"
+        ? otherAdmission
+        : (preferredAdmission ?? otherAdmission);
+  return {
+    ...preferred,
+    readAt: earliestTimestamp(preferred.readAt, other.readAt),
+    ackedAt: earliestTimestamp(preferred.ackedAt, other.ackedAt),
+    ...(requestAdmission ? { requestAdmission } : {}),
+  };
+}
+
+function earliestTimestamp(left: string | null, right: string | null): string | null {
+  if (!left) return right;
+  if (!right) return left;
+  return left.localeCompare(right) <= 0 ? left : right;
 }
 
 function assertSameLogicalMessage(

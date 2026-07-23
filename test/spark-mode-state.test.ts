@@ -13,7 +13,7 @@ import {
   nextSparkSessionPhase,
   saveSparkPhase,
   SPARK_SESSION_PHASE_CYCLE,
-} from "../packages/pi-extension/src/extension/session-state.ts";
+} from "../packages/spark-extension/src/extension/session-state.ts";
 
 async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "spark-mode-state-"));

@@ -53,7 +53,7 @@ Cross-session agent-to-agent traffic is **messages** (session inspector tab), no
 
 - [`tools.md`](./tools.md) — `ask` is the only structured question surface; cancellation is not approval.
 - [`turn.md`](./turn.md) — daemon is execution truth; transports are adapters.
-- [`sessions-and-channels.md`](./sessions-and-channels.md) — session mail `question` is a different cross-session wait primitive from tool-level human waits.
+- [`sessions-and-channels.md`](./sessions-and-channels.md) — session mail `request` is a cross-session invocation primitive, not a tool-level human wait.
 
 ## Two ID systems and where each applies
 

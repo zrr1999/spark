@@ -6,7 +6,11 @@ import { test } from "vitest";
 
 import type { ToolConfig } from "@zendev-lab/spark-core";
 import { SparkSessionMailStore, sanitizeSessionMailScope } from "@zendev-lab/spark-session";
-import type { SparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
+import type {
+  SparkSessionRegistryRecord,
+  SparkSessionSendRequest,
+  SparkTurnSubmitResult,
+} from "@zendev-lab/spark-protocol";
 import { registerSparkSessionTool } from "../packages/spark-session/src/extension.ts";
 import type { SparkSessionToolContext } from "../packages/spark-session/src/action-tool.ts";
 
@@ -14,10 +18,40 @@ const NOW = "2026-07-13T00:00:00.000Z";
 
 type SessionToolResult = Awaited<ReturnType<ToolConfig["execute"]>>;
 
+async function sessionSendRpc(
+  mailStore: SparkSessionMailStore,
+  params: SparkSessionSendRequest,
+  submitted?: SparkTurnSubmitResult,
+) {
+  const sent = await mailStore.send({
+    toSessionId: params.toSessionId,
+    fromSessionId: params.fromSessionId,
+    kind: params.kind,
+    intent: params.intent,
+    payload: params.payload,
+    idempotencyKey: params.idempotencyKey,
+    body: params.body,
+    source: params.source,
+    ...(params.correlationId ? { correlationId: params.correlationId } : {}),
+    ...(params.subject !== undefined ? { subject: params.subject } : {}),
+    ...(params.originBinding ? { originBinding: params.originBinding } : {}),
+  });
+  const message = submitted
+    ? await mailStore.recordRequestAdmission(params.toSessionId, sent.message.id, submitted)
+    : sent.message;
+  return {
+    message,
+    filePath: sent.path,
+    created: sent.created,
+    executionTriggered: Boolean(submitted),
+    target: sessionRecord(params.toSessionId),
+    ...(submitted ? { submitted } : {}),
+  };
+}
+
 test("session tool exposes persistent lifecycle, calls, classification, and mail", () => {
   const tool = registerTestTool({
     request: async () => assert.fail("request should not run during registration"),
-    mailStore: () => assert.fail("mail store should not run during registration"),
   });
   const schema = JSON.stringify(tool.parameters);
   for (const action of [
@@ -113,7 +147,7 @@ test("session tool routes managed actions through daemon RPC and classifies surf
     }
     return assert.fail(`unexpected RPC method: ${method}`);
   };
-  const tool = registerTestTool({ request, mailStore: () => assert.fail("unexpected mail store") });
+  const tool = registerTestTool({ request });
   const ctx = context("session:a");
 
   const listed = await execute(tool, ctx, { action: "list", limit: 2 });
@@ -265,7 +299,7 @@ test("channel sessions can inspect same-workspace local and channel sessions", a
     if (method === "session.list") return [...records.values()] as T;
     return assert.fail(`unexpected RPC method: ${method}`);
   };
-  const tool = registerTestTool({ request, mailStore: () => assert.fail("unexpected mail store") });
+  const tool = registerTestTool({ request });
   const ctx = { ...context(channelCurrent.sessionId), sessionSurface: "channel" as const };
 
   const listed = await execute(tool, ctx, { action: "list" });
@@ -334,7 +368,7 @@ test("session call uses daemon turn.submit for persistent continuity", async () 
       } as T;
     return assert.fail(`unexpected RPC method: ${method}`);
   };
-  const tool = registerTestTool({ request, mailStore: () => assert.fail("unexpected mail store") });
+  const tool = registerTestTool({ request });
 
   const result = await execute(tool, context("session:caller"), {
     action: "call",
@@ -398,7 +432,7 @@ test("session call uses daemon turn.submit for persistent continuity", async () 
   );
 });
 
-test("session request queues the original message with hidden sender metadata", async () => {
+test("session request delegates durable admission context to the daemon", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-session-request-tool-"));
   try {
     const mailStore = new SparkSessionMailStore({ sparkHome: dir, now: () => Date.parse(NOW) });
@@ -416,39 +450,28 @@ test("session request queues the original message with hidden sender metadata", 
       if (method === "session.get") {
         return sessionRecord(String((params as { sessionId?: string }).sessionId)) as T;
       }
-      if (method === "turn.submit") {
-        const submitted = params as {
-          sessionId: string;
-          prompt: string;
-          messageMetadata: Record<string, unknown>;
-        };
-        const stored = await mailStore.list(submitted.sessionId);
-        assert.equal(stored.length, 2, "request must persist before turn.submit");
+      if (method === "session.send") {
+        const input = params as SparkSessionSendRequest;
+        const admitted = await sessionSendRpc(mailStore, input, {
+          invocationId: "inv_requestturn",
+          status: "queued",
+          acceptedAt: NOW,
+        });
+        const stored = await mailStore.list(input.toSessionId);
+        assert.equal(stored.length, 2, "daemon admission must persist before returning");
         const requestMail = stored.find((message) => message.body === requestBody);
         assert.ok(requestMail);
-        assert.equal(submitted.prompt, requestBody);
-        assert.deepEqual(submitted.messageMetadata, {
-          origin: {
-            kind: "session",
-            sessionId: "session:caller",
-            surface: "local",
-            host: "tui",
-          },
-          sessionMail: {
-            messageId: requestMail.id,
-            kind: "request",
-            intent: "work.request",
-            correlationId: requestMail.correlationId,
-            fromSessionId: "session:caller",
-            toSessionId: "session:worker",
-            notifyOnCompletion: true,
-          },
+        assert.equal(input.body, requestBody);
+        assert.deepEqual(input.origin, {
+          surface: "local",
+          host: "tui",
         });
-        return { invocationId: "inv_requestturn", status: "queued", acceptedAt: NOW } as T;
+        assert.equal(input.notifyOnCompletion, true);
+        return admitted as T;
       }
       return assert.fail(`unexpected RPC method: ${method}`);
     };
-    const tool = registerTestTool({ request, mailStore: () => mailStore });
+    const tool = registerTestTool({ request });
 
     const requested = await execute(
       tool,
@@ -475,7 +498,7 @@ test("session request queues the original message with hidden sender metadata", 
     assert.match(toolText(requested), /invocation inv_requestturn was accepted/u);
     assert.deepEqual(
       calls.map((call) => call.method),
-      ["session.get", "turn.submit"],
+      ["session.get", "session.send"],
     );
 
     await assert.rejects(
@@ -515,7 +538,6 @@ test("session request queues the original message with hidden sender metadata", 
           ],
         } as T;
       },
-      mailStore: () => mailStore,
     });
     await assert.rejects(
       () =>
@@ -534,7 +556,6 @@ test("session request queues the original message with hidden sender metadata", 
         const sessionId = String((params as { sessionId?: string }).sessionId);
         return { ...sessionRecord(sessionId), status: "archived" } as T;
       },
-      mailStore: () => mailStore,
     });
     await assert.rejects(
       () =>
@@ -563,12 +584,12 @@ test("session request blocks for success and preserves causal invocation metadat
         if (method === "session.get") {
           return sessionRecord(String((params as { sessionId?: string }).sessionId)) as T;
         }
-        if (method === "turn.submit") {
-          return {
+        if (method === "session.send") {
+          return (await sessionSendRpc(mailStore, params as SparkSessionSendRequest, {
             invocationId: "inv_requestsuccess",
             status: "queued",
             acceptedAt: NOW,
-          } as T;
+          })) as T;
         }
         if (method === "turn.status") {
           statusReads += 1;
@@ -592,7 +613,6 @@ test("session request blocks for success and preserves causal invocation metadat
         }
         return assert.fail(`unexpected RPC method: ${method}`);
       },
-      mailStore: () => mailStore,
       sleep: async () => undefined,
     });
 
@@ -627,40 +647,31 @@ test("session request blocks for success and preserves causal invocation metadat
     assert.equal(details.waitTimedOut, false);
     assert.equal(details.answer, "The build is green.");
     assert.equal(details.invocationId, "inv_requestsuccess");
+    const sendRequest = calls.find((call) => call.method === "session.send")
+      ?.params as SparkSessionSendRequest;
     assert.deepEqual(
-      calls.find((call) => call.method === "turn.submit")?.params as {
-        prompt: string;
-        idempotencyKey: string;
-        messageMetadata: Record<string, unknown>;
+      {
+        toSessionId: sendRequest.toSessionId,
+        fromSessionId: sendRequest.fromSessionId,
+        body: sendRequest.body,
+        idempotencyKey: sendRequest.idempotencyKey,
+        origin: sendRequest.origin,
+        notifyOnCompletion: sendRequest.notifyOnCompletion,
+        parentInvocationId: sendRequest.parentInvocationId,
       },
       {
-        sessionId: "session:worker",
-        prompt: "Is the build green?",
-        idempotencyKey: `session.mail:${(result.details as { message: { id: string } }).message.id}`,
-        messageMetadata: {
-          origin: {
-            kind: "session",
-            sessionId: "session:caller",
-            surface: "local",
-            host: "daemon",
-          },
-          sessionMail: {
-            messageId: (result.details as { message: { id: string } }).message.id,
-            kind: "request",
-            intent: "work.request",
-            correlationId: (result.details as { message: { correlationId: string } }).message
-              .correlationId,
-            fromSessionId: "session:caller",
-            toSessionId: "session:worker",
-            notifyOnCompletion: false,
-            parentInvocationId: "inv_parent",
-          },
-        },
+        toSessionId: "session:worker",
+        fromSessionId: "session:caller",
+        body: "Is the build green?",
+        idempotencyKey: 'session.tool:["session:caller","call-request-success"]',
+        origin: { surface: "local", host: "daemon" },
+        notifyOnCompletion: false,
+        parentInvocationId: "inv_parent",
       },
     );
     assert.deepEqual(
       calls.map((call) => call.method),
-      ["session.get", "turn.submit", "turn.status", "turn.status", "turn.result"],
+      ["session.get", "session.send", "turn.status", "turn.status", "turn.result"],
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -676,12 +687,12 @@ test("session request reports terminal failure without retrying or throwing", as
         if (method === "session.get") {
           return sessionRecord(String((params as { sessionId?: string }).sessionId)) as T;
         }
-        if (method === "turn.submit") {
-          return {
+        if (method === "session.send") {
+          return (await sessionSendRpc(mailStore, params as SparkSessionSendRequest, {
             invocationId: "inv_requestfailed",
             status: "queued",
             acceptedAt: NOW,
-          } as T;
+          })) as T;
         }
         if (method === "turn.status") {
           return {
@@ -705,7 +716,6 @@ test("session request reports terminal failure without retrying or throwing", as
         }
         return assert.fail(`unexpected RPC method: ${method}`);
       },
-      mailStore: () => mailStore,
     });
 
     const result = await execute(tool, context("session:caller"), {
@@ -738,13 +748,13 @@ test("session request timeout stops only the sender wait", async () => {
         if (method === "session.get") {
           return sessionRecord(String((params as { sessionId?: string }).sessionId)) as T;
         }
-        if (method === "turn.submit") {
+        if (method === "session.send") {
           submitCount += 1;
-          return {
+          return (await sessionSendRpc(mailStore, params as SparkSessionSendRequest, {
             invocationId: "inv_requesttimeout",
             status: "queued",
             acceptedAt: NOW,
-          } as T;
+          })) as T;
         }
         if (method === "turn.status") {
           return {
@@ -758,7 +768,6 @@ test("session request timeout stops only the sender wait", async () => {
         }
         return assert.fail(`unexpected RPC method: ${method}`);
       },
-      mailStore: () => mailStore,
       now: () => now,
       sleep: async (ms) => {
         now += ms;
@@ -817,10 +826,13 @@ test("session request preserves durable recovery data when queue acceptance fail
         if (method === "session.get") {
           return sessionRecord(String((params as { sessionId?: string }).sessionId)) as T;
         }
-        if (method === "turn.submit") throw new Error("queue unavailable");
+        if (method === "session.send") {
+          const input = params as SparkSessionSendRequest;
+          await sessionSendRpc(mailStore, input);
+          throw new Error("queue unavailable");
+        }
         return assert.fail(`unexpected RPC method: ${method}`);
       },
-      mailStore: () => mailStore,
     });
 
     await assert.rejects(
@@ -836,7 +848,7 @@ test("session request preserves durable recovery data when queue acceptance fail
           },
           "call-request-failure",
         ),
-      /request stored mail:[^ ]+ for session:worker, but invocation acceptance was not confirmed: queue unavailable/u,
+      /queue unavailable/u,
     );
     const [stored] = await mailStore.list("session:worker");
     assert.equal(stored?.body, "Persist even when queueing fails");
@@ -881,13 +893,27 @@ test("channel sessions may request work only from local sessions in their worksp
       if (method === "session.get") {
         return records.get(String((params as { sessionId?: string }).sessionId)) as T;
       }
-      if (method === "turn.submit") {
-        return { invocationId: "inv_channelrequest", status: "queued", acceptedAt: NOW } as T;
+      if (method === "session.send") {
+        return (await sessionSendRpc(mailStore, params as SparkSessionSendRequest, {
+          invocationId: "inv_channelrequest",
+          status: "queued",
+          acceptedAt: NOW,
+        })) as T;
       }
       return assert.fail(`unexpected RPC method: ${method}`);
     };
-    const tool = registerTestTool({ request, mailStore: () => mailStore });
-    const ctx = { ...context(channelCurrent.sessionId), sessionSurface: "channel" as const };
+    const tool = registerTestTool({ request });
+    const ctx = {
+      ...context(channelCurrent.sessionId),
+      sessionSurface: "channel" as const,
+      channelBinding: {
+        workspaceId: "workspace:test",
+        adapter: "infoflow" as const,
+        adapterId: "infoflow-main",
+        externalKey: "infoflow:user:channel",
+        recipient: "user:channel",
+      },
+    };
 
     const requested = await execute(tool, ctx, {
       action: "send",
@@ -897,7 +923,7 @@ test("channel sessions may request work only from local sessions in their worksp
       message: "Handle this now",
     });
     assert.equal((requested.details as { executionTriggered: boolean }).executionTriggered, true);
-    assert.deepEqual(calls, ["session.get", "session.get", "turn.submit"]);
+    assert.deepEqual(calls, ["session.get", "session.get", "session.send"]);
 
     await assert.rejects(
       () =>
@@ -917,7 +943,6 @@ test("channel sessions may request work only from local sessions in their worksp
 test("session send rejects the removed question mode", async () => {
   const tool = registerTestTool({
     request: async () => assert.fail("question rejection must happen before daemon RPC"),
-    mailStore: () => assert.fail("question rejection must happen before mailbox writes"),
   });
 
   await assert.rejects(
@@ -931,25 +956,24 @@ test("session send rejects the removed question mode", async () => {
     /session kind must be request or notification/u,
   );
 });
-test("session mail uses the host Spark state root", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "spark-session-state-root-"));
+test("session mail writes are delegated to the daemon-owned RPC store", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-session-daemon-store-"));
   try {
+    const mailStore = new SparkSessionMailStore({ sparkHome: dir });
+    const calls: string[] = [];
     const tool = registerTestTool({
       request: async <T>(method: string, params?: unknown): Promise<T> => {
+        calls.push(method);
         if (method === "session.get") {
           return sessionRecord(String((params as { sessionId: string }).sessionId)) as T;
         }
-        if (method === "turn.submit") {
-          return {
-            invocationId: "inv_stateroot",
-            status: "queued",
-            acceptedAt: NOW,
-          } as T;
+        if (method === "session.send") {
+          return (await sessionSendRpc(mailStore, params as SparkSessionSendRequest)) as T;
         }
         return assert.fail(`unexpected RPC method: ${method}`);
       },
     });
-    const ctx = { ...context("session:a"), sparkStateRoot: dir };
+    const ctx = { ...context("session:a"), sparkStateRoot: "/ignored-by-client" };
     await execute(tool, ctx, {
       action: "send",
       toSessionId: "session:b",
@@ -959,6 +983,7 @@ test("session mail uses the host Spark state root", async () => {
     const stored = await new SparkSessionMailStore({ sparkHome: dir }).list("session:b");
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.fromSessionId, "session:a");
+    assert.deepEqual(calls, ["session.get", "session.send"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -978,8 +1003,23 @@ test("session inbox is current-session private and supports read and ack", async
       source: "tool",
     });
     const tool = registerTestTool({
-      request: async () => assert.fail("inbox actions must not call daemon RPC"),
-      mailStore: () => mailStore,
+      request: async <T>(method: string, params?: unknown): Promise<T> => {
+        const input = params as { sessionId: string; messageId?: string; includeAcked?: boolean };
+        if (method === "session.inbox") {
+          return {
+            messages: await mailStore.list(input.sessionId, {
+              includeAcked: input.includeAcked,
+            }),
+          } as T;
+        }
+        if (method === "session.mail.read") {
+          return { message: await mailStore.read(input.sessionId, input.messageId!) } as T;
+        }
+        if (method === "session.mail.ack") {
+          return { message: await mailStore.ack(input.sessionId, input.messageId!) } as T;
+        }
+        return assert.fail(`unexpected RPC method: ${method}`);
+      },
     });
     const ctx = context("session:a");
 

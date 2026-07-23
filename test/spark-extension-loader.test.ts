@@ -81,6 +81,13 @@ test("root Pi extension list and native builtins both expose self-extension tool
     rootPackage.pi?.extensions?.some((entry) => entry.includes("spark-fusion")),
     false,
   );
+  assert.equal(
+    rootPackage.pi?.extensions?.some((entry) => entry.includes("pi-extension")),
+    false,
+  );
+  assert.ok(
+    rootPackage.pi?.extensions?.includes("./packages/spark-extension/src/extension/index.ts"),
+  );
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-memory/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-session/extension"));
   assert.ok([...DEFAULT_SPARK_EXTENSION_SPECS].includes("@zendev-lab/spark-web/extension"));
@@ -125,13 +132,10 @@ test("source-distributed Spark TUI resolves builtins through declared package ex
   assert.match(loaderSource, /await import\("@zendev-lab\/spark-graft\/extension"\)/u);
 });
 
-test("Spark host-support is owned by spark-extension, not spark-host or TUI→pi-extension", async () => {
+test("Spark extension implementation and host-support are owned by spark-extension", async () => {
   const sparkExtensionPackage = JSON.parse(
     await readFile(new URL("../packages/spark-extension/package.json", import.meta.url), "utf8"),
   ) as { exports?: Record<string, string>; dependencies?: Record<string, string> };
-  const piPackage = JSON.parse(
-    await readFile(new URL("../packages/pi-extension/package.json", import.meta.url), "utf8"),
-  ) as { exports?: Record<string, string> };
   const hostPackage = JSON.parse(
     await readFile(new URL("../packages/spark-host/package.json", import.meta.url), "utf8"),
   ) as { dependencies?: Record<string, string>; exports?: Record<string, string> };
@@ -140,9 +144,8 @@ test("Spark host-support is owned by spark-extension, not spark-host or TUI→pi
   ) as { dependencies?: Record<string, string> };
 
   assert.equal(sparkExtensionPackage.exports?.["./host-support"], "./src/host-support.ts");
-  assert.equal(sparkExtensionPackage.exports?.["./extension"], "./src/extension.ts");
-  assert.ok(sparkExtensionPackage.dependencies?.["@zendev-lab/pi-extension"]);
-  assert.equal(piPackage.exports?.["./host-support"], "./src/host-support.ts");
+  assert.equal(sparkExtensionPackage.exports?.["./extension"], "./src/extension/index.ts");
+  assert.equal(sparkExtensionPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.equal(hostPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.equal(tuiPackage.dependencies?.["@zendev-lab/pi-extension"], undefined);
   assert.ok(tuiPackage.dependencies?.["@zendev-lab/spark-extension"]);

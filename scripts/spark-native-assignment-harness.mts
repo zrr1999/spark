@@ -9,8 +9,8 @@ import { listActiveSparkRoleRunProcesses } from "@zendev-lab/spark-runtime";
 import { runReadyTasks } from "@zendev-lab/spark-workflows";
 
 import { createSparkCliHostServices } from "../apps/spark-tui/src/host/bootstrap.ts";
-import { saveCurrentProjectRef } from "../packages/pi-extension/src/extension/current-project-state.ts";
-import { createSparkRuntimeReadyTaskRunner } from "../packages/pi-extension/src/extension/spark-ready-task-runtime.ts";
+import { saveCurrentProjectRef } from "../packages/spark-extension/src/extension/current-project-state.ts";
+import { createSparkRuntimeReadyTaskRunner } from "../packages/spark-extension/src/extension/spark-ready-task-runtime.ts";
 
 async function main(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "spark-native-assignment-"));
@@ -54,8 +54,8 @@ async function main(): Promise<void> {
     const services = await createSparkCliHostServices({
       cwd,
       sparkHome,
-      config: { extensions: ["@zendev-lab/pi-extension/extension"], providers: [] },
-      extensions: ["@zendev-lab/pi-extension/extension"],
+      config: { extensions: ["@zendev-lab/spark-extension/extension"], providers: [] },
+      extensions: ["@zendev-lab/spark-extension/extension"],
       providers: [],
       sessionManager: { getLeafId: () => "session:native-assignment" },
     });

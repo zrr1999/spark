@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { SparkForegroundDriveSubstrate } from "../packages/pi-extension/src/extension/spark-drive-substrate.ts";
-import { isGoalToolDeactivationEvent } from "../packages/pi-extension/src/extension/spark-command-tool-events.ts";
+import { SparkForegroundDriveSubstrate } from "../packages/spark-extension/src/extension/spark-drive-substrate.ts";
+import { isGoalToolDeactivationEvent } from "../packages/spark-extension/src/extension/spark-command-tool-events.ts";
 import { createSparkNativeTuiHarness } from "./support/spark-native-tui-harness.ts";
 
 test("approved goal completion stops foreground goal ticks without exiting TUI session", async () => {
