@@ -2754,7 +2754,8 @@ export function sparkDaemonServiceCliCommand(options: SparkDaemonServiceCommandO
 }
 
 function buildSourceDaemonApp(daemonAppDir: string, env: NodeJS.ProcessEnv): number | null {
-  return spawnSync("pnpm", ["--dir", daemonAppDir, "run", "build"], {
+  return spawnSync(process.execPath, [join(daemonAppDir, "scripts", "build-cli.mjs")], {
+    cwd: daemonAppDir,
     env,
     stdio: "inherit",
   }).status;
