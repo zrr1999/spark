@@ -6,10 +6,15 @@
 
 <Response
   content={source}
-  mode={streaming ? "streaming" : "static"}
-  isAnimating={streaming}
-  animated={streaming}
-  caret={streaming ? "block" : undefined}
+  static={!streaming}
+  animation={{
+    enabled: streaming,
+    animateOnMount: streaming,
+    type: "fade",
+    duration: 120,
+    timingFunction: "ease-out",
+    tokenize: "word",
+  }}
   parseIncompleteMarkdown
   renderHtml={false}
 />

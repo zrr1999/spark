@@ -18,13 +18,13 @@ describe("Svelte AI Elements Response boundary", () => {
   it("enables the complete Response stack and keeps Streamdown props composable", () => {
     const source = readFileSync(responsePath, "utf8");
 
-    expect(source).toContain('from "streamdown-svelte"');
-    expect(source).toContain("createMathPlugin({ singleDollarTextMath: true })");
-    expect(source).toContain("githubLightDefault");
-    expect(source).toContain("githubDarkDefault");
+    expect(source).toContain('from "svelte-streamdown"');
+    expect(source).toContain('from "svelte-streamdown/code"');
+    expect(source).toContain('from "svelte-streamdown/math"');
+    expect(source).toContain('from "svelte-streamdown/mermaid"');
     expect(source).toContain("{...restProps}");
-    expect(source).toContain('[data-streamdown="code-block"]');
-    expect(source).toContain('[data-streamdown="table-wrapper"]');
+    expect(source).toContain("[data-streamdown-code]");
+    expect(source).toContain("[data-streamdown-table]");
     expect(source).toContain("[data-streamdown-mermaid]");
   });
 
@@ -33,9 +33,9 @@ describe("Svelte AI Elements Response boundary", () => {
     const sparkUiRenderer = readFileSync(join(libRoot, "SparkUiRenderer.svelte"), "utf8");
     const agentStream = readFileSync(join(libRoot, "AgentMdxStream.svelte"), "utf8");
 
-    expect(safeMarkdown).toContain('mode={streaming ? "streaming" : "static"}');
+    expect(safeMarkdown).toContain("static={!streaming}");
     expect(safeMarkdown).toContain("parseIncompleteMarkdown");
-    expect(safeMarkdown).toContain('caret={streaming ? "block" : undefined}');
+    expect(safeMarkdown).toContain("enabled: streaming");
     expect(safeMarkdown).toContain("renderHtml={false}");
     expect(sparkUiRenderer).toContain("streaming && index === document.blocks.length - 1");
     expect(sparkUiRenderer).toContain("streaming={blockStreaming}");

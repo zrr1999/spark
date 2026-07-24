@@ -1,43 +1,43 @@
 <script lang="ts">
-  import githubDarkDefault from "@shikijs/themes/github-dark-default";
-  import githubLightDefault from "@shikijs/themes/github-light-default";
-  import {
-    cjk,
-    createMathPlugin,
-    mermaid,
-    Streamdown,
-    type StreamdownProps,
-  } from "streamdown-svelte";
+  import { Streamdown, type StreamdownProps } from "svelte-streamdown";
+  import Code from "svelte-streamdown/code";
+  import Math from "svelte-streamdown/math";
+  import Mermaid from "svelte-streamdown/mermaid";
 
   type Props = StreamdownProps;
 
-  const richMarkdownPlugins = {
-    cjk,
-    math: createMathPlugin({ singleDollarTextMath: true }),
-    mermaid,
+  const richMarkdownComponents = {
+    code: Code,
+    math: Math,
+    mermaid: Mermaid,
   };
 
   let {
     content,
     class: className,
     components,
-    plugins = richMarkdownPlugins,
+    defaultOrigin = "http://localhost",
+    static: isStatic,
     ...restProps
   }: Props = $props();
+
+  const resolvedComponents = $derived({
+    ...richMarkdownComponents,
+    ...components,
+  });
 </script>
 
-<div class={`ai-response${className ? ` ${className}` : ""}`}>
+<div
+  class={`ai-response${className ? ` ${className}` : ""}`}
+  data-streaming={isStatic === false || undefined}
+>
   <Streamdown
     {content}
     class="streamdown-content"
     baseTheme="shadcn"
-    shikiTheme={[githubLightDefault, githubDarkDefault]}
-    shikiThemes={{
-      "github-light-default": githubLightDefault,
-      "github-dark-default": githubDarkDefault,
-    }}
-    {plugins}
-    {components}
+    {defaultOrigin}
+    static={isStatic}
+    components={resolvedComponents}
     {...restProps}
   />
 </div>
@@ -132,7 +132,7 @@
     padding: 0.08em 0.35em;
   }
 
-  .ai-response :global([data-streamdown="code-block"]) {
+  .ai-response :global([data-streamdown-code]) {
     background: var(--color-code-surface);
     border: 1px solid var(--color-code-surface-soft);
     border-radius: 12px;
@@ -142,7 +142,7 @@
     position: relative;
   }
 
-  .ai-response :global([data-streamdown="code-block-header"]) {
+  .ai-response :global([data-streamdown-code] > :first-child) {
     align-items: center;
     color: var(--color-code-muted);
     display: flex;
@@ -151,20 +151,16 @@
     padding: 0 12px;
   }
 
-  .ai-response :global([data-streamdown="code-block-actions-shell"]) {
+  .ai-response :global([data-streamdown-code] > :first-child > :last-child) {
+    display: flex;
+    gap: 4px;
     position: absolute;
     right: 8px;
     top: 5px;
     z-index: 1;
   }
 
-  .ai-response :global([data-streamdown="code-block-actions"]) {
-    display: flex;
-    gap: 4px;
-  }
-
-  .ai-response :global([data-streamdown="table-toolbar"]),
-  .ai-response :global([data-streamdown="table-fullscreen-toolbar"]) {
+  .ai-response :global([data-streamdown-table-download]) {
     align-items: center;
     display: flex;
     gap: 4px;
@@ -172,9 +168,8 @@
     margin-bottom: 5px;
   }
 
-  .ai-response :global([data-streamdown="code-block"] button),
-  .ai-response :global([data-streamdown="table-toolbar"] button),
-  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button),
+  .ai-response :global([data-streamdown-code] button),
+  .ai-response :global([data-streamdown-table-download] button),
   .ai-response :global([data-streamdown-mermaid] button) {
     align-items: center;
     background: color-mix(in srgb, var(--color-code-surface-soft) 86%, transparent);
@@ -188,24 +183,22 @@
     padding: 0 7px;
   }
 
-  .ai-response :global([data-streamdown="code-block"] button:disabled),
-  .ai-response :global([data-streamdown="table-toolbar"] button:disabled),
-  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button:disabled),
+  .ai-response :global([data-streamdown-code] button:disabled),
+  .ai-response :global([data-streamdown-table-download] button:disabled),
   .ai-response :global([data-streamdown-mermaid] button:disabled) {
     cursor: not-allowed;
     opacity: 0.5;
   }
 
-  .ai-response :global([data-streamdown="code-block"] button svg),
-  .ai-response :global([data-streamdown="table-toolbar"] button svg),
-  .ai-response :global([data-streamdown="table-fullscreen-toolbar"] button svg),
+  .ai-response :global([data-streamdown-code] button svg),
+  .ai-response :global([data-streamdown-table-download] button svg),
   .ai-response :global([data-streamdown-mermaid] button svg) {
     height: 14px;
     max-width: none;
     width: 14px;
   }
 
-  .ai-response :global([data-streamdown="code-block-body"]) {
+  .ai-response :global([data-streamdown-code] > :last-child) {
     overflow: auto;
   }
 
@@ -222,21 +215,10 @@
     font: inherit;
   }
 
-  .ai-response :global([data-streamdown="table-wrapper"]) {
+  .ai-response :global([data-streamdown-table]) {
     margin: 0.9rem 0;
     max-width: 100%;
     overflow-x: auto;
-  }
-
-  .ai-response :global([data-streamdown="table-fullscreen"]) {
-    background: var(--color-surface);
-    display: flex;
-    flex-direction: column;
-    inset: 0;
-    overflow: auto;
-    padding: 16px;
-    position: fixed;
-    z-index: 50;
   }
 
   .ai-response :global(#table-download-popover) {
@@ -296,6 +278,24 @@
     max-width: 100%;
     overflow: auto;
     padding: 12px;
+  }
+
+  .ai-response[data-streaming="true"] :global(.streamdown-content)::after {
+    animation: streamdown-caret 0.9s steps(1, end) infinite;
+    background: currentColor;
+    border-radius: 1px;
+    content: "";
+    display: inline-block;
+    height: 1em;
+    margin-left: 0.22em;
+    vertical-align: -0.12em;
+    width: 0.5em;
+  }
+
+  @keyframes streamdown-caret {
+    50% {
+      opacity: 0;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -3,25 +3,24 @@ import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { createDependencySourcemapFilteringLogger } from "./src/lib/vite-diagnostics";
 
 const runtimeWsPattern = /^\/api\/v1\/runtime\/runtimes\/(rt_[a-f0-9]{32})\/ws$/;
 
-export default defineConfig(({ command }) => ({
-  customLogger: command === "serve" ? createDependencySourcemapFilteringLogger() : undefined,
+export default defineConfig({
   plugins: [runtimeWebSocketDevServer(), sveltekit()],
   optimizeDeps: {
-    // Lucide publishes Svelte source that must stay on the Svelte transform
-    // path. streamdown-svelte intentionally remains in dependency optimization
-    // so its transitive CommonJS imports are converted before browser loading.
-    exclude: ["@lucide/svelte"],
+    // Svelte source packages stay on the Svelte transform path. Their CommonJS
+    // leaf dependencies are optimized explicitly for browser-compatible
+    // default export interop.
+    exclude: ["@lucide/svelte", "bits-ui", "svelte-streamdown"],
+    include: ["bits-ui > style-to-object"],
   },
   ssr: {
     // Lucide publishes Svelte source that must pass through the Svelte
     // transform before Rolldown parses the SSR graph.
     noExternal: ["@lucide/svelte"],
   },
-}));
+});
 
 function runtimeWebSocketDevServer(): Plugin {
   return {
