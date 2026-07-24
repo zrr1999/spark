@@ -25,11 +25,39 @@ export type TimelineHistoryLoadResult = {
   timelineRenderLimitDelta?: number;
 };
 
+type LatestTimelineCacheEntry = {
+  storedAt: number;
+  window: SessionSnapshotWindow;
+};
+
+const latestTimelineCacheTtlMs = 15_000;
+const latestTimelineCacheCapacity = 8;
+const latestTimelineCache = new Map<string, LatestTimelineCacheEntry>();
+const latestTimelineRequests = new Map<string, Promise<SessionSnapshotWindow | null>>();
+
+export type LatestSessionTimelineOptions = {
+  /**
+   * A server-projected revision fence. Cached snapshots are reusable only when
+   * they are at least this recent; callers without a fence always revalidate.
+   */
+  minimumUpdatedAt?: string | null;
+};
+
 /** Refresh the canonical transcript tail after the projected first paint. */
 export async function loadLatestSessionTimeline(
   sessionId: string,
+  options: LatestSessionTimelineOptions = {},
 ): Promise<SessionSnapshotWindow | null> {
-  try {
+  const cached = readLatestTimelineCache(sessionId, options.minimumUpdatedAt);
+  if (cached) return cached;
+
+  const pending = latestTimelineRequests.get(sessionId);
+  if (pending) {
+    const window = await pending;
+    return timelineSatisfiesRevisionFence(window, options.minimumUpdatedAt) ? window : null;
+  }
+
+  const request = (async () => {
     const query = new URLSearchParams({ limit: String(SESSION_SNAPSHOT_PAGE_SIZE) });
     const response = await fetch(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
@@ -37,12 +65,26 @@ export async function loadLatestSessionTimeline(
     );
     if (!response.ok) return null;
     const window = parseSessionSnapshotWindow(await response.json());
-    return window.snapshot.sessionId === sessionId && window.history.laterMessages === 0
-      ? window
-      : null;
-  } catch {
-    return null;
-  }
+    if (window.snapshot.sessionId !== sessionId || window.history.laterMessages !== 0) return null;
+    writeLatestTimelineCache(sessionId, window);
+    return window;
+  })()
+    .catch(() => null)
+    .finally(() => {
+      latestTimelineRequests.delete(sessionId);
+    });
+  latestTimelineRequests.set(sessionId, request);
+  const window = await request;
+  return timelineSatisfiesRevisionFence(window, options.minimumUpdatedAt) ? window : null;
+}
+
+export function invalidateLatestSessionTimelineCache(sessionId: string): void {
+  latestTimelineCache.delete(sessionId);
+}
+
+export function clearLatestSessionTimelineCache(): void {
+  latestTimelineCache.clear();
+  latestTimelineRequests.clear();
 }
 
 /**
@@ -120,4 +162,42 @@ export async function loadEarlierSessionTimeline(
 
 export function bumpTimelineRenderLimit(current: number): number {
   return current + SESSION_TIMELINE_PAGE_SIZE;
+}
+
+function readLatestTimelineCache(
+  sessionId: string,
+  minimumUpdatedAt: string | null | undefined,
+): SessionSnapshotWindow | null {
+  if (!minimumUpdatedAt) return null;
+  const entry = latestTimelineCache.get(sessionId);
+  if (!entry) return null;
+  if (
+    Date.now() - entry.storedAt > latestTimelineCacheTtlMs ||
+    !timelineSatisfiesRevisionFence(entry.window, minimumUpdatedAt)
+  ) {
+    latestTimelineCache.delete(sessionId);
+    return null;
+  }
+  latestTimelineCache.delete(sessionId);
+  latestTimelineCache.set(sessionId, entry);
+  return entry.window;
+}
+
+function timelineSatisfiesRevisionFence(
+  window: SessionSnapshotWindow | null,
+  minimumUpdatedAt: string | null | undefined,
+): window is SessionSnapshotWindow {
+  if (!window) return false;
+  if (!minimumUpdatedAt) return true;
+  return Boolean(window.snapshot.updatedAt && window.snapshot.updatedAt >= minimumUpdatedAt);
+}
+
+function writeLatestTimelineCache(sessionId: string, window: SessionSnapshotWindow): void {
+  latestTimelineCache.delete(sessionId);
+  latestTimelineCache.set(sessionId, { storedAt: Date.now(), window });
+  while (latestTimelineCache.size > latestTimelineCacheCapacity) {
+    const oldestKey = latestTimelineCache.keys().next().value;
+    if (typeof oldestKey !== "string") break;
+    latestTimelineCache.delete(oldestKey);
+  }
 }

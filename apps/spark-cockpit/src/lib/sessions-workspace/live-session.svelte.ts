@@ -19,7 +19,7 @@ import type { SessionSnapshotHistory } from "$lib/session-snapshot-window";
 import type { SparkSessionView } from "@zendev-lab/spark-protocol";
 import { attachSessionLiveEventSource, attachSessionStatusProbe } from "./live-connection";
 import { resetDequeueUiOnSessionChange, type DequeueTurnUiState } from "./cancel-dequeue";
-import { loadLatestSessionTimeline } from "./timeline-window";
+import { invalidateLatestSessionTimelineCache, loadLatestSessionTimeline } from "./timeline-window";
 
 export type LiveSessionSources = {
   getSelectedSessionId: () => string | null | undefined;
@@ -120,7 +120,9 @@ export function createLiveSessionController(sources: LiveSessionSources) {
   });
 
   async function refreshLatestWindow(sessionId: string): Promise<void> {
-    const window = await loadLatestSessionTimeline(sessionId);
+    const window = await loadLatestSessionTimeline(sessionId, {
+      minimumUpdatedAt: untrack(() => liveSessionView?.updatedAt),
+    });
     if (!window || untrack(() => liveSessionId) !== sessionId) return;
     const state = untrack(() => liveEventState);
     if (!state || state.sessionId !== sessionId) return;
@@ -154,6 +156,7 @@ export function createLiveSessionController(sources: LiveSessionSources) {
       },
       getLiveConnection: () => untrack(() => liveConnection),
       onViewChanged: (view) => {
+        invalidateLatestSessionTimelineCache(streamSessionId);
         liveSessionView = view;
       },
       onRefreshActivity: () => sources.onRefreshActivity(),

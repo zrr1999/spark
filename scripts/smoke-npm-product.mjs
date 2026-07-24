@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { exerciseSparkDaemonLifecycle } from "../test/support/spark-process-harness.ts";
+
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
 
@@ -68,6 +70,7 @@ async function availablePort() {
 }
 
 async function waitForHealth(url, child, output) {
+  const startedAt = performance.now();
   const deadline = Date.now() + 20_000;
   let lastError;
   while (Date.now() < deadline) {
@@ -79,7 +82,9 @@ async function waitForHealth(url, child, output) {
     try {
       const response = await fetch(url);
       const body = await response.json();
-      if (response.ok && body?.service === "spark-cockpit" && body?.status === "ok") return;
+      if (response.ok && body?.service === "spark-cockpit" && body?.status === "ok") {
+        return performance.now() - startedAt;
+      }
       lastError = new Error(`unexpected cockpit health response ${response.status}`);
     } catch (error) {
       lastError = error;
@@ -87,6 +92,48 @@ async function waitForHealth(url, child, output) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
   throw new Error(`Cockpit did not become healthy: ${String(lastError)}`);
+}
+
+async function probeCockpitRoute(url, child, output) {
+  if (child.exitCode !== null) {
+    throw new Error(
+      `Cockpit exited with ${child.exitCode}${output.stderr ? `\n${output.stderr.trim()}` : ""}`,
+    );
+  }
+  const startedAt = performance.now();
+  const response = await fetch(url, {
+    headers: { accept: "text/html" },
+    redirect: "follow",
+  });
+  const body = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.startsWith("text/html")) {
+    throw new Error(
+      `unexpected Cockpit route response ${response.status} ${contentType || "<missing content-type>"}`,
+    );
+  }
+  if (!/<title>[^<]*Spark[^<]*<\/title>/iu.test(body)) {
+    throw new Error("Cockpit route did not render the Spark document shell");
+  }
+  const clientAssetSources = new Set([
+    ...[...body.matchAll(/<script[^>]+src="([^"]+)"/giu)].map((match) => match[1]),
+    ...[...body.matchAll(/import\(\s*["']([^"']+)["']\s*\)/gu)].map((match) => match[1]),
+  ]);
+  if (clientAssetSources.size === 0) {
+    throw new Error("Cockpit route did not reference a client bundle");
+  }
+  for (const source of clientAssetSources) {
+    const assetUrl = new URL(source, response.url);
+    const asset = await fetch(assetUrl);
+    if (!asset.ok) {
+      throw new Error(`Cockpit client asset ${assetUrl.pathname} returned ${asset.status}`);
+    }
+    await asset.arrayBuffer();
+  }
+  return {
+    routeMs: performance.now() - startedAt,
+    clientAssetCount: clientAssetSources.size,
+  };
 }
 
 function terminateProcessTree(child) {
@@ -150,19 +197,12 @@ try {
   console.log("Probing installed dispatcher, TUI, and daemon...");
   await run(spark, [...sparkArgvPrefix, "--help"], { cwd: installRoot, env: environment });
   await run(spark, [...sparkArgvPrefix, "tui", "--help"], { cwd: installRoot, env: environment });
-  const started = await run(spark, [...sparkArgvPrefix, "daemon", "start", "--json"], {
+  await exerciseSparkDaemonLifecycle({
+    command: spark,
+    argvPrefix: sparkArgvPrefix,
     cwd: installRoot,
     env: environment,
-  });
-  if (JSON.parse(started.stdout).daemon?.running !== true)
-    throw new Error("installed daemon did not start");
-  await run(spark, [...sparkArgvPrefix, "daemon", "status", "--json"], {
-    cwd: installRoot,
-    env: environment,
-  });
-  await run(spark, [...sparkArgvPrefix, "daemon", "stop", "--yes"], {
-    cwd: installRoot,
-    env: environment,
+    timeoutMs: 120_000,
   });
   const port = await availablePort();
   console.log("Starting installed Cockpit health probe...");
@@ -183,7 +223,16 @@ try {
     cockpitOutput.stderr += chunk;
   });
   try {
-    await waitForHealth(`http://127.0.0.1:${port}/api/v1/health`, cockpit, cockpitOutput);
+    const origin = `http://127.0.0.1:${port}`;
+    const healthReadyMs = await waitForHealth(`${origin}/api/v1/health`, cockpit, cockpitOutput);
+    const route = await probeCockpitRoute(origin, cockpit, cockpitOutput);
+    console.log(
+      `SPARK_COCKPIT_SMOKE_METRICS ${JSON.stringify({
+        healthReadyMs: Math.round(healthReadyMs),
+        routeMs: Math.round(route.routeMs),
+        clientAssetCount: route.clientAssetCount,
+      })}`,
+    );
   } finally {
     terminateProcessTree(cockpit);
     await new Promise((resolveExit) => {

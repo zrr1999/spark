@@ -16,46 +16,107 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: verify
+  static:
+    name: static
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:static
 
-      - run: pnpm run check
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:unit
 
-      - name: Npm product smoke
-        run: pnpm run smoke
+  source_process:
+    name: source-process
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:process:source
 
-  cockpit-browser:
+  product_process:
+    name: product-process
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run smoke
+
+  cockpit_browser:
     name: cockpit-browser
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile --ignore-scripts
-
       - name: Install Chromium
         run: pnpm --filter @zendev-lab/spark-cockpit run setup:browser
-
       - run: pnpm run test:browser:cockpit
+
+  verify:
+    name: verify
+    if: ${{ always() }}
+    needs:
+      - static
+      - unit
+      - source_process
+      - product_process
+      - cockpit_browser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every verification lane
+        env:
+          STATIC_RESULT: ${{ needs.static.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          SOURCE_PROCESS_RESULT: ${{ needs.source_process.result }}
+          PRODUCT_PROCESS_RESULT: ${{ needs.product_process.result }}
+          COCKPIT_BROWSER_RESULT: ${{ needs.cockpit_browser.result }}
+        run: |
+          for result in \
+            "$STATIC_RESULT" \
+            "$UNIT_RESULT" \
+            "$SOURCE_PROCESS_RESULT" \
+            "$PRODUCT_PROCESS_RESULT" \
+            "$COCKPIT_BROWSER_RESULT"; do
+            test "$result" = "success"
+          done

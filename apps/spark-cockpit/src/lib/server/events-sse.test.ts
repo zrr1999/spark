@@ -111,4 +111,38 @@ describe("Cockpit event SSE", () => {
     abort.abort();
     await reader.cancel();
   });
+
+  it("backs idle polling off while still delivering newly appended events", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-24T00:00:00.000Z"));
+    const abort = new AbortController();
+    const url = new URL("http://localhost/api/v1/events");
+    const request = new Request(url, { signal: abort.signal });
+    let sweepCount = 0;
+    const response = createCockpitEventStreamResponse({
+      db,
+      request,
+      url,
+      sweepLivenessIfDue: () => {
+        sweepCount += 1;
+      },
+    });
+    const reader = response.body!.getReader();
+    await reader.read(); // ready
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(sweepCount).toBeLessThanOrEqual(5);
+
+    const event = appendEvent(db, {
+      actorKind: "server",
+      kind: "idle-wakeup.event",
+      createdAt: new Date().toISOString(),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const payload = new TextDecoder().decode((await reader.read()).value);
+    expect(payload).toContain(event.id);
+
+    abort.abort();
+    await reader.cancel();
+  });
 });

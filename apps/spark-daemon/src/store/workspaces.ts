@@ -174,11 +174,11 @@ export interface AttachWorkspaceOptions {
 }
 
 export class WorkspacePathConflictError extends Error {
-  constructor(
-    message: string,
-    readonly kind: "same-path" | "same-key" | "nested",
-  ) {
+  readonly kind: "same-path" | "same-key" | "nested";
+
+  constructor(message: string, kind: "same-path" | "same-key" | "nested") {
     super(message);
+    this.kind = kind;
   }
 }
 

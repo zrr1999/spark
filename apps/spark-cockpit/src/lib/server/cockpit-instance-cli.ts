@@ -131,8 +131,11 @@ export interface CockpitInstanceCliFailure {
 }
 
 export class CockpitInstanceCliError extends Error {
-  constructor(readonly failure: CockpitInstanceCliFailure) {
+  readonly failure: CockpitInstanceCliFailure;
+
+  constructor(failure: CockpitInstanceCliFailure) {
     super(failure.message);
+    this.failure = failure;
     this.name = "CockpitInstanceCliError";
   }
 }

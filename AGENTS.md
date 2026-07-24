@@ -23,7 +23,7 @@ Target package topology follows type-first names:
 
 - **pnpm** — `packageManager` is pinned in root `package.json`; workspaces live in `pnpm-workspace.yaml` (catalog + overrides align Vite / Vite+ / Vitest versions with [sixbones.dev](https://github.com/zrr1999/sixbones.dev)).
 - **Vite+** — Root [`vite.config.ts`](./vite.config.ts) drives `vp fmt`, `vp lint`, and `vp check` (format + lint + type-aware checks). Install the `vp` CLI (see [viteplus.dev](https://viteplus.dev)) for local use; CI installs it via [`voidzero-dev/setup-vp`](https://github.com/voidzero-dev/setup-vp).
-- **TypeScript / tests** — `pnpm run check` is the root validation gate: architecture and distribution policy, package boundaries, docs, formatting/lint, repo-wide typecheck, root Vitest (`test/**/*.test.ts` via `vitest.root.config.ts`), package-local checks, Spark Cockpit tests, and Spark daemon tests. Use `pnpm run typecheck` for typecheck-only validation. Use `pnpm test` for the root Vitest suite only; single-file runs use `pnpm test test/name.test.ts` (without a `--` separator, which Vite+ would forward). Package-specific tests use `pnpm --filter <package> run test`; workspace `check` scripts exist only when the package adds tests or another local invariant beyond the root typecheck.
+- **TypeScript / tests** — `pnpm run check` is the root validation gate: static architecture/distribution/package-boundary/docs/format/lint/type checks, unit/integration suites, and the isolated source-process lifecycle. `pnpm run check:static`, `pnpm run test:unit`, and `pnpm run test:process:source` expose those lanes independently for CI. Use `pnpm run typecheck` for typecheck-only validation. Use `pnpm test` for root Vitest tests except `test/process/`; single-file runs use `pnpm test test/name.test.ts` (without a `--` separator, which Vite+ would forward). Package-specific tests use `pnpm --filter <package> run test`; workspace `check` scripts exist only when the package adds tests or another local invariant beyond the root typecheck.
 - **Git hooks** — Managed by [prek](https://github.com/j178/prek) from [`prek.toml`](./prek.toml). After clone, `pnpm install` runs `prepare` → `prek install`; run `prek install-hooks` once if hooks are missing.
 
 ## Useful commands
@@ -35,11 +35,13 @@ Target package topology follows type-first names:
 | `pnpm run fix`                           | Format, lint-fix, and typecheck the complete workspace            |
 | `pnpm run typecheck`                     | Typecheck root TypeScript, Cockpit, and daemon                    |
 | `pnpm run check:test-quality`            | Reject growth or unreviewed drift in source-mirror test debt      |
+| `pnpm run test:unit`                     | Run root, package, Cockpit, and daemon unit/integration suites    |
+| `pnpm run test:process:source`           | Exercise the exact source dispatcher and daemon lifecycle        |
 | `pnpm run test:browser:cockpit`          | Run Cockpit interaction tests in headless Chromium                |
 | `pnpm run smoke`                         | Pack, clean-install, and smoke the complete npm product           |
 | `pnpm run audit`                         | Audit dependencies for high/critical advisories via npm registry |
 | `pnpm run report:hygiene`                | Generate advisory Knip, duplication, and complexity reports       |
-| `pnpm test`                              | Root Vitest suite (`test/**/*.test.ts`)                          |
+| `pnpm test`                              | Root Vitest suite (excluding `test/process/`)                     |
 | `pnpm test <path>`                       | Run one root Vitest file                                         |
 | `pnpm run test:mutation`                 | Leaf-package mutation CE (10 packages: L0 retry/protocol/cockpit-db/system + L1 channels/cockpit-coordination/session/artifacts/repro/i18n) |
 | `node --experimental-strip-types scripts/spark-daemon-readiness.mts` | Emit the Spark daemon readiness audit report |
@@ -53,7 +55,7 @@ Target package topology follows type-first names:
 ## CI
 
 - `.github/workflows/ci-static-checks.yml` — prek + `setup-vp` + prek pass with `vp-check` skipped (avoids duplicating `vp check` already covered by ci-verify).
-- `.github/workflows/ci-verify.yml` — repository verification and npm-product smoke, plus an isolated headless-Chromium Cockpit lane.
+- `.github/workflows/ci-verify.yml` — parallel static, unit/integration, source-process, npm-product-process, and headless-Chromium Cockpit lanes with one aggregate `verify` result.
 - `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.

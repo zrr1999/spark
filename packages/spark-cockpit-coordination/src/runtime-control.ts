@@ -50,11 +50,11 @@ export interface SubmitRuntimeControlCommandInput {
 }
 
 export class RuntimeControlCommandError extends Error {
-  constructor(
-    message: string,
-    readonly reasonCode: string,
-  ) {
+  readonly reasonCode: string;
+
+  constructor(message: string, reasonCode: string) {
     super(message);
+    this.reasonCode = reasonCode;
   }
 }
 

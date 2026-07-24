@@ -21,7 +21,11 @@ export interface SparkFusionExtensionApi {
 }
 
 class ToolCallText implements ToolRenderComponent {
-  constructor(private readonly text: string) {}
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
 
   render(width: number): string[] {
     return [
