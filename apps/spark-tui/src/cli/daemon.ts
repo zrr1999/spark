@@ -2720,31 +2720,45 @@ async function runForeground(command: string, args: string[]): Promise<number> {
   });
 }
 
-function sparkDaemonServiceCliCommand(): { command: string; args: string[] } {
-  const packagedEntrypoint = process.env.SPARK_DAEMON_ENTRYPOINT;
+export interface SparkDaemonServiceCommandOptions {
+  daemonAppDir?: string;
+  env?: NodeJS.ProcessEnv;
+  buildSource?: (daemonAppDir: string, env: NodeJS.ProcessEnv) => number | null;
+}
+
+export function sparkDaemonServiceCliCommand(options: SparkDaemonServiceCommandOptions = {}): {
+  command: string;
+  args: string[];
+} {
+  const env = options.env ?? process.env;
+  const packagedEntrypoint = env.SPARK_DAEMON_ENTRYPOINT;
   if (packagedEntrypoint && existsSync(packagedEntrypoint)) {
     return { command: process.execPath, args: [packagedEntrypoint] };
   }
-  const daemonAppDir = fileURLToPath(new URL("../../../spark-daemon", import.meta.url));
+
+  const daemonAppDir =
+    options.daemonAppDir ?? fileURLToPath(new URL("../../../spark-daemon", import.meta.url));
   const distCli = join(daemonAppDir, "dist", "cli.js");
-  if (existsSync(distCli)) {
+  if (existsSync(join(daemonAppDir, "package.json"))) {
+    const status = (options.buildSource ?? buildSourceDaemonApp)(daemonAppDir, env);
+    if (status !== 0 || !existsSync(distCli)) {
+      throw new Error(STRINGS.buildServiceFailed);
+    }
     return { command: process.execPath, args: [distCli] };
   }
 
-  if (existsSync(join(daemonAppDir, "package.json"))) {
-    const build = spawnSync("pnpm", ["--dir", daemonAppDir, "run", "build"], {
-      env: process.env,
-      stdio: "inherit",
-    });
-    if (build.status !== 0) {
-      throw new Error(STRINGS.buildServiceFailed);
-    }
-    if (existsSync(distCli)) {
-      return { command: process.execPath, args: [distCli] };
-    }
+  if (existsSync(distCli)) {
+    return { command: process.execPath, args: [distCli] };
   }
-
   return { command: "spark", args: ["daemon"] };
+}
+
+function buildSourceDaemonApp(daemonAppDir: string, env: NodeJS.ProcessEnv): number | null {
+  return spawnSync(process.execPath, [join(daemonAppDir, "scripts", "build-cli.mjs")], {
+    cwd: daemonAppDir,
+    env,
+    stdio: "inherit",
+  }).status;
 }
 
 async function waitForDaemonRpc(

@@ -30,6 +30,7 @@ import {
   handleSparkDaemonCliCommand,
   parseSparkDaemonCliArgs,
   runSparkDaemonCliCommand,
+  sparkDaemonServiceCliCommand,
   type ManagedSessionRegistryResult,
   type SparkDaemonClientOptions,
 } from "../apps/spark-tui/src/cli/daemon.ts";
@@ -39,6 +40,56 @@ import { CREATE_SPARK_SESSION_SELECTION } from "../apps/spark-tui/src/tui/sessio
 test("Spark daemon loads headless session executor from workspace package source", async () => {
   const module = await loadSparkHeadlessSessionModule();
   assert.equal(typeof module.createSparkHeadlessSessionExecutor, "function");
+});
+
+test("source daemon service artifacts are rebuilt before execution", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spark-daemon-source-artifact-"));
+  const daemonAppDir = join(root, "spark-daemon");
+  const distCli = join(daemonAppDir, "dist", "cli.js");
+  await mkdir(join(daemonAppDir, "dist"), { recursive: true });
+  await writeFile(join(daemonAppDir, "package.json"), "{}\n");
+  await writeFile(distCli, "stale\n");
+  let builds = 0;
+  try {
+    const command = sparkDaemonServiceCliCommand({
+      daemonAppDir,
+      env: {},
+      buildSource: () => {
+        builds += 1;
+        return 0;
+      },
+    });
+
+    assert.equal(builds, 1);
+    assert.deepEqual(command, { command: process.execPath, args: [distCli] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("packaged daemon entrypoints bypass source artifact builds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "spark-daemon-packaged-artifact-"));
+  const daemonAppDir = join(root, "spark-daemon");
+  const packagedEntrypoint = join(root, "spark-daemon.js");
+  await mkdir(daemonAppDir, { recursive: true });
+  await writeFile(join(daemonAppDir, "package.json"), "{}\n");
+  await writeFile(packagedEntrypoint, "packaged\n");
+  let builds = 0;
+  try {
+    const command = sparkDaemonServiceCliCommand({
+      daemonAppDir,
+      env: { SPARK_DAEMON_ENTRYPOINT: packagedEntrypoint },
+      buildSource: () => {
+        builds += 1;
+        return 0;
+      },
+    });
+
+    assert.equal(builds, 0);
+    assert.deepEqual(command, { command: process.execPath, args: [packagedEntrypoint] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("native TUI client delivers daemon-owned human interaction responses", async () => {
