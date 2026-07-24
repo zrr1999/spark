@@ -1,8 +1,7 @@
 name: "CI - Static Checks"
 
-# PR static lane: prek hooks except spark-check-fix. The full fix/check surface runs
-# inside `pnpm run check` on ci-verify.yml; skipping here avoids duplicate
-# typecheck/format work on every PR while keeping the local pre-commit hook intact.
+# PR hook lane: prek hooks except spark-check-fix. The explicit static verification
+# runs in parallel with unit/process/browser lanes in ci-verify.yml.
 on:
   pull_request:
     branches:
@@ -33,15 +32,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: j178/prek-action@v2
-        with:
-          install-only: true
-
-      - uses: voidzero-dev/setup-vp@v1
-        with:
-          cache: true
-
-      - uses: j178/prek-action@v2
-        with:
-          # Keep --all-files (action default) but skip spark-check-fix; see workflow header.
-          extra-args: "--all-files --skip spark-check-fix"
+      # Use the repo-pinned prek binary. The action cache is PR-ref scoped and
+      # restoring it twice cost substantially more than the hooks themselves.
+      - run: pnpm exec prek run --all-files --skip spark-check-fix

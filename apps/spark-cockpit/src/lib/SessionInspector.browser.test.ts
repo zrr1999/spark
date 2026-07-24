@@ -17,7 +17,7 @@ test("switches inspector tabs by click and roving keyboard focus", async () => {
   const summary = screen.getByRole("tab", { name: labels.tabs.summary });
   const artifacts = screen.getByRole("tab", { name: labels.tabs.artifacts });
   const changes = screen.getByRole("tab", { name: labels.tabs.changes });
-  const messages = screen.getByRole("tab", { name: labels.tabs.messages });
+  const tasks = screen.getByRole("tab", { name: labels.tabs.tasks });
 
   await expect.element(summary).toHaveAttribute("aria-selected", "true");
   await expect.element(screen.getByRole("heading", { name: labels.summaryHeading })).toBeVisible();
@@ -36,10 +36,10 @@ test("switches inspector tabs by click and roving keyboard focus", async () => {
     .toBeVisible();
 
   await userEvent.keyboard("{End}");
-  await expect.element(messages).toHaveAttribute("aria-selected", "true");
-  await expect.element(messages).toHaveFocus();
+  await expect.element(tasks).toHaveAttribute("aria-selected", "true");
+  await expect.element(tasks).toHaveFocus();
   await expect
-    .element(screen.getByRole("heading", { name: labels.noMessagesTitle, exact: true }))
+    .element(screen.getByRole("heading", { name: labels.noTasksTitle, exact: true }))
     .toBeVisible();
 
   await userEvent.keyboard("{Home}");

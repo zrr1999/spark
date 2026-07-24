@@ -63,22 +63,19 @@ import {
   runSparkResourceCommand,
   type SparkResourceKind,
 } from "./cli/resource-manager.ts";
+import type { SparkCliHostServices, SparkCliHostServicesOptions } from "./host/bootstrap.ts";
 import {
-  createSparkCliHostServices,
-  formatSparkModelSelection,
-  loadSparkConfig,
-  registerSparkSessionsCommand,
+  formatSelection as formatSparkModelSelection,
   resolveSparkModelSelectionById,
   SPARK_MODEL_CYCLE_NEXT_BINDING_ID,
   SPARK_MODEL_CYCLE_PREV_BINDING_ID,
   SPARK_MODEL_PICKER_BINDING_ID,
-  workspaceSessionHash,
-  type SparkActiveSelection,
-  type SparkCliHostServices,
-  type SparkCliHostServicesOptions,
-  type SparkConfig,
   type SparkModelPickerState,
-} from "./host/index.ts";
+} from "./host/model-selector.ts";
+import { loadSparkConfig, type SparkConfig } from "./host/config.ts";
+import type { SparkActiveSelection } from "./host/provider-registry.ts";
+import { registerSparkSessionsCommand } from "./host/session-navigation.ts";
+import { workspaceSessionHash } from "./host/session-store.ts";
 import {
   createSparkModelPickerFromCustomUi,
   type SparkModelSelectorCustomUi,
@@ -154,9 +151,13 @@ export interface RunSparkCliOptions {
   daemonClient?: SparkDaemonClientOptions;
   runTui?: typeof runNativeSparkTui;
   selectSession?: (options: SparkSessionSelectorOptions) => Promise<string | null>;
-  createHostServices?: (options?: SparkCliHostServicesOptions) => Promise<SparkCliHostServices>;
+  createHostServices?: SparkCliHostServicesFactory;
   terminal?: SparkCliTerminalState;
 }
+
+type SparkCliHostServicesFactory = (
+  options?: SparkCliHostServicesOptions,
+) => Promise<SparkCliHostServices>;
 
 export function parseSparkCliArgs(argv: string[]): SparkCliArgs {
   if (argv.some((arg) => arg === "-h" || arg === "--help")) return { help: true };
@@ -943,7 +944,7 @@ export async function runSparkCli(
       return 0;
     }
     case "list-models": {
-      const createHostServices = options.createHostServices ?? createSparkCliHostServices;
+      const createHostServices = options.createHostServices ?? createDefaultSparkCliHostServices;
       const services = await createHostServices(
         await hostServiceOptionsFromRuntime(command.options),
       );
@@ -1043,7 +1044,7 @@ export async function runSparkCli(
         },
       });
       try {
-        const createHostServices = options.createHostServices ?? createSparkCliHostServices;
+        const createHostServices = options.createHostServices ?? createDefaultSparkCliHostServices;
         let pendingNativeUiTransport: ReturnType<typeof createSparkNativeUiTransport> | undefined;
         const services = await createHostServices({
           ...(await hostServiceOptionsFromRuntime(command.options)),
@@ -1954,6 +1955,13 @@ async function readLeaseTransferAnswer(): Promise<"accept" | "reject" | void> {
 
 function printHelp(): void {
   console.log(tuiCliStrings.helpText);
+}
+
+async function createDefaultSparkCliHostServices(
+  options?: SparkCliHostServicesOptions,
+): Promise<SparkCliHostServices> {
+  const { createSparkCliHostServices } = await import("./host/bootstrap.ts");
+  return await createSparkCliHostServices(options);
 }
 
 function isDirectRun(moduleUrl: string, argvEntry: string | undefined): boolean {

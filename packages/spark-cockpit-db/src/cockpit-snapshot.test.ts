@@ -79,6 +79,7 @@ describe("Cockpit instance snapshots", () => {
       "0017",
       "0018",
       "0019",
+      "0020",
     ]);
     expect(manifest.tableCounts).toMatchObject({
       workspaces: 1,

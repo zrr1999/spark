@@ -87,6 +87,10 @@ describe("migrations", () => {
       "runtime_ephemeral_secret_audit_runtime_created_idx",
       "events_ingest_sequence_unique",
       "events_workspace_session_created_idx",
+      "events_workspace_ingest_sequence_idx",
+      "command_deliveries_command_updated_idx",
+      "mirrored_invocations_command_updated_idx",
+      "commands_assignment_session_updated_idx",
       "sessions_refresh_token_unique",
       "workspace_access_tokens_workspace_state_idx",
       "cockpit_access_tokens_state_idx",
@@ -118,6 +122,7 @@ describe("migrations", () => {
       "0017",
       "0018",
       "0019",
+      "0020",
     ]);
 
     const bindingColumns = db
@@ -139,7 +144,7 @@ describe("migrations", () => {
       count: number;
     };
 
-    expect(migrationCount.count).toBe(19);
+    expect(migrationCount.count).toBe(20);
     db.close();
   });
 

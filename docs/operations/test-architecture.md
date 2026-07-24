@@ -10,9 +10,10 @@ its normal check and mutation evaluation can exercise it.
 | --- | --- | --- |
 | Package unit / contract | `packages/*/src/**/*.test.ts` | Pure behavior, schemas, state transitions, adapter contracts |
 | App unit / integration | `apps/*/src/**/*.test.ts` | App-owned composition, persistence, process, route, and rendering behavior |
-| Root integration | `test/**/*.test.ts` | Behavior that genuinely crosses package or app ownership boundaries |
+| Root integration | `pnpm test` (`test/**/*.test.ts`, excluding `test/process/`) | Behavior that genuinely crosses package or app ownership boundaries |
+| Source process | `pnpm run test:process:source` (`test/process/**/*.test.ts`) | Exact source-distributed executable lifecycle under isolated local state |
 | Browser component | `pnpm run test:browser:cockpit` | Browser-only interaction and DOM behavior |
-| Product smoke | `pnpm run smoke` | Packed, clean-installed public product behavior |
+| Product process | `pnpm run smoke` | Packed, clean-installed public product lifecycle and Cockpit HTTP/client-asset smoke |
 | Mutation CE | `pnpm run test:mutation` | Whether focused package tests detect plausible implementation faults |
 
 Do not move package unit tests into `test/` merely to share setup. Put reusable fixtures or a
@@ -22,6 +23,13 @@ implementation.
 Keep Node SSR tests for deterministic rendered states and browser tests for behavior that requires
 focus, events, layout, or browser APIs. Browser tests run in their own CI job so Chromium setup does
 not slow down package unit tests or hide browser-specific failures inside the default suite.
+
+Real process tests stay out of the root Vitest suite. Source and packed-product lanes share the same
+daemon lifecycle harness, but invoke different executable targets. This prevents the source launcher
+and generated npm product from drifting while keeping their failures independently attributable.
+`pnpm run check` remains the serial local gate; CI runs static, unit/integration, source-process,
+product-process, and Cockpit-browser lanes in parallel, then requires a single aggregate `verify`
+job.
 
 ## Assertion hierarchy
 

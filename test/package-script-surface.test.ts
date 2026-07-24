@@ -7,6 +7,7 @@ const canonicalRootScripts = [
   "audit",
   "build",
   "check",
+  "check:static",
   "check:test-quality",
   "check:test-quality:update",
   "fix",
@@ -18,6 +19,8 @@ const canonicalRootScripts = [
   "test",
   "test:browser:cockpit",
   "test:mutation",
+  "test:process:source",
+  "test:unit",
   "typecheck",
 ];
 const ignoredTestSearchDirectories = new Set([
@@ -48,10 +51,11 @@ test("root package exposes one compact validation and release surface", async ()
     scripts["test:browser:cockpit"],
     "pnpm --filter @zendev-lab/spark-cockpit run test:browser",
   );
-  assert.match(
-    scripts.check ?? "",
-    /^pnpm --filter @zendev-lab\/spark-cockpit exec svelte-kit sync/u,
+  assert.equal(
+    scripts.check,
+    "pnpm run check:static && pnpm run test:unit && pnpm run test:process:source",
   );
+  assert.equal(scripts["test:process:source"], "vp test run --config vitest.process.config.ts");
   assert.match(
     scripts.fix ?? "",
     /^pnpm --filter @zendev-lab\/spark-cockpit exec svelte-kit sync/u,
@@ -65,12 +69,22 @@ test("root package exposes one compact validation and release surface", async ()
     "vp fmt . --check",
     "vp lint --quiet",
     "pnpm run typecheck",
+  ]) {
+    assert.ok(
+      scripts["check:static"]?.includes(requiredCheckPhase),
+      `check:static must run ${requiredCheckPhase}`,
+    );
+  }
+  for (const requiredUnitPhase of [
     "vp test run --config vitest.root.config.ts",
     "pnpm -r --filter './packages/*' --if-present run check",
     "pnpm --filter @zendev-lab/spark-cockpit run test",
     "pnpm --filter @zendev-lab/spark-daemon run test",
   ]) {
-    assert.ok(scripts.check?.includes(requiredCheckPhase), `check must run ${requiredCheckPhase}`);
+    assert.ok(
+      scripts["test:unit"]?.includes(requiredUnitPhase),
+      `test:unit must run ${requiredUnitPhase}`,
+    );
   }
   for (const requiredFixPhase of [
     "vp fmt . --write",
@@ -84,7 +98,7 @@ test("root package exposes one compact validation and release surface", async ()
   assert.match(scripts.typecheck ?? "", /@zendev-lab\/spark-daemon run check$/u);
   assert.doesNotMatch(
     Object.keys(scripts).join("\n"),
-    /(?:test:file|(?:build|check|test|publish):npm-product|check:(?:architecture|boundaries|distribution|static))/u,
+    /(?:test:file|(?:build|check|test|publish):npm-product|check:(?:architecture|boundaries|distribution))/u,
   );
 });
 
@@ -141,9 +155,12 @@ test("CI and prek consume the canonical package scripts", async () => {
     readFile(resolve("prek.toml"), "utf8"),
   ]);
 
-  assert.match(verifyWorkflow, /pnpm run check/u);
+  assert.match(verifyWorkflow, /pnpm run check:static/u);
+  assert.match(verifyWorkflow, /pnpm run test:unit/u);
+  assert.match(verifyWorkflow, /pnpm run test:process:source/u);
   assert.match(verifyWorkflow, /pnpm run smoke/u);
   assert.match(verifyWorkflow, /pnpm run test:browser:cockpit/u);
+  assert.match(verifyWorkflow, /name: verify/u);
   assert.doesNotMatch(verifyWorkflow, /test:npm-product/u);
   assert.match(hygieneWorkflow, /pnpm run report:hygiene/u);
   assert.doesNotMatch(hygieneWorkflow, /pnpm exec (?:knip|jscpd)/u);

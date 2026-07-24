@@ -1,10 +1,8 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
-  import {
-    Composer,
-    SlashActionBar,
-    SlashCommandMenu,
-  } from "$lib/components/conversation";
+  import Composer from "$lib/components/conversation/Composer.svelte";
+  import SlashActionBar from "$lib/components/conversation/SlashActionBar.svelte";
+  import SlashCommandMenu from "$lib/components/conversation/SlashCommandMenu.svelte";
   import type { SlashActionAvailability } from "$lib/components/conversation";
   import {
     ModelRuntimeControl,

@@ -24,11 +24,11 @@ import { refreshSparkDaemonCredentials, shouldRefreshSparkDaemonToken } from "./
 export class RegistrationGrantRefusedError extends Error {}
 
 export class DeviceAuthorizationError extends Error {
-  constructor(
-    message: string,
-    readonly reasonCode: string,
-  ) {
+  readonly reasonCode: string;
+
+  constructor(message: string, reasonCode: string) {
     super(message);
+    this.reasonCode = reasonCode;
   }
 }
 

@@ -43,7 +43,7 @@ export function loadConversationSummaries(
            FROM json_each(?)
        ),
        candidate_commands AS (
-         SELECT visible_sessions.sessionId,
+         SELECT CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT) AS sessionId,
                 c.id AS commandId,
                 c.created_at AS commandCreatedAt,
                 c.status AS commandStatus,
@@ -55,12 +55,6 @@ export function loadConversationSummaries(
                 cd.status AS deliveryStatus,
                 mi.status AS invocationStatus
            FROM commands c
-           JOIN visible_sessions
-             ON visible_sessions.sessionId = CASE
-               WHEN json_valid(c.payload_json)
-               THEN CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT)
-               ELSE NULL
-             END
            LEFT JOIN command_deliveries cd
              ON cd.id = (
                SELECT cd2.id
@@ -78,6 +72,10 @@ export function loadConversationSummaries(
                 LIMIT 1
              )
           WHERE c.kind = 'assignment.create.request'
+            AND json_valid(c.payload_json)
+            AND CAST(json_extract(c.payload_json, '$.payload.target.sessionId') AS TEXT) IN (
+              SELECT sessionId FROM visible_sessions
+            )
        ),
        ranked_commands AS (
          SELECT sessionId,

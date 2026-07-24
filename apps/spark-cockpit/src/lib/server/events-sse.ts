@@ -10,7 +10,8 @@ import {
 import { getDatabase, pinDatabase, unpinDatabase } from "./db";
 
 const encoder = new TextEncoder();
-const pollIntervalMs = 200;
+const activePollIntervalMs = 200;
+const maximumIdlePollIntervalMs = 1_000;
 const heartbeatIntervalMs = 15_000;
 const eventBatchSize = 100;
 const maxBatchesPerFlush = 8;
@@ -35,7 +36,7 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
   const db = options.db ?? getDatabase();
   let cursor = parseCursor(options.url.searchParams.get("cursor"));
   let closed = false;
-  let interval: ReturnType<typeof setInterval> | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let released = false;
   const releasePin = () => {
     if (released) return;
@@ -48,6 +49,7 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
   const stream = new ReadableStream({
     start(controller) {
       let lastWriteAt = Date.now();
+      let nextPollIntervalMs = activePollIntervalMs;
       const enqueue = (value: string) => {
         controller.enqueue(encoder.encode(value));
         lastWriteAt = Date.now();
@@ -70,11 +72,28 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
         if (Date.now() - lastWriteAt >= heartbeatIntervalMs) {
           enqueue(`: heartbeat ${new Date().toISOString()}\n\n`);
         }
+        return drained;
+      };
+      const schedulePoll = (delay: number) => {
+        if (closed) return;
+        pollTimer = setTimeout(() => {
+          pollTimer = undefined;
+          if (closed) return;
+          const drained = flushEvents();
+          if (drained.rows.length > 0 || drained.mayHaveMore) {
+            nextPollIntervalMs = activePollIntervalMs;
+          } else {
+            nextPollIntervalMs = Math.min(nextPollIntervalMs * 2, maximumIdlePollIntervalMs);
+          }
+          const preferredDelay = drained.mayHaveMore ? 0 : nextPollIntervalMs;
+          const heartbeatDelay = Math.max(0, heartbeatIntervalMs - (Date.now() - lastWriteAt));
+          schedulePoll(Math.min(preferredDelay, heartbeatDelay));
+        }, delay);
       };
       const closeStream = () => {
         if (closed) return;
         closed = true;
-        if (interval) clearInterval(interval);
+        if (pollTimer) clearTimeout(pollTimer);
         releasePin();
         try {
           controller.close();
@@ -84,16 +103,14 @@ export function createCockpitEventStreamResponse(options: CockpitEventStreamOpti
       };
 
       send("ready", { status: "ok" });
-      flushEvents();
-      interval = setInterval(() => {
-        if (!closed) flushEvents();
-      }, pollIntervalMs);
+      const initialDrain = flushEvents();
+      schedulePoll(initialDrain.mayHaveMore ? 0 : activePollIntervalMs);
 
       options.request.signal.addEventListener("abort", closeStream);
     },
     cancel() {
       closed = true;
-      if (interval) clearInterval(interval);
+      if (pollTimer) clearTimeout(pollTimer);
       releasePin();
     },
   });

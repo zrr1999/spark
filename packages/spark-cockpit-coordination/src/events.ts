@@ -36,9 +36,12 @@ export function loadEventBatch(
   limit = 50,
   workspaceId?: string | null,
 ): EventRow[] {
+  const scopedToWorkspace = workspaceId !== undefined && workspaceId !== null;
   if (cursor) {
     const sequence = cursor.sequence ?? eventSequenceForLegacyCursor(db, cursor);
     if (sequence !== null) {
+      const scopePredicate = scopedToWorkspace ? "workspace_id = ? AND " : "";
+      const parameters = scopedToWorkspace ? [workspaceId, sequence, limit] : [sequence, limit];
       return db
         .prepare(
           `SELECT id,
@@ -53,16 +56,19 @@ export function loadEventBatch(
                   payload_json AS payloadJson,
                   created_at AS createdAt
            FROM events
-           WHERE ingest_sequence > ?
-             AND (? IS NULL OR workspace_id = ?)
+           WHERE ${scopePredicate}ingest_sequence > ?
            ORDER BY ingest_sequence ASC
            LIMIT ?`,
         )
-        .all(sequence, workspaceId ?? null, workspaceId ?? null, limit) as unknown as EventRow[];
+        .all(...parameters) as unknown as EventRow[];
     }
 
     // Compatibility for a stale cursor whose event has since been removed.
     // New cursors always resolve to ingest_sequence above.
+    const scopePredicate = scopedToWorkspace ? "workspace_id = ? AND " : "";
+    const parameters = scopedToWorkspace
+      ? [workspaceId, cursor.createdAt, cursor.createdAt, cursor.id, limit]
+      : [cursor.createdAt, cursor.createdAt, cursor.id, limit];
     return db
       .prepare(
         `SELECT id,
@@ -77,21 +83,15 @@ export function loadEventBatch(
                 payload_json AS payloadJson,
                 created_at AS createdAt
          FROM events
-         WHERE (created_at > ? OR (created_at = ? AND id > ?))
-           AND (? IS NULL OR workspace_id = ?)
+         WHERE ${scopePredicate}(created_at > ? OR (created_at = ? AND id > ?))
          ORDER BY ingest_sequence ASC
          LIMIT ?`,
       )
-      .all(
-        cursor.createdAt,
-        cursor.createdAt,
-        cursor.id,
-        workspaceId ?? null,
-        workspaceId ?? null,
-        limit,
-      ) as unknown as EventRow[];
+      .all(...parameters) as unknown as EventRow[];
   }
 
+  const scopePredicate = scopedToWorkspace ? "WHERE workspace_id = ?" : "";
+  const parameters = scopedToWorkspace ? [workspaceId, limit] : [limit];
   return db
     .prepare(
       `SELECT * FROM (
@@ -107,13 +107,13 @@ export function loadEventBatch(
                 payload_json AS payloadJson,
                 created_at AS createdAt
          FROM events
-         WHERE (? IS NULL OR workspace_id = ?)
+         ${scopePredicate}
          ORDER BY ingest_sequence DESC
          LIMIT ?
        )
        ORDER BY sequence ASC`,
     )
-    .all(workspaceId ?? null, workspaceId ?? null, limit) as unknown as EventRow[];
+    .all(...parameters) as unknown as EventRow[];
 }
 
 export function latestEventCursor(db: DatabaseSync): EventCursor | null {
