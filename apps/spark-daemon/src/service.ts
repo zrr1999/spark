@@ -9,6 +9,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -23,7 +24,6 @@ import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-daemon-client/local-rpc";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
-import { sparkDaemonEntrypointPath } from "./build-reload.ts";
 
 const launchdLabel = "dev.spark.daemon";
 const restartIntentFileName = "restart.intent.json";
@@ -47,6 +47,8 @@ export interface SparkDaemonRestartIntent {
   previousProcessStartToken: string;
   targetInstanceId: string;
   targetGeneration: string;
+  targetVersion?: string;
+  targetBuildFingerprint?: string;
   protocolVersion: typeof SPARK_PROTOCOL_VERSION;
   requestedAt: string;
   /** Whether the predecessor is owned by a supervisor that may replace it on exit. */
@@ -76,6 +78,8 @@ export interface SparkDaemonRestartSuccessorContext {
   generation: string;
   predecessorInstanceId: string;
   predecessorGeneration: string;
+  targetVersion?: string;
+  targetBuildFingerprint?: string;
 }
 
 export interface SparkDaemonRestartTerminal {
@@ -84,6 +88,8 @@ export interface SparkDaemonRestartTerminal {
   previousPid: number;
   targetInstanceId: string;
   targetGeneration: string;
+  targetVersion?: string;
+  targetBuildFingerprint?: string;
 }
 
 export interface SparkDaemonRestartRetryFailure {
@@ -198,6 +204,8 @@ export async function scheduleSparkDaemonRestartSuccessor(
     helperCommand?: string[];
     helperEnv?: NodeJS.ProcessEnv;
     supervisorManaged?: boolean;
+    targetVersion?: string;
+    targetBuildFingerprint?: string;
   } = {},
 ): Promise<SparkDaemonRestartSchedule> {
   // launchd normally wins on macOS; the helper remains as a fenced watchdog
@@ -216,6 +224,13 @@ export async function scheduleSparkDaemonRestartSuccessor(
   ) {
     throw new Error(`Spark daemon restart fence generation mismatch for process ${previousPid}.`);
   }
+  if (
+    existing &&
+    (existing.targetVersion !== options.targetVersion ||
+      existing.targetBuildFingerprint !== options.targetBuildFingerprint)
+  ) {
+    throw new Error(`Spark daemon restart ${existing.restartId} targets a different build.`);
+  }
   const intent: SparkDaemonRestartIntent = existing ?? {
     restartId: randomUUID(),
     previousPid,
@@ -232,6 +247,10 @@ export async function scheduleSparkDaemonRestartSuccessor(
     protocolVersion: SPARK_PROTOCOL_VERSION,
     requestedAt,
     supervisorManaged: options.supervisorManaged === true,
+    ...(options.targetVersion ? { targetVersion: options.targetVersion } : {}),
+    ...(options.targetBuildFingerprint
+      ? { targetBuildFingerprint: options.targetBuildFingerprint }
+      : {}),
   };
   if (!existing) {
     // A running daemon owns the process lock while arming a new restart, so it
@@ -417,6 +436,10 @@ export function readSparkDaemonRestartTerminal(
     previousPid: terminal.previousPid,
     targetInstanceId: terminal.targetInstanceId,
     targetGeneration: terminal.targetGeneration,
+    ...(terminal.targetVersion ? { targetVersion: terminal.targetVersion } : {}),
+    ...(terminal.targetBuildFingerprint
+      ? { targetBuildFingerprint: terminal.targetBuildFingerprint }
+      : {}),
   };
 }
 
@@ -1015,6 +1038,10 @@ function readRestartIntentFile(
       protocolVersion: SPARK_PROTOCOL_VERSION,
       requestedAt: value.requestedAt,
       supervisorManaged: value.supervisorManaged === true,
+      ...(typeof value.targetVersion === "string" ? { targetVersion: value.targetVersion } : {}),
+      ...(typeof value.targetBuildFingerprint === "string"
+        ? { targetBuildFingerprint: value.targetBuildFingerprint }
+        : {}),
     };
   } catch {
     return null;
@@ -1041,6 +1068,10 @@ function restartSuccessorContext(
     generation: intent.targetGeneration,
     predecessorInstanceId: intent.previousInstanceId,
     predecessorGeneration: intent.previousGeneration,
+    ...(intent.targetVersion ? { targetVersion: intent.targetVersion } : {}),
+    ...(intent.targetBuildFingerprint
+      ? { targetBuildFingerprint: intent.targetBuildFingerprint }
+      : {}),
   };
 }
 
@@ -1627,7 +1658,9 @@ function sparkDaemonStartCommand(): string[] {
 }
 
 function sparkDaemonCliCommand(): string[] {
-  return [process.execPath, sparkDaemonEntrypointPath()];
+  const stableLauncher = process.env.SPARK_STABLE_LAUNCHER?.trim();
+  if (stableLauncher) return [stableLauncher, "daemon"];
+  return [process.execPath, realpathSync(process.argv[1]!)];
 }
 
 export function rotateSparkDaemonServiceLogs(
@@ -1667,6 +1700,9 @@ function serviceEnvironment(): Record<string, string> {
     "HOME",
     "PATH",
     "SPARK_HOME",
+    "SPARK_BUILD_INFO_PATH",
+    "SPARK_DEPLOYMENT_WATCH_PATH",
+    "SPARK_STABLE_LAUNCHER",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_CACHE_HOME",

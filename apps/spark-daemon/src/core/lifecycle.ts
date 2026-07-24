@@ -46,6 +46,8 @@ export interface SparkDaemonLifecycleSnapshot {
   restartId?: string;
   targetInstanceId?: string;
   targetGeneration?: string;
+  targetVersion?: string;
+  targetBuildFingerprint?: string;
   restartRequestedAt?: string;
   drain?: SparkDaemonDrainProgress;
   stopRequestedAt?: string;
@@ -60,6 +62,8 @@ export interface SparkDaemonRestartRequestResult {
   processGeneration: string;
   targetInstanceId: string;
   targetGeneration: string;
+  targetVersion?: string;
+  targetBuildFingerprint?: string;
   requestedAt: string;
 }
 
@@ -82,6 +86,8 @@ export class SparkDaemonLifecycle {
   private restartId: string | undefined;
   private targetInstanceId: string | undefined;
   private targetGeneration: string | undefined;
+  private targetVersion: string | undefined;
+  private targetBuildFingerprint: string | undefined;
   private restartRequestedAt: string | undefined;
   private stopRequestedAt: string | undefined;
   private stopReason: string | undefined;
@@ -168,6 +174,10 @@ export class SparkDaemonLifecycle {
         restartId: this.restartId,
         targetInstanceId: this.targetInstanceId,
         targetGeneration: this.targetGeneration,
+        ...(this.targetVersion ? { targetVersion: this.targetVersion } : {}),
+        ...(this.targetBuildFingerprint
+          ? { targetBuildFingerprint: this.targetBuildFingerprint }
+          : {}),
         restartRequestedAt: this.restartRequestedAt,
       };
     }
@@ -188,7 +198,12 @@ export class SparkDaemonLifecycle {
   requestRestart(
     now = new Date().toISOString(),
     restartId: string = randomUUID(),
-    target: { instanceId: string; generation: string } = {
+    target: {
+      instanceId: string;
+      generation: string;
+      version?: string;
+      buildFingerprint?: string;
+    } = {
       instanceId: randomUUID(),
       generation: randomUUID(),
     },
@@ -201,6 +216,8 @@ export class SparkDaemonLifecycle {
       this.restartId = restartId;
       this.targetInstanceId = target.instanceId;
       this.targetGeneration = target.generation;
+      this.targetVersion = target.version;
+      this.targetBuildFingerprint = target.buildFingerprint;
       const reason = new SparkDaemonRestartRequestedError();
       this.drainController.abort(reason);
       // Let the local-RPC response enter the socket write buffer before the
@@ -217,6 +234,10 @@ export class SparkDaemonLifecycle {
       processGeneration: this.identity.generation,
       targetInstanceId: this.targetInstanceId!,
       targetGeneration: this.targetGeneration!,
+      ...(this.targetVersion ? { targetVersion: this.targetVersion } : {}),
+      ...(this.targetBuildFingerprint
+        ? { targetBuildFingerprint: this.targetBuildFingerprint }
+        : {}),
       requestedAt: this.restartRequestedAt,
     };
   }

@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
@@ -8,6 +8,13 @@ import {
   resolveSparkUserPaths,
   writePrivateFile,
 } from "@zendev-lab/spark-system";
+import {
+  emptySparkUpdateState,
+  isSparkBuildInfo,
+  readSparkBuildInfo,
+  readSparkUpdateState,
+  resolveSparkUpdatePaths,
+} from "@zendev-lab/spark-update";
 import {
   defaultSparkDaemonConfig,
   readSparkDaemonConfig,
@@ -114,10 +121,22 @@ export async function start(
     await lock.release();
     return 0;
   }
+  const successorContext = restartStart.successorContext;
+  const deployedEntrypoint = sparkDaemonDeploymentEntrypointPath();
+  const runningBuildFingerprint = sparkDaemonEntrypointFingerprint(deployedEntrypoint);
+  if (
+    successorContext?.targetBuildFingerprint &&
+    successorContext.targetBuildFingerprint !== runningBuildFingerprint
+  ) {
+    cancelSparkDaemonRestartSuccessor(paths);
+    await lock.release();
+    throw new Error(
+      `Spark daemon successor build ${runningBuildFingerprint} does not match fenced target ${successorContext.targetBuildFingerprint}.`,
+    );
+  }
   const db = openSparkDaemonDatabase(paths);
   const shutdown = new AbortController();
   const stopIntent = new AbortController();
-  const successorContext = restartStart.successorContext;
   const lifecycle = new SparkDaemonLifecycle(successorContext ?? {}, { initiallyServing: false });
   publishSparkDaemonProcessOwnership(paths, lifecycle.processIdentity);
   writePrivateFile(paths.pidFile, `${process.pid}\n`);
@@ -166,8 +185,6 @@ export async function start(
   let flushHumanRequestOutbox: (() => void) | undefined;
   let drainProgress: SparkDaemonDrainProgress | undefined;
   const uplinkControl = createSparkDaemonUplinkControl();
-  const deployedEntrypoint = sparkDaemonDeploymentEntrypointPath();
-  const runningBuildFingerprint = sparkDaemonEntrypointFingerprint(deployedEntrypoint);
   const buildWatchErrors = createRepeatedErrorReporter(
     "[spark-daemon] deployed build watcher failed",
   );
@@ -188,7 +205,7 @@ export async function start(
   };
   const logRotationTimer = setInterval(rotateServiceLogs, 5 * 60_000);
   logRotationTimer.unref();
-  const requestSafeRestart = async () => {
+  const requestSafeRestart = async (targetFingerprint?: string) => {
     if (stopRequested || shutdown.signal.aborted) {
       throw new Error("Spark daemon is already stopping; restart was not armed.");
     }
@@ -200,8 +217,15 @@ export async function start(
       return lifecycle.requestRestart(armedRestart.requestedAt, armedRestart.restartId, {
         instanceId: armedRestart.targetInstanceId,
         generation: armedRestart.targetGeneration,
+        ...(armedRestart.targetVersion ? { version: armedRestart.targetVersion } : {}),
+        ...(armedRestart.targetBuildFingerprint
+          ? { buildFingerprint: armedRestart.targetBuildFingerprint }
+          : {}),
       });
     }
+    const targetBuild = readDeployedSparkBuildInfo(deployedEntrypoint);
+    const fencedFingerprint =
+      targetFingerprint ?? sparkDaemonEntrypointFingerprint(deployedEntrypoint);
     const requestedAt = new Date().toISOString();
     const arming =
       restartArming ??
@@ -210,7 +234,12 @@ export async function start(
         process.pid,
         lifecycle.processIdentity,
         requestedAt,
-        { signal: stopIntent.signal, supervisorManaged: options.managed },
+        {
+          signal: stopIntent.signal,
+          supervisorManaged: options.managed,
+          targetVersion: targetBuild.version,
+          targetBuildFingerprint: fencedFingerprint,
+        },
       );
     restartArming = arming;
     let armed;
@@ -229,6 +258,8 @@ export async function start(
     return lifecycle.requestRestart(armed.requestedAt, armed.restartId, {
       instanceId: armed.targetInstanceId,
       generation: armed.targetGeneration,
+      ...(armed.targetVersion ? { version: armed.targetVersion } : {}),
+      ...(armed.targetBuildFingerprint ? { buildFingerprint: armed.targetBuildFingerprint } : {}),
     });
   };
   const startLocalControl = () =>
@@ -343,7 +374,7 @@ export async function start(
             console.error(
               `[spark-daemon] deployed build changed (${previousFingerprint.slice(0, 15)} -> ${nextFingerprint.slice(0, 15)}); requesting a safe drain restart`,
             );
-            await requestSafeRestart();
+            await requestSafeRestart(nextFingerprint);
           },
           onError: (error) => buildWatchErrors.report(error),
         });
@@ -1193,6 +1224,10 @@ export type DaemonStatus =
       build: {
         runningFingerprint?: string;
         availableFingerprint: string;
+        runningVersion?: string;
+        availableVersion: string;
+        targetVersion?: string;
+        targetFingerprint?: string;
         updateAvailable: boolean;
       };
     };
@@ -1210,7 +1245,16 @@ export async function buildDaemonStatus(
 
   try {
     const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
-    const availableFingerprint = sparkDaemonEntrypointFingerprint();
+    const deployedEntrypoint = sparkDaemonDeploymentEntrypointPath();
+    const availableBuild = readDeployedSparkBuildInfo(deployedEntrypoint);
+    const availableFingerprint = sparkDaemonEntrypointFingerprint(deployedEntrypoint);
+    const updateState = await readUpdaterProjectionForDaemonStatus();
+    const runningVersion =
+      status.buildFingerprint === availableFingerprint
+        ? availableBuild.version
+        : status.buildFingerprint === updateState.lastGoodFingerprint
+          ? updateState.lastGoodVersion
+          : undefined;
     return {
       running: true,
       pid,
@@ -1223,6 +1267,18 @@ export async function buildDaemonStatus(
       build: {
         ...(status.buildFingerprint ? { runningFingerprint: status.buildFingerprint } : {}),
         availableFingerprint,
+        ...(runningVersion ? { runningVersion } : {}),
+        availableVersion: availableBuild.version,
+        ...(status.lifecycle.targetVersion
+          ? { targetVersion: status.lifecycle.targetVersion }
+          : updateState.pendingVersion
+            ? { targetVersion: updateState.pendingVersion }
+            : {}),
+        ...(status.lifecycle.targetBuildFingerprint
+          ? { targetFingerprint: status.lifecycle.targetBuildFingerprint }
+          : updateState.pendingFingerprint
+            ? { targetFingerprint: updateState.pendingFingerprint }
+            : {}),
         updateAvailable:
           status.buildFingerprint === undefined || status.buildFingerprint !== availableFingerprint,
       },
@@ -1238,6 +1294,26 @@ export async function buildDaemonStatus(
       error: errorMessage(error),
       ...(restart ? { restart } : {}),
     };
+  }
+}
+
+function readDeployedSparkBuildInfo(deployedEntrypoint: string) {
+  try {
+    const candidate = JSON.parse(readFileSync(deployedEntrypoint, "utf8")) as unknown;
+    if (isSparkBuildInfo(candidate)) return candidate;
+  } catch {
+    // Source checkouts watch executable bytes instead of build-info.json.
+  }
+  return readSparkBuildInfo();
+}
+
+async function readUpdaterProjectionForDaemonStatus() {
+  try {
+    return await readSparkUpdateState(resolveSparkUpdatePaths());
+  } catch {
+    // Updater projection corruption must not make a healthy daemon appear
+    // unreachable. `spark update status` remains the repair authority.
+    return emptySparkUpdateState();
   }
 }
 

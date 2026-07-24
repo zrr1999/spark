@@ -36,6 +36,7 @@
     registration: consoleMessages.nav.registration,
     modelsProviders: t.nav.models,
     invocationDiagnostics: data.messages.invocationDiagnostics.navLabel,
+    updateStatus: data.messages.updateStatus.navLabel,
   });
   let navGroups = $derived(
     buildConsoleNavGroups({

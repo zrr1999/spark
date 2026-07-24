@@ -6,6 +6,7 @@
  * TypeScript runtime entrypoints or workspace protocol dependencies.
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, writeFile, chmod } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const productDirectory = resolve(root, "dist/npm-package");
 const productDist = resolve(productDirectory, "dist");
+let rootManifest;
 
 const dependencies = {
   "@core-workspace/infoflow-sdk-nodejs": "2026.6.12-beta.1",
@@ -58,7 +60,6 @@ async function bundle(entry, output) {
 }
 
 async function writeProductManifest() {
-  const rootManifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
   const manifest = {
     name: "@zendev-lab/spark",
     version: rootManifest.version,
@@ -85,6 +86,42 @@ async function writeProductManifest() {
   );
 }
 
+async function writeBuildInfo() {
+  const migrationNames = (await readdir(resolve(productDist, "migrations")))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  const migrationHead = migrationNames.at(-1) ?? "none";
+  const gitSha =
+    process.env.SPARK_BUILD_GIT_SHA?.trim() ||
+    (await run("git", ["rev-parse", "HEAD"])).stdout.trim();
+  const protocolSource = await readFile(
+    resolve(root, "packages/spark-protocol/src/version.ts"),
+    "utf8",
+  );
+  const protocolVersion = Number(/SPARK_PROTOCOL_VERSION\s*=\s*(\d+)/u.exec(protocolSource)?.[1]);
+  if (!Number.isSafeInteger(protocolVersion)) {
+    throw new Error("Unable to resolve SPARK_PROTOCOL_VERSION for build-info.json");
+  }
+  const fingerprint = `sha256:${createHash("sha256")
+    .update([rootManifest.version, gitSha, String(protocolVersion), migrationHead].join("\n"))
+    .digest("hex")}`;
+  const buildInfo = {
+    schemaVersion: 1,
+    packageName: "@zendev-lab/spark",
+    version: rootManifest.version,
+    gitSha,
+    protocolVersion,
+    minimumNodeVersion: rootManifest.engines.node,
+    migrationHead,
+    migrationMode: rootManifest.sparkRelease.migrationMode,
+    fingerprint,
+  };
+  await writeFile(
+    resolve(productDist, "build-info.json"),
+    `${JSON.stringify(buildInfo, null, 2)}\n`,
+  );
+}
+
 async function writeLauncher() {
   const launcher = `#!/usr/bin/env node
 import { dirname, resolve } from "node:path";
@@ -93,6 +130,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const productDist = resolve(packageDirectory, "dist");
 process.env.SPARK_PRODUCT_DIST = productDist;
+process.env.SPARK_BUILD_INFO_PATH = resolve(productDist, "build-info.json");
 process.env.SPARK_DAEMON_ENTRYPOINT = resolve(productDist, "spark-daemon.js");
 process.env.SPARK_COCKPIT_SERVER_ENTRYPOINT = resolve(productDist, "spark-cockpit-server.js");
 process.env.SPARK_HEADLESS_EXECUTOR_MODULE = resolve(
@@ -124,6 +162,7 @@ async function removeSourceMaps(directory) {
 
 await rm(productDirectory, { recursive: true, force: true });
 await mkdir(productDist, { recursive: true });
+rootManifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 
 await run("pnpm", ["--filter", "@zendev-lab/spark-daemon", "run", "build"]);
 await run("pnpm", ["--filter", "@zendev-lab/spark-cockpit", "run", "build"]);
@@ -151,6 +190,6 @@ await Promise.all([
   cp(resolve(root, "LICENSE"), resolve(productDirectory, "LICENSE")),
 ]);
 await removeSourceMaps(resolve(productDirectory, "build"));
-await Promise.all([writeProductManifest(), writeLauncher()]);
+await Promise.all([writeProductManifest(), writeBuildInfo(), writeLauncher()]);
 
 console.log(`Built npm product artifact: ${productDirectory}`);

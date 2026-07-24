@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: npm-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+
+      - name: Enable pinned package manager
+        run: corepack enable
+
+      - name: Validate tag and package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p 'require("./package.json").version')"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run repository checks
+        run: pnpm run check
+
+      - name: Run Cockpit browser tests
+        run: pnpm run test:browser:cockpit
+
+      - name: Build the release tarball once
+        env:
+          SPARK_BUILD_GIT_SHA: ${{ github.sha }}
+        run: pnpm run release:pack
+
+      - name: Smoke the exact release tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$(find dist/release -maxdepth 1 -name '*.tgz' -print -quit)"
+          node scripts/smoke-npm-product.mjs --tarball "${tarball}"
+
+      - name: Verify N-1 expand-only migration compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$(find dist/release -maxdepth 1 -name '*.tgz' -print -quit)"
+          node scripts/test-release-migration.mjs --tarball "${tarball}"
+
+      - name: Fail closed if this npm version already has different bytes
+        id: npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_name="$(node -p 'require("./dist/release/release-manifest.json").packageName')"
+          version="$(node -p 'require("./dist/release/release-manifest.json").version')"
+          expected="$(node -p 'require("./dist/release/release-manifest.json").npmIntegrity')"
+          actual="$(npm view "${package_name}@${version}" dist.integrity --json 2>/dev/null | tr -d '"\n' || true)"
+          if test -n "${actual}"; then
+            test "${actual}" = "${expected}" || {
+              echo "Published npm integrity differs from this tag" >&2
+              exit 1
+            }
+            echo "already_published=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "already_published=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create draft GitHub Release
+        id: github_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            is_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft')"
+            if test "${is_draft}" = "false"; then
+              test "${{ steps.npm.outputs.already_published }}" = "true" || {
+                echo "GitHub Release is published but npm does not contain this version" >&2
+                exit 1
+              }
+              asset_name="$(node -p 'require("./dist/release/release-manifest.json").assetName')"
+              expected_sha="$(node -p 'require("./dist/release/release-manifest.json").assetSha256')"
+              mkdir -p dist/existing-release
+              gh release download "${GITHUB_REF_NAME}" --pattern "${asset_name}" \
+                --dir dist/existing-release
+              actual_sha="$(shasum -a 256 "dist/existing-release/${asset_name}" | awk '{print $1}')"
+              test "${actual_sha}" = "${expected_sha}" || {
+                echo "Published GitHub asset differs from this tag" >&2
+                exit 1
+              }
+              echo "already_published=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+          else
+            gh release create "${GITHUB_REF_NAME}" --draft --verify-tag \
+              --title "Spark ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/release/*.tgz dist/release/release-manifest.json dist/release/SHA256SUMS \
+            --clobber
+          echo "already_published=false" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish the exact tarball to npm
+        if: steps.npm.outputs.already_published != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_tag="$(node -p 'require("./dist/release/release-manifest.json").npmTag')"
+          tarball="$(find dist/release -maxdepth 1 -name '*.tgz' -print -quit)"
+          npm publish "${tarball}" --access public --tag "${npm_tag}" --provenance
+
+      - name: Attest release tarball
+        if: steps.github_release.outputs.already_published != 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/release/*.tgz
+
+      - name: Publish GitHub Release after npm succeeds
+        if: steps.github_release.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_tag="$(node -p 'require("./dist/release/release-manifest.json").npmTag')"
+          if test "${npm_tag}" = "next"; then
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease=true
+          else
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease=false --latest
+          fi

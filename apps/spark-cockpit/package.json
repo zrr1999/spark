@@ -35,6 +35,7 @@
     "@zendev-lab/spark-protocol": "workspace:*",
     "@zendev-lab/spark-system": "workspace:*",
     "@zendev-lab/spark-tasks": "workspace:*",
+    "@zendev-lab/spark-update": "workspace:*",
     "bits-ui": "^2.18.1",
     "smol-toml": "^1.6.1",
     "streamdown-svelte": "^3.0.6",

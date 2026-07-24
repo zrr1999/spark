@@ -182,6 +182,22 @@ const messages = {
     eventsTitle: "Recent events",
     noEvents: "No events have been recorded for this invocation.",
   },
+  updateStatus: {
+    navLabel: "Updates",
+    title: "Spark updates",
+    lede: "Read-only status for the managed Spark installation and daemon handoff.",
+    current: "Current",
+    available: "Available",
+    pending: "Pending",
+    policy: "Policy",
+    none: "None",
+    unmanaged: "Not a managed installation",
+    unmanagedBody:
+      "Cockpit never modifies a source checkout or package-manager installation. Run the exact migration command below in a terminal.",
+    quarantined: "Quarantined versions",
+    readOnly:
+      "Cockpit only displays updater state. Installation, rollback, and quarantine are owned by the external spark updater.",
+  },
   errorPage: {
     brandLabel: "Spark Cockpit",
     routeEyebrow: "Service mismatch",

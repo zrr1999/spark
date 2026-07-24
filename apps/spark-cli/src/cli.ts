@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 
 import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
 import { resolveSparkPaths, resolveSparkUserPaths } from "@zendev-lab/spark-system";
-
-export const SPARK_CLI_VERSION = "0.1.0";
+import {
+  runSparkManagedInstallCommand,
+  runSparkUpdateCommand,
+  runSparkVersionCommand,
+} from "@zendev-lab/spark-update/cli";
 
 const dispatcherStrings = sparkCliDispatcherStrings();
 
@@ -20,7 +23,9 @@ export type SparkDispatcherCommand =
       autoSessionPrefix?: string;
     }
   | { kind: "help" }
-  | { kind: "version" }
+  | { kind: "version"; json?: true }
+  | { kind: "managed-install"; argv: string[] }
+  | { kind: "update"; argv: string[] }
   | { kind: "paths"; json: boolean }
   | { kind: "error"; message: string };
 
@@ -41,7 +46,18 @@ export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand
   const [first, ...rest] = argv;
   if (!first) return { kind: "dispatch", target: "tui", argv: [] };
   if (first === "help" || first === "--help" || first === "-h") return { kind: "help" };
-  if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
+  if (first === "version") {
+    if (rest.length === 0) return { kind: "version" };
+    if (rest.length === 1 && rest[0] === "--json") return { kind: "version", json: true };
+    return errorCommand('spark version accepts only the optional "--json" flag');
+  }
+  if (first === "--version" || first === "-v") return { kind: "version" };
+  if (first === "install" && rest.includes("--managed")) {
+    return { kind: "managed-install", argv: rest };
+  }
+  if (first === "update" && isManagedUpdateCommand(rest)) {
+    return { kind: "update", argv: rest };
+  }
   if (first === "paths") return parseSparkPathsCommand(rest);
   if (first === "run") return parseSparkRunCommand(rest);
   if (first === "bg") return parseSparkBackgroundCommand(rest);
@@ -78,8 +94,11 @@ export async function runSparkDispatcher(
       stdout.write(helpText());
       return 0;
     case "version":
-      stdout.write(`${SPARK_CLI_VERSION}\n`);
-      return 0;
+      return await runSparkVersionCommand(command.json ? ["--json"] : [], { stdout, stderr });
+    case "managed-install":
+      return await runSparkManagedInstallCommand(command.argv, { stdout, stderr });
+    case "update":
+      return await runSparkUpdateCommand(command.argv, { stdout, stderr });
     case "paths": {
       const payload = {
         sparkHome: process.env.SPARK_HOME?.trim() ?? null,
@@ -237,6 +256,20 @@ function isSparkTuiCompatibilityCommand(first: string): boolean {
     first === "--mode" ||
     first === "--list-models" ||
     isSparkTuiResourceCommand(first)
+  );
+}
+
+function isManagedUpdateCommand(argv: readonly string[]): boolean {
+  const action = argv[0];
+  return (
+    action === undefined ||
+    action === "status" ||
+    action === "check" ||
+    action === "apply" ||
+    action === "rollback" ||
+    action === "retry" ||
+    action === "configure" ||
+    action === "__tick"
   );
 }
 
