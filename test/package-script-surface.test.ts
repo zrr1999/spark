@@ -85,6 +85,10 @@ test("root package exposes one compact validation and release surface", async ()
       `test:unit must run ${requiredUnitPhase}`,
     );
   }
+  assert.match(
+    scripts["test:unit"] ?? "",
+    /^pnpm --filter @zendev-lab\/spark-cockpit exec svelte-kit sync/u,
+  );
   for (const requiredFixPhase of [
     "vp fmt . --write",
     "vp lint --fix --quiet",

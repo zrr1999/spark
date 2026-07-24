@@ -36,7 +36,7 @@
     "check:test-quality": "node scripts/check-test-quality.mjs",
     "check:test-quality:update": "node scripts/check-test-quality.mjs --update",
     "test": "vp test run --config vitest.root.config.ts",
-    "test:unit": "vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --if-present run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
+    "test:unit": "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync && vp test run --config vitest.root.config.ts && pnpm -r --filter './packages/*' --if-present run check && pnpm --filter @zendev-lab/spark-cockpit run test && pnpm --filter @zendev-lab/spark-daemon run test",
     "test:process:source": "vp test run --config vitest.process.config.ts",
     "test:browser:cockpit": "pnpm --filter @zendev-lab/spark-cockpit run test:browser",
     "test:mutation": "node scripts/run-leaf-mutation.mjs",
