@@ -6,7 +6,7 @@ Current evidence-backed requirements:
   [ ] [validation] target-scale-convergence — Convergence verified at target scale
   [ ] [validation] performance-budget — Performance metrics within budget
 
-Next: run the smallest real probe for "Convergence verified at target scale", store its command output as an artifact, then call repro({ action: "record", requirementId: "target-scale-convergence", proof: { kind: "validation", command: "...", resultRef: "artifact:...", passed: true } }).
+Next: run the smallest real probe for "Convergence verified at target scale", store its command output as evidence, then call repro({ action: "record", requirementId: "target-scale-convergence", proof: { kind: "validation", command: "...", resultRef: "evidence:...", passed: true } }).
 
 Stage gate (gate-B): Convergence verified at scale — evaluation is derived from recorded proof and cannot be force-passed.
 
@@ -16,14 +16,14 @@ Repro drive requirements:
 - When blocked by a missing user decision, ambiguous requirement, unclear baseline/source, conflicting evidence, failing validation whose next step is unclear, or any problem the user can unblock, call ask immediately with a concrete question. Do not guess, invent substitutes, or end the turn with only a prose blocker report when ask can resolve it.
 - Advance milestones with repro record/evaluate/advance. Never treat prose, an unverified ref, or a bare boolean as proof.
 - Before ending every repro turn, leave a verifiable checkpoint. If the turn produced a coherent set of repository changes and committing is authorized and safe, create a small git commit promptly. Never include unrelated pre-existing changes.
-- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete artifact refs or file paths, summarize the relevant diff, report commands/tests and their results, or ask about the exact blocker. Do not end with only a progress claim.
+- If a safe commit is not appropriate yet, show the work completed in the turn: cite concrete evidence refs or file paths, summarize the relevant diff, report commands/tests and their results, or ask about the exact blocker. Do not end with only a progress claim.
 - If blocked on an external dependency the user cannot resolve, report that blocker; otherwise prefer ask over /repro stop.
 - End the turn after one concrete step; the next repro tick is scheduled automatically.
 
 Implement-phase guidance:
 - Execute the planned tasks in the main session: write code, run tests, and fix failures.
 - If a failure, missing credential, unclear expected behavior, or ambiguous fix path needs a user decision, call ask before inventing a workaround.
-- Record the matching artifact-backed requirement proof before advancing.
+- Record the matching evidence-backed requirement proof before advancing.
 
 Selective Fusion policy (reproduce/scale only):
 - If the fusion tool is available, consider fusion({ action: "deliberate", question: "...", context: "..." }) only after the first divergence has been localized with durable runtime evidence and at least one condition holds: at least two plausible falsifiable hypotheses remain, the evidence conflicts, or the latest runtime_verdict is inconclusive.

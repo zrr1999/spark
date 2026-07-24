@@ -192,6 +192,8 @@ export interface ArtifactStoreOptions {
   rootDir: string;
   /** Optional legacy evidence root (typically `.spark/artifacts`) read as fallback. */
   legacyRootDir?: string;
+  /** Identity namespace generated for new writes. */
+  refKind?: "artifact" | "evidence";
   inlineBodyThresholdBytes?: number;
   bodyPreviewChars?: number;
 }
@@ -313,6 +315,7 @@ export function canonicalArtifactKindForPersistedKind(value: unknown): ArtifactK
 export class ArtifactStore {
   readonly rootDir: string;
   readonly legacyRootDir?: string;
+  readonly refKind: "artifact" | "evidence";
   readonly blobDir: string;
   readonly inlineBodyThresholdBytes: number;
   readonly bodyPreviewChars: number;
@@ -320,6 +323,7 @@ export class ArtifactStore {
   constructor(options: ArtifactStoreOptions) {
     this.rootDir = options.rootDir;
     this.legacyRootDir = options.legacyRootDir;
+    this.refKind = options.refKind ?? "artifact";
     this.blobDir = join(options.rootDir, "blobs");
     this.inlineBodyThresholdBytes =
       options.inlineBodyThresholdBytes ?? DEFAULT_INLINE_BODY_THRESHOLD_BYTES;
@@ -330,7 +334,7 @@ export class ArtifactStore {
     await mkdir(this.rootDir, { recursive: true });
     await mkdir(this.blobDir, { recursive: true });
     const now = nowIso();
-    const ref = input.ref ?? newArtifactRef();
+    const ref = input.ref ?? (this.refKind === "evidence" ? newEvidenceRef() : newArtifactRef());
     const existing = input.ref ? await this.tryGet<T>(input.ref) : null;
     const parentLinks: ArtifactLink[] = (input.provenance.parentArtifactRefs ?? []).map(
       (parent) => ({
@@ -572,6 +576,7 @@ export function defaultEvidenceStore(cwd: string): ArtifactStore {
   return new ArtifactStore({
     rootDir: join(cwd, ".spark", "evidence"),
     legacyRootDir: join(cwd, ".spark", "artifacts"),
+    refKind: "evidence",
   });
 }
 

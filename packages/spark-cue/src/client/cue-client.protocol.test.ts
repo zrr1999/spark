@@ -330,6 +330,21 @@ test("cue exec family tools currently skip requiresApproval (temporary local ove
     assert.equal(tools.get(name)?.executionMode, "sequential", `${name} execution mode`);
     assert.equal(tools.get(name)?.policy?.approval, "none", `${name} approval policy`);
   }
+  for (const name of [
+    "cue_exec",
+    "cue_run",
+    "cue_script",
+    "script_run",
+    "script_eval",
+    "cue_jobs",
+  ]) {
+    assert.deepEqual(
+      tools.get(name)?.policy?.phases,
+      ["plan", "implement"],
+      `${name} must remain available for plan-phase repro probes`,
+    );
+  }
+  assert.deepEqual(tools.get("cue_schedule")?.policy?.phases, ["implement"]);
   assert.equal(tools.get("cue_resources")?.requiresApproval, undefined);
   assert.equal(tools.get("cue_history")?.requiresApproval, undefined);
   assert.equal(tools.get("cue_scope")?.requiresApproval, undefined);

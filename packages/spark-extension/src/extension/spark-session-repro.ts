@@ -3,7 +3,7 @@
  * Legacy v1/v2 snapshots are migrated fail-closed into evidence-backed v3 requirements.
  */
 
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import {
   DEFAULT_REPRO_STAGES,
   isReproRequirementSatisfied,
@@ -79,7 +79,14 @@ export async function readSessionRepro(
   const path = sessionReproStorePath(cwd, ctx);
   const snapshot = await readJsonFileOptional<StoredSparkSessionReproSnapshot>(path);
   if (!snapshot) return undefined;
-  if (snapshot.version === 3) return snapshot.repro;
+  if (snapshot.version === 3) {
+    const repro = sanitizeStoredSessionRepro(snapshot.repro);
+    if (JSON.stringify(repro) !== JSON.stringify(snapshot.repro)) {
+      await writeJsonFileAtomic(path, { version: 3, repro } satisfies SparkSessionReproSnapshotV3);
+      await rebuildSessionIndex(cwd);
+    }
+    return repro;
+  }
   if (snapshot.version !== 1 && snapshot.version !== 2) return undefined;
 
   const repro = snapshot.repro ? migrateLegacySessionRepro(snapshot.repro) : undefined;
@@ -175,7 +182,7 @@ function migrateLegacyRequirement(
   const legacy = legacyAcceptance.find((candidate) =>
     legacyDescriptions.includes(candidate.description),
   );
-  const evidenceRef = legacy?.satisfied ? legacyArtifactRef(legacy.evidenceRef) : undefined;
+  const evidenceRef = legacy?.satisfied ? legacyEvidenceRef(legacy.evidenceRef) : undefined;
   if (!evidenceRef) return requirement;
   switch (requirement.kind) {
     case "evidence":
@@ -223,8 +230,62 @@ function normalizeLegacyPhase(phase: SparkSessionPhase | "research"): SparkSessi
   return phase === "research" ? "plan" : phase;
 }
 
-function legacyArtifactRef(value: string | undefined): ArtifactRef | undefined {
-  return value?.startsWith("artifact:") && value.length > "artifact:".length
-    ? (value as ArtifactRef)
+function legacyEvidenceRef(value: string | undefined): EvidenceRef | undefined {
+  return value?.startsWith("evidence:") && value.length > "evidence:".length
+    ? (value as EvidenceRef)
     : undefined;
+}
+
+function sanitizeStoredSessionRepro(
+  repro: SparkSessionRepro | undefined,
+): SparkSessionRepro | undefined {
+  if (!repro) return undefined;
+  return {
+    ...repro,
+    stages: repro.stages.map((stage) => {
+      let invalidProofRemoved = false;
+      const acceptance = stage.acceptance.map((requirement): SparkReproRequirement => {
+        if (requirement.kind === "evidence") {
+          const evidenceRefs = requirement.evidenceRefs.filter(isEvidenceRef);
+          invalidProofRemoved ||= evidenceRefs.length !== requirement.evidenceRefs.length;
+          return { ...requirement, evidenceRefs };
+        }
+        if (
+          requirement.kind === "decision" &&
+          requirement.decisionRef &&
+          !isEvidenceRef(requirement.decisionRef)
+        ) {
+          invalidProofRemoved = true;
+          const {
+            decisionRef: _decisionRef,
+            selectedValue: _selectedValue,
+            rationale: _rationale,
+            ...pending
+          } = requirement;
+          return pending;
+        }
+        if (
+          requirement.kind === "validation" &&
+          requirement.resultRef &&
+          !isEvidenceRef(requirement.resultRef)
+        ) {
+          invalidProofRemoved = true;
+          const { resultRef: _resultRef, passed: _passed, ...pending } = requirement;
+          return pending;
+        }
+        return requirement;
+      });
+      if (!stage.gate) return { ...stage, acceptance };
+      const gateHasLegacyRefs = stage.gate.evaluation?.evidenceRefs.some(
+        (ref) => !isEvidenceRef(ref),
+      );
+      if (!invalidProofRemoved && !gateHasLegacyRefs) return { ...stage, acceptance };
+      const { evaluation: _evaluation, ...gate } = stage.gate;
+      return { ...stage, acceptance, gate };
+    }),
+  };
+}
+
+function isEvidenceRef(value: string): value is EvidenceRef {
+  return value.startsWith("evidence:") && value.length > "evidence:".length;
 }
