@@ -55,7 +55,7 @@ export function workflowSelector(source: WorkflowSource, id: string): WorkflowSe
 }
 
 export function workspaceWorkflowDir(cwd: string): string {
-  return join(cwd, ".spark", "workflows");
+  return join(cwd, ".agents", "workflows");
 }
 
 export function userWorkflowDir(): string {

@@ -15,6 +15,14 @@ test("Spark workflow registry lists workspace and user workflows", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "spark-workflow-registry-"));
   const userDir = await mkdtemp(join(tmpdir(), "spark-user-workflows-"));
   await mkdir(workspaceWorkflowDir(cwd), { recursive: true });
+  await mkdir(join(cwd, ".spark", "workflows"), { recursive: true });
+  await writeFile(
+    join(cwd, ".spark", "workflows", "legacy.js"),
+    `export const meta = {
+      name: "Legacy Workflow",
+      description: "The retired workspace workflow location must not be discovered.",
+    };`,
+  );
   await writeFile(
     join(workspaceWorkflowDir(cwd), "release-check.js"),
     `export const meta = {
@@ -41,6 +49,7 @@ test("Spark workflow registry lists workspace and user workflows", async () => {
 
   assert.ok(refs.includes("workflow:builtin-research"));
   assert.ok(refs.includes("workflow:workspace-release-check"));
+  assert.ok(!refs.includes("workflow:workspace-legacy"));
   assert.ok(refs.includes("workflow:user-oss-review"));
   assert.equal(listing.errors.length, 1);
   assert.equal(listing.errors[0]?.source, "workspace");
@@ -58,5 +67,6 @@ test("Spark workflow registry exposes stable source/ref helpers", () => {
   assert.equal(sparkWorkflowRef("builtin", "research"), "workflow:builtin-research");
   assert.equal(sparkWorkflowRef("workspace", "deep_research"), "workflow:workspace-deep-research");
   assert.match(userWorkflowDir(), /\.agents\/workflows$/);
+  assert.equal(workspaceWorkflowDir("/tmp/project"), "/tmp/project/.agents/workflows");
   assert.throws(() => sparkWorkflowRef("workspace", "Bad Name"), /workflow id/);
 });

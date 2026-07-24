@@ -27,7 +27,7 @@ With `SPARK_HOME`, the main config is `$SPARK_HOME/config.json`, credentials are
 
 Without `SPARK_HOME`, these paths use `$XDG_CONFIG_HOME/spark`, `$XDG_DATA_HOME/spark`, `$XDG_CACHE_HOME/spark`, `$XDG_STATE_HOME/spark`, and `$XDG_RUNTIME_DIR/spark` according to ownership.
 
-Workspace state remains in the current workspace `.spark/`. Cross-harness user roles, skills, and workflows load from `~/.agents/{roles,skills,workflows}`; project roles and skills load from `.agents/{roles,skills}`, while workspace-specific Spark skills and workflows use `.spark/{skills,workflows}`. There are no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows` directories. Run `spark paths --json` to inspect effective paths without creating files.
+Workspace state remains in the current workspace `.spark/`. Cross-harness user roles, skills, and workflows load from `~/.agents/{roles,skills,workflows}`; project roles, skills, and workflows load from `.agents/{roles,skills,workflows}`, while workspace-specific Spark skills use `.spark/skills`; saved project workflows always use `.agents/workflows`. There are no `$SPARK_HOME/skills` or `$SPARK_HOME/workflows` directories. Run `spark paths --json` to inspect effective paths without creating files.
 
 Retired Pi and component-specific storage variables no longer influence path resolution.
 
