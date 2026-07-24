@@ -3,7 +3,7 @@ import type { SparkJsonObject, SparkSessionView } from "@zendev-lab/spark-protoc
 const MAX_OUTPUT_CHARS = 4_000;
 const MAX_PREVIEW_CHARS = 8_000;
 
-export type SessionInspectorTab = "summary" | "artifacts" | "changes" | "tasks" | "messages";
+export type SessionInspectorTab = "summary" | "artifacts" | "changes" | "tasks";
 
 /** Product-facing artifact kinds shown in the session sidebar. */
 export const SESSION_PRODUCT_ARTIFACT_KINDS = new Set(["issue", "pr", "preview"]);
@@ -125,29 +125,6 @@ export interface SessionWorkbenchContext {
   updatedAt: string | null;
 }
 
-/** Cross-session agent-to-agent messages (not human ask / inbox). */
-export interface SessionWorkbenchMessage {
-  id: string;
-  fromSessionId: string;
-  kind: "request" | "question" | "notification";
-  intent: string;
-  subject: string | null;
-  body: string;
-  createdAt: string;
-  status: "unread" | "read" | "acknowledged";
-  channelDelivery: {
-    status: "pending" | "delivered" | "failed" | "uncertain";
-    total: number;
-    pending: number;
-    delivered: number;
-    failed: number;
-    uncertain: number;
-  } | null;
-}
-
-/** @deprecated Use SessionWorkbenchMessage. */
-export type SessionWorkbenchMailMessage = SessionWorkbenchMessage;
-
 export interface SessionWorkbenchView {
   runs: SessionWorkbenchRun[];
   tasks: SessionWorkbenchTask[];
@@ -156,8 +133,6 @@ export interface SessionWorkbenchView {
   changes: SessionWorkbenchArtifact[];
   /** Agent-internal evidence; not rendered in the session sidebar. */
   evidence: SessionWorkbenchArtifact[];
-  /** Cross-session agent messages (renamed from mailbox). */
-  messages: SessionWorkbenchMessage[];
   sessionTodo: SessionWorkbenchSessionTodo | null;
   context: SessionWorkbenchContext;
 }
@@ -169,15 +144,12 @@ export interface SessionInspectorLabels {
   artifactsHeading: string;
   tasksHeading: string;
   changesHeading: string;
-  messagesHeading: string;
   noTasksTitle: string;
   noTasksBody: string;
   noArtifactsTitle: string;
   noArtifactsBody: string;
   noChangesTitle: string;
   noChangesBody: string;
-  noMessagesTitle: string;
-  noMessagesBody: string;
   noSessionTodoTitle: string;
   noSessionTodoBody: string;
   noActiveSessionTodo: string;
@@ -188,17 +160,6 @@ export interface SessionInspectorLabels {
   openSessionTodo: string;
   sessionTodoPending: string;
   sessionTodoInProgress: string;
-  messageFrom: string;
-  messageRequest: string;
-  messageQuestion: string;
-  messageNotification: string;
-  messageUnread: string;
-  messageRead: string;
-  messageAcknowledged: string;
-  messageDeliveryPending: string;
-  messageDeliveryDelivered: string;
-  messageDeliveryFailed: string;
-  messageDeliveryUncertain: string;
   sessionId: string;
   sessionStatus: string;
   workingDirectory: string;
@@ -260,19 +221,6 @@ export function buildSessionWorkbenchView(input: {
     artifacts: productArtifacts,
     changes: changeArtifacts,
     evidence,
-    messages: [...(input.session.mailbox ?? [])]
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .map((message) => ({
-        id: message.id,
-        fromSessionId: message.fromSessionId,
-        kind: message.kind,
-        intent: message.intent,
-        subject: message.subject ?? null,
-        body: message.body,
-        createdAt: message.createdAt,
-        status: message.ackedAt ? "acknowledged" : message.readAt ? "read" : "unread",
-        channelDelivery: message.channelDelivery ?? null,
-      })),
     sessionTodo: latestSessionTodo(input.session),
     context: sessionContext(input.session),
   };

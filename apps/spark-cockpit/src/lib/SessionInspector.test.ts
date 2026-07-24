@@ -32,7 +32,7 @@ function renderedText(value: string): string {
 }
 
 describe("SessionInspector rendered contract", () => {
-  it("renders the canonical five tabs and instance-scoped summary relationships", () => {
+  it("renders the canonical four tabs and instance-scoped summary relationships", () => {
     const body = renderInspector(
       sessionWorkbenchView({
         context: {
@@ -57,7 +57,7 @@ describe("SessionInspector rendered contract", () => {
       },
     );
 
-    expect(body.match(/role="tab"/gu)).toHaveLength(5);
+    expect(body.match(/role="tab"/gu)).toHaveLength(4);
     for (const label of Object.values(labels.tabs)) expect(body).toContain(renderedText(label));
     expect(body).toContain('id="inspector-summary-summary-tab"');
     expect(body).toContain('aria-controls="inspector-summary-summary-panel"');
@@ -77,7 +77,6 @@ describe("SessionInspector rendered contract", () => {
     ["artifacts", labels.noArtifactsTitle, labels.noArtifactsBody],
     ["changes", labels.noChangesTitle, labels.noChangesBody],
     ["tasks", labels.noTasksTitle, labels.noTasksBody],
-    ["messages", labels.noMessagesTitle, labels.noMessagesBody],
   ] as const)(
     "renders the %s empty state selected by the initial tab",
     (initialTab, title, body) => {
@@ -263,46 +262,5 @@ describe("SessionInspector rendered contract", () => {
     expect(changes).toContain("+behavioral assertion");
     expect(changes).not.toContain("Pull request");
     expect(changes).not.toContain("INTERNAL_EVIDENCE");
-  });
-
-  it("renders channel delivery separately from message read state and counts unread messages", () => {
-    const body = renderInspector(
-      sessionWorkbenchView({
-        messages: [
-          {
-            id: "mail:uncertain",
-            fromSessionId: "sess-worker",
-            kind: "notification",
-            intent: "research.complete",
-            subject: "Research result",
-            body: "The provider did not confirm delivery.",
-            createdAt: "2026-07-20T03:00:00.000Z",
-            status: "unread",
-            channelDelivery: {
-              status: "uncertain",
-              total: 1,
-              pending: 0,
-              delivered: 0,
-              failed: 0,
-              uncertain: 1,
-            },
-          },
-        ],
-      }),
-      {
-        instanceId: "inspector-mail",
-        initialTab: "messages",
-      },
-    );
-
-    expect(body).toContain("Research result");
-    expect(body).toContain(labels.messageNotification);
-    expect(body).toContain(labels.messageFrom);
-    expect(body).toContain("sess-worker");
-    expect(body).toContain(labels.messageDeliveryUncertain);
-    expect(body).toContain(labels.messageUnread);
-    expect(body).toContain("message-delivery-status uncertain");
-    expect(body).toContain("message-read-status unread");
-    expect(body).toContain(`aria-label="1 ${labels.messageUnread}"`);
   });
 });

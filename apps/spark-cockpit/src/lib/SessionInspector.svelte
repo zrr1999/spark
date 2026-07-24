@@ -7,7 +7,6 @@
   import type {
     SessionInspectorLabels,
     SessionInspectorTab,
-    SessionWorkbenchMessage,
     SessionWorkbenchTask,
     SessionWorkbenchView,
   } from "$lib/session-workbench";
@@ -32,12 +31,8 @@
     { id: "artifacts", label: labels.tabs.artifacts, icon: "artifacts" },
     { id: "changes", label: labels.tabs.changes, icon: "repos" },
     { id: "tasks", label: labels.tabs.tasks, icon: "folder" },
-    { id: "messages", label: labels.tabs.messages, icon: "spark" },
   ]);
   let taskGroups = $derived(groupTasksByProject(view.tasks));
-  let unreadMessageCount = $derived(
-    view.messages.filter((message) => message.status === "unread").length,
-  );
 
   function statusClass(status: string) {
     return status.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -47,27 +42,6 @@
     if (status === "pending") return labels.sessionTodoPending;
     if (status === "in_progress") return labels.sessionTodoInProgress;
     return statusLabel(status);
-  }
-
-  function messageKindLabel(kind: "request" | "question" | "notification") {
-    if (kind === "request") return labels.messageRequest;
-    if (kind === "question") return labels.messageQuestion;
-    return labels.messageNotification;
-  }
-
-  function messageStatusLabel(status: "unread" | "read" | "acknowledged") {
-    if (status === "unread") return labels.messageUnread;
-    if (status === "read") return labels.messageRead;
-    return labels.messageAcknowledged;
-  }
-
-  function messageDeliveryLabel(
-    status: NonNullable<SessionWorkbenchMessage["channelDelivery"]>["status"],
-  ) {
-    if (status === "pending") return labels.messageDeliveryPending;
-    if (status === "delivered") return labels.messageDeliveryDelivered;
-    if (status === "failed") return labels.messageDeliveryFailed;
-    return labels.messageDeliveryUncertain;
   }
 
   function compactTimestamp(value: string) {
@@ -171,11 +145,6 @@
       >
         <Icon name={tab.icon} size={16} />
         <span>{tab.label}</span>
-        {#if tab.id === "messages" && unreadMessageCount > 0}
-          <span class="tab-count" aria-label={`${unreadMessageCount} ${labels.messageUnread}`}>
-            {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
-          </span>
-        {/if}
       </button>
     {/each}
   </div>
@@ -360,55 +329,6 @@
               {/each}
             </div>
           {/if}
-        </section>
-      {/if}
-    {:else if activeTab === "messages"}
-      {#if view.messages.length === 0}
-        <EmptyState
-          title={labels.noMessagesTitle}
-          body={labels.noMessagesBody}
-          icon="spark"
-          compact
-        />
-      {:else}
-        <section class="inspector-section" aria-labelledby={headingId("messages")}>
-          <h2 id={headingId("messages")}>{labels.messagesHeading}</h2>
-          <div class="card-list">
-            {#each view.messages as message (message.id)}
-              <article class="inspector-card message-card">
-                <header class="card-header">
-                  <div class="card-title">
-                    <Icon name="spark" size={16} />
-                    <div>
-                      <h3>{message.subject ?? message.intent}</h3>
-                      <p>
-                        {messageKindLabel(message.kind)} · {labels.messageFrom}
-                        {message.fromSessionId}
-                      </p>
-                    </div>
-                  </div>
-                  <div class="message-statuses">
-                    {#if message.channelDelivery}
-                      <span
-                        class={`status-pill message-delivery-status ${statusClass(message.channelDelivery.status)}`}
-                      >
-                        {messageDeliveryLabel(message.channelDelivery.status)}
-                      </span>
-                    {/if}
-                    <span class={`status-pill message-read-status ${statusClass(message.status)}`}>
-                      {messageStatusLabel(message.status)}
-                    </span>
-                  </div>
-                </header>
-                {#if message.body}
-                  <p class="card-summary message-body">{message.body}</p>
-                {/if}
-                <time datetime={message.createdAt} title={message.createdAt}>
-                  {compactTimestamp(message.createdAt)}
-                </time>
-              </article>
-            {/each}
-          </div>
         </section>
       {/if}
     {/if}
@@ -655,47 +575,6 @@
     line-height: var(--leading-body);
     margin: var(--spacing-xxs) 0 0;
     overflow-wrap: anywhere;
-  }
-
-  .message-card time {
-    color: var(--color-ink-subtle);
-    font-size: var(--text-caption);
-  }
-
-  .message-statuses {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--spacing-xxs);
-    justify-content: flex-end;
-  }
-
-  .mail-delivery-status.uncertain {
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-  }
-
-  .message-body {
-    display: -webkit-box;
-    line-clamp: 4;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 4;
-  }
-
-  .tab-count {
-    align-items: center;
-    background: var(--color-primary);
-    border-radius: 999px;
-    color: white;
-    display: inline-flex;
-    flex: 0 0 auto;
-    font-size: 9px;
-    font-weight: 700;
-    justify-content: center;
-    line-height: 1;
-    min-height: 16px;
-    min-width: 16px;
-    padding: 0 4px;
   }
 
   .card-summary {

@@ -13,7 +13,6 @@ export function sessionWorkbenchView(
     artifacts: [],
     changes: [],
     evidence: [],
-    messages: [],
     sessionTodo: null,
     context: {
       sessionId: "sess-inspector",
