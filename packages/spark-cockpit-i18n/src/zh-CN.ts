@@ -220,7 +220,7 @@ const messages = {
       headTitle: "Spark · 工作空间",
       eyebrow: "工作空间目录",
       title: "工作空间",
-      lede: "选择一个工作空间，查看它连接的目录、待处理询问、会话和证据产物。",
+      lede: "选择一个工作空间，查看它连接的目录、待处理询问、会话和产物。",
       summaryAria: "工作空间目录摘要",
       catalogEyebrow: "可用工作空间",
       catalogTitle: "全部工作空间",
