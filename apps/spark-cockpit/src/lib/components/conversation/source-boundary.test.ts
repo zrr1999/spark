@@ -42,8 +42,8 @@ describe("source-derived conversation component boundary", () => {
     expect(source).not.toContain("FileUIPart");
     expect(dependencyNames).not.toContain("ai");
     expect(dependencyNames).not.toContain("@ai-sdk/svelte");
-    expect(dependencyNames).toContain("streamdown-svelte");
-    expect(dependencyNames).toContain("@shikijs/themes");
+    expect(dependencyNames).toContain("svelte-streamdown");
+    expect(dependencyNames).not.toContain("@shikijs/themes");
     expect(dependencyNames).not.toContain("tailwindcss");
   });
 

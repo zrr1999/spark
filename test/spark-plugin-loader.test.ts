@@ -125,9 +125,8 @@ test("loadPlugins reports a clear error for modules without a default factory", 
     providerApi: registry,
     extensions: ["malformed"],
     providers: [],
-    importer: async () => ({
-      /* no default */
-    }),
+    // Intentionally return a module without a default export.
+    importer: async () => ({}),
   });
   assert.equal(result.outcomes[0]!.ok, false);
   assert.match(

@@ -9,8 +9,11 @@
 
 ## Local changes
 
-- Kept the upstream `Streamdown` composition and light/dark GitHub Shiki themes.
-- Replaced Tailwind and `mode-watcher` with Cockpit token CSS and Streamdown's light/dark theme tuple.
-- Enabled the bundled CJK, math, and Mermaid plugins for rich AI-authored Markdown.
-- Kept Streamdown props open so the Cockpit boundary can select streaming/static parsing, caret,
-  animation, controls, and security policy without owning a second Markdown parser.
+- Kept the upstream `Streamdown` composition, but selected the maintained `svelte-streamdown`
+  package and its opt-in code, math, and Mermaid components.
+- Replaced Tailwind and `mode-watcher` with Cockpit token CSS and the renderer's automatic
+  light/dark Shiki themes.
+- Kept renderer props open so Cockpit can select streaming/static parsing, animation, controls,
+  and security policy without owning a second Markdown parser.
+- Added a Cockpit-owned streaming caret and a fixed validation origin so relative local media
+  remains valid without broadening the renderer's URL protocol policy.
