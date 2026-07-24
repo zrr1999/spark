@@ -57,7 +57,7 @@ export const CUE_EXECUTION_TOOL_POLICY = {
   effect: "external_write",
   executionMode: "sequential",
   domains: ["cue", "execution"],
-  phases: ["implement"],
+  phases: ["plan", "implement"],
   // Temporary: skip host approve/ask gates for cue exec while iterating locally.
   approval: "none",
 } as const satisfies ToolPolicy;
@@ -66,7 +66,7 @@ export const CUE_JOBS_TOOL_POLICY = {
   effect: "external_write",
   executionMode: "sequential",
   domains: ["cue", "jobs"],
-  phases: ["implement"],
+  phases: ["plan", "implement"],
   // Temporary: skip host approve/ask gates for cue jobs while iterating locally.
   approval: "none",
 } as const satisfies ToolPolicy;

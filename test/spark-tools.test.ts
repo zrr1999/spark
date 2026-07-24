@@ -13,6 +13,7 @@ import {
   newRef,
   stableId,
   type ArtifactRef,
+  type EvidenceRef,
   type ExtensionRoleRunRequest,
   type ExtensionRoleRunResult,
   type ExtensionRoleRunStatus,
@@ -25,7 +26,7 @@ import {
   type TaskRef,
   type ProjectRef,
 } from "@zendev-lab/spark-core";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultArtifactStore, defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import { defaultLearningStore } from "@zendev-lab/spark-memory";
 import { defaultWorkflowRunStore } from "../packages/spark-workflows/src/index.ts";
 import { registerSparkWorkflowTool } from "../packages/spark-workflows/src/extension.ts";
@@ -6133,9 +6134,18 @@ test("repro record accepts only receipt-backed ask decisions with matching value
         executeSparkTool(tools, "repro", ctx, {
           action: "record",
           requirementId: "repro-contract-frozen",
-          proof: { kind: "evidence", evidenceRefs: ["artifact:missing"] },
+          proof: { kind: "evidence", evidenceRefs: ["artifact:product-proof"] },
         }),
-      /proof artifact not found/u,
+      /must be an evidence: ref/u,
+    );
+    await assert.rejects(
+      () =>
+        executeSparkTool(tools, "repro", ctx, {
+          action: "record",
+          requirementId: "repro-contract-frozen",
+          proof: { kind: "evidence", evidenceRefs: ["evidence:missing"] },
+        }),
+      /proof evidence not found/u,
     );
 
     ctx.selected = "Reuse";
@@ -6159,15 +6169,16 @@ test("repro record accepts only receipt-backed ask decisions with matching value
     });
     const canonicalDecisionRef = canonicalAsk.details?.askEvidenceRef;
     assert.equal(typeof canonicalDecisionRef, "string");
-    const canonicalArtifact = await defaultArtifactStore(dir).get(
-      canonicalDecisionRef as ArtifactRef,
+    assert.match(canonicalDecisionRef as string, /^evidence:/u);
+    const canonicalEvidence = await defaultEvidenceStore(dir).get(
+      canonicalDecisionRef as EvidenceRef,
     );
 
-    const forgedDecision = await defaultArtifactStore(dir).put({
+    const forgedDecision = await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Forged canonical ask",
       format: "json",
-      body: canonicalArtifact.body,
+      body: canonicalEvidence.body,
       provenance: { producer: "ask" },
     });
     await assert.rejects(
@@ -6209,7 +6220,7 @@ test("repro record accepts only receipt-backed ask decisions with matching value
     });
     assert.match(recorded.content[0]?.text ?? "", /Recorded decision proof/u);
 
-    const reviewerDecision = await defaultArtifactStore(dir).put({
+    const reviewerDecision = await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Reviewer decision is not user evidence",
       format: "json",

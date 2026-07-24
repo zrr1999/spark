@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defaultArtifactStore } from "@zendev-lab/spark-artifacts";
+import { defaultEvidenceStore } from "@zendev-lab/spark-artifacts";
 import type {
   SparkHostContext,
   JsonValue,
@@ -141,8 +141,7 @@ export function registerSparkAskActionTool(
       ),
       recordAsEvidence: Type.Optional(
         Type.Boolean({
-          description:
-            "Persist the ask result as an artifact for a later evidence-backed decision gate.",
+          description: "Persist the ask result as canonical evidence for a later decision gate.",
         }),
       ),
       title: Type.Optional(Type.String()),
@@ -364,19 +363,19 @@ async function maybeRecordAskEvidence(
     if (didHumanAskTimeOut(result)) return result;
     throw new Error("ask.recordAsEvidence requires a completed user-answered result");
   }
-  const artifact = await defaultArtifactStore(cwd).put({
+  const evidence = await defaultEvidenceStore(cwd).put({
     kind: "record",
     title: `Ask evidence: ${optionalString(params.title)?.trim() || "user decision"}`,
     format: "json",
     body: JSON.parse(JSON.stringify(body)) as JsonValue,
     provenance: { producer: "ask" },
   });
-  await recordCanonicalAskEvidenceReceipt(cwd, artifact);
+  await recordCanonicalAskEvidenceReceipt(cwd, evidence);
   return {
     ...result,
     details: {
       ...(isRecord(result.details) ? result.details : {}),
-      askEvidenceRef: artifact.ref,
+      askEvidenceRef: evidence.ref,
     },
   };
 }

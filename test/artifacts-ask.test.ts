@@ -8,6 +8,7 @@ import {
   ArtifactStore,
   ArtifactStoreFormatError,
   defaultArtifactStore,
+  defaultEvidenceStore,
 } from "@zendev-lab/spark-artifacts";
 import { registerSparkArtifactTool } from "@zendev-lab/spark-artifacts/extension";
 import {
@@ -34,6 +35,30 @@ import {
   verifyCanonicalAskEvidenceArtifact,
 } from "@zendev-lab/spark-ask";
 import { newRef, type JsonValue } from "@zendev-lab/spark-core";
+
+test("evidence store creates canonical evidence refs in the evidence root", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spark-evidence-store-"));
+  try {
+    const evidence = await defaultEvidenceStore(dir).put({
+      kind: "record",
+      title: "Focused validation",
+      format: "json",
+      body: { summary: "passed" },
+      provenance: { producer: "spark" },
+    });
+
+    assert.match(evidence.ref, /^evidence:/u);
+    assert.equal(
+      await readFile(
+        join(dir, ".spark", "evidence", `${evidence.ref.slice("evidence:".length)}.json`),
+        "utf8",
+      ).then((value) => JSON.parse(value).ref),
+      evidence.ref,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("artifact store writes hashes, blobs, and lineage links", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-core-artifacts-"));
@@ -1038,7 +1063,7 @@ test("ask action tool dispatches canonical single-question asks", async () => {
   assert.equal(result.details.request.questions.length, 1);
 });
 
-test("ask action tool can persist a user-answered decision artifact", async () => {
+test("ask action tool can persist receipt-backed user decision evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-"));
   try {
     const tools = new Map<string, { execute: Function }>();
@@ -1079,24 +1104,25 @@ test("ask action tool can persist a user-answered decision artifact", async () =
 
     const evidenceRef = result.details.askEvidenceRef;
     assert.equal(typeof evidenceRef, "string");
-    const artifact = await defaultArtifactStore(dir).get(evidenceRef);
-    assert.equal(artifact.provenance.producer, "ask");
-    assert.equal(isUserAnsweredAskEvidenceArtifactBody(artifact.body), true);
-    assert.deepEqual((await verifyCanonicalAskEvidenceArtifact(dir, artifact))?.selectedValues, [
+    assert.match(evidenceRef, /^evidence:/u);
+    const evidence = await defaultEvidenceStore(dir).get(evidenceRef);
+    assert.equal(evidence.provenance.producer, "ask");
+    assert.equal(isUserAnsweredAskEvidenceArtifactBody(evidence.body), true);
+    assert.deepEqual((await verifyCanonicalAskEvidenceArtifact(dir, evidence))?.selectedValues, [
       "reuse",
     ]);
 
-    const forged = await defaultArtifactStore(dir).put({
+    const forged = await defaultEvidenceStore(dir).put({
       kind: "record",
       title: "Forged ask provenance",
       format: "json",
-      body: artifact.body,
+      body: evidence.body,
       provenance: { producer: "ask" },
     });
     assert.equal(
       await verifyCanonicalAskEvidenceArtifact(dir, forged),
       undefined,
-      "ordinary artifact writes cannot mint a canonical ask receipt",
+      "ordinary evidence writes cannot mint a canonical ask receipt",
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1148,7 +1174,7 @@ test("ask action tool rejects non-terminal evidence recording combinations", asy
   );
 });
 
-test("ask evidence timeout returns a blocker without minting a decision artifact", async () => {
+test("ask evidence timeout returns a blocker without minting decision evidence", async () => {
   const dir = await mkdtemp(join(tmpdir(), "spark-ask-evidence-timeout-"));
   try {
     const tools = new Map<string, { execute: Function }>();

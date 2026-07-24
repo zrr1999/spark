@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "vitest";
 
-import type { ArtifactRef } from "@zendev-lab/spark-core";
+import type { EvidenceRef } from "@zendev-lab/spark-core";
 import {
   DEFAULT_REPRO_STAGES,
   advanceReproStage,
@@ -24,7 +24,7 @@ import {
   type SparkSessionRepro,
 } from "../packages/spark-extension/src/extension/spark-session-repro.ts";
 
-const artifactRef = (id: string) => `artifact:${id}` as ArtifactRef;
+const artifactRef = (id: string) => `evidence:${id}` as EvidenceRef;
 
 describe("SparkSessionRepro evidence-backed state machine", () => {
   function makeRepro(): SparkSessionRepro {
@@ -156,8 +156,8 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
     const blocked = evaluateStageGate(repro);
     assert.equal(blocked.passed, false);
     assert.deepEqual(blocked.blockers, [
-      "bitwise-pass-20 requires a command, result artifact, and passing validation result",
-      "bitwise-pass-100 requires a command, result artifact, and passing validation result",
+      "bitwise-pass-20 requires a command, result evidence ref, and passing validation result",
+      "bitwise-pass-100 requires a command, result evidence ref, and passing validation result",
     ]);
     assert.equal(passStageGate(repro), undefined);
 
@@ -172,7 +172,7 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
     ]);
   });
 
-  it("migrates legacy setup facts but not bare booleans or agent-authored decisions", async () => {
+  it("migrates legacy state without trusting artifact-backed facts or agent-authored decisions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "spark-repro-phase-migration-"));
     try {
       const current = makeRepro();
@@ -226,7 +226,7 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
         kind: "evidence",
         description: "Reproduction claim and acceptance contract frozen",
         phase: "plan",
-        evidenceRefs: [artifactRef("legacy-problem")],
+        evidenceRefs: [],
       });
       assert.equal(
         isReproRequirementSatisfied(
@@ -243,6 +243,42 @@ describe("SparkSessionRepro evidence-backed state machine", () => {
       assert.equal(persisted.version, 3);
       assert.doesNotMatch(JSON.stringify(persisted), /"research"/u);
       assert.doesNotMatch(JSON.stringify(persisted), /"satisfied"/u);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes artifact-backed proof and stale gates from stored v3 snapshots", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "spark-repro-v3-evidence-hard-cut-"));
+    try {
+      const repro = makeRepro();
+      const setup = repro.stages[0]!;
+      setup.acceptance[0] = {
+        ...setup.acceptance[0]!,
+        kind: "evidence",
+        evidenceRefs: ["artifact:legacy-contract" as unknown as EvidenceRef],
+      };
+      const reproduce = repro.stages[2]!;
+      reproduce.gate!.evaluation = {
+        passed: true,
+        blockers: [],
+        evidenceRefs: ["artifact:legacy-validation" as unknown as EvidenceRef],
+        evaluatedAt: new Date().toISOString(),
+      };
+      const path = sessionReproStorePath(dir);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify({ version: 3, repro })}\n`, "utf8");
+
+      const sanitized = await readSessionRepro(dir);
+      assert.deepEqual(sanitized?.stages[0]?.acceptance[0], {
+        id: "repro-contract-frozen",
+        kind: "evidence",
+        description: "Reproduction claim and acceptance contract frozen",
+        phase: "plan",
+        evidenceRefs: [],
+      });
+      assert.equal(sanitized?.stages[2]?.gate?.evaluation, undefined);
+      assert.doesNotMatch(await readFile(path, "utf8"), /artifact:legacy/u);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
