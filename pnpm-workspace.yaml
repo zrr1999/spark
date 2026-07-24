@@ -11,6 +11,8 @@ allowBuilds:
   esbuild: true
   koffi: true
   protobufjs: true
+  sharp: true
+  workerd: true
 
 catalog:
   "@agentclientprotocol/sdk": "1.2.1"

@@ -14,6 +14,10 @@ spark cockpit
 
 The single `@zendev-lab/spark-extension` composition root exposes the canonical capability tools to native and structurally compatible hosts. `role` manages reusable definitions and fresh anonymous calls; `session` owns persistent lifecycle, continuity, bindings, calls, and mail.
 
+User documentation is maintained in the
+[`apps/spark-docs`](./apps/spark-docs/README.md) workspace and deployed as a
+bilingual static site through the `CD - Docs` Cloudflare Workers workflow.
+
 ## Common commands
 
 ```text

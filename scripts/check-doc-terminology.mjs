@@ -108,6 +108,11 @@ async function listTerminologyFiles() {
   const files = [];
   await appendRootMarkdownFiles(files);
   await appendFiles(files, "docs", (path) => path.endsWith(".md"));
+  await appendFiles(
+    files,
+    "apps/spark-docs/src/content/docs",
+    (path) => path.endsWith(".md") || path.endsWith(".mdx"),
+  );
   await appendKnownFile(files, "apps/spark-daemon/README.md");
   await appendKnownFile(files, "apps/spark-tui/README.md");
   await appendKnownFile(files, "packages/spark-protocol/README.md");

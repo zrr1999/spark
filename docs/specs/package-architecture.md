@@ -8,7 +8,7 @@ The machine-readable source of truth is
 workspace declares a `layer`, `owner`, `stability`, and authoritative
 `stateWriter`. `pnpm run check:architecture` rejects an unclassified workspace,
 an undeclared production dependency, a stale export, a second public package,
-or growth beyond the current 39-workspace budget.
+or growth beyond the current 40/40-workspace budget.
 
 ## Dependency direction
 
