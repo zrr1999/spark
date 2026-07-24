@@ -56,7 +56,7 @@ Target package topology follows type-first names:
 - `.github/workflows/ci-verify.yml` — repository verification and npm-product smoke, plus an isolated headless-Chromium Cockpit lane.
 - `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
-- `.github/workflows/release.yml` — protected, version-tag-only npm and GitHub Release publication.
+- `.github/workflows/cd-publish.yml` — protected, version-tag-only npm and GitHub Release publication.
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 
 ## Extension boundary (Spark-owned; Pi SDK kernel retained)

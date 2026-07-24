@@ -2,7 +2,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -43,10 +43,14 @@ const tarballs = (await readdir(releaseDirectory)).filter((name) => name.endsWit
 if (tarballs.length !== 1) {
   throw new Error(`Expected one release tarball, found ${tarballs.length}`);
 }
-const assetName = tarballs[0];
-if (packedMetadata.filename !== assetName) {
-  throw new Error(`npm reported ${packedMetadata.filename}, but release contains ${assetName}`);
+const packedAssetName = tarballs[0];
+if (packedMetadata.filename !== packedAssetName) {
+  throw new Error(
+    `npm reported ${packedMetadata.filename}, but release contains ${packedAssetName}`,
+  );
 }
+const assetName = `spark-v${rootManifest.version}.tgz`;
+await rename(resolve(releaseDirectory, packedAssetName), resolve(releaseDirectory, assetName));
 const tarball = await readFile(resolve(releaseDirectory, assetName));
 const buildInfo = JSON.parse(
   await readFile(resolve(productDirectory, "dist/build-info.json"), "utf8"),

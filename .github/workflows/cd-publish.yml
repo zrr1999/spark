@@ -1,0 +1,131 @@
+name: "CD - Publish"
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: cd-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run repository checks
+        run: pnpm run check
+
+      - name: Run Cockpit browser tests
+        run: pnpm run test:browser:cockpit
+
+      - name: Build the release artifact once
+        env:
+          SPARK_BUILD_GIT_SHA: ${{ github.sha }}
+        run: pnpm run release:pack
+
+      - name: Verify release metadata
+        run: node scripts/verify-release-state.mjs --artifact-only
+
+      - name: Smoke the exact release artifact
+        run: node scripts/smoke-npm-product.mjs --tarball dist/release/spark-${{ github.ref_name }}.tgz
+
+      - name: Verify N-1 expand-only migration compatibility
+        run: node scripts/test-release-migration.mjs --tarball dist/release/spark-${{ github.ref_name }}.tgz
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: spark-release-${{ github.ref_name }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+
+      - name: Download release artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: spark-release-${{ github.ref_name }}
+          path: dist/release
+
+      - name: Verify artifact and published state
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verify-release-state.mjs
+
+      - name: Stage draft GitHub Release
+        if: steps.release.outputs.github_published != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          name: Spark ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/release/spark-${{ github.ref_name }}.tgz
+            dist/release/release-manifest.json
+            dist/release/SHA256SUMS
+
+      - name: Publish the exact artifact to npm
+        if: steps.release.outputs.npm_published != 'true'
+        uses: JS-DevTools/npm-publish@v4
+        with:
+          package: dist/release/spark-${{ github.ref_name }}.tgz
+          access: public
+          tag: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
+          provenance: true
+          token: ${{ secrets.NPM_TOKEN }}
+
+      - name: Attest release artifact
+        if: steps.release.outputs.github_published != 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/release/spark-${{ github.ref_name }}.tgz
+
+      - name: Publish GitHub Release after npm succeeds
+        if: steps.release.outputs.github_published != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}

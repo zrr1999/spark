@@ -15,7 +15,7 @@ must match it exactly (`vX.Y.Z`).
 
 ## Release gate
 
-`.github/workflows/release.yml` runs the complete repository gate, Cockpit
+`.github/workflows/cd-publish.yml` runs the complete repository gate, Cockpit
 browser tests, exact-tarball product smoke, and the N-1 expand-only migration
 gate. `pnpm run release:pack` builds once and writes:
 
@@ -26,9 +26,11 @@ gate. `pnpm run release:pack` builds once and writes:
 The manifest binds npm integrity, asset SHA256, Git SHA, build fingerprint,
 minimum updater version, rollback range, and migration mode. Stable versions
 publish with npm tag `latest`; prereleases use `next` and a GitHub prerelease.
-The GitHub Release stays draft until npm publication succeeds. A workflow
-rerun compares the already-published npm integrity and fails closed on any
-difference.
+The workflow passes the immutable candidate between jobs with GitHub's artifact
+actions, stages a draft with `softprops/action-gh-release`, publishes the exact
+tarball with `JS-DevTools/npm-publish`, and publishes the GitHub Release only
+after npm succeeds. A rerun compares the already-published npm and GitHub asset
+integrities and fails closed on any difference.
 
 Configure the GitHub `npm-release` environment with required reviewers and
 enable immutable releases in repository settings. Give the workflow
@@ -41,7 +43,7 @@ The first publication may use a short-lived, package-scoped granular
 
 1. Push the first reviewed version tag and let the protected workflow publish.
 2. Configure npm trusted publishing for repository `zrr1999/spark`, workflow
-   `.github/workflows/release.yml`, and environment `npm-release`.
+   `.github/workflows/cd-publish.yml`, and environment `npm-release`.
 3. Rerun a prerelease through OIDC provenance to verify trusted publishing.
 4. Revoke and remove the one-time token from npm and GitHub.
 
