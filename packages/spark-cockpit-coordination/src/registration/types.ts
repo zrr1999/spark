@@ -116,11 +116,11 @@ export class RuntimeTokenRefreshError extends Error {
 }
 
 export class RuntimeRelocationPreflightError extends Error {
-  constructor(
-    message: string,
-    readonly reasonCode: string,
-  ) {
+  readonly reasonCode: string;
+
+  constructor(message: string, reasonCode: string) {
     super(message);
+    this.reasonCode = reasonCode;
   }
 }
 

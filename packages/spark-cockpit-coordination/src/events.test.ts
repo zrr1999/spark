@@ -99,4 +99,49 @@ describe("event streaming helpers", () => {
     expect(secondDrain.rows.at(-1)?.payloadJson).toContain('"index":187');
     db.close();
   });
+
+  it("keeps workspace-scoped cursor scans on the workspace sequence index", () => {
+    const db = openMemoryDatabase();
+    migrate(db);
+    const now = "2026-07-24T00:00:00.000Z";
+    const insertWorkspace = db.prepare(
+      `INSERT INTO workspaces
+        (id, slug, name, status, settings_json, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', '{}', ?, ?)`,
+    );
+    insertWorkspace.run("ws_a", "workspace-a", "Workspace A", now, now);
+    insertWorkspace.run("ws_b", "workspace-b", "Workspace B", now, now);
+    const watermark = appendEvent(db, { actorKind: "server", kind: "watermark", createdAt: now });
+    appendEvent(db, {
+      workspaceId: "ws_a",
+      actorKind: "server",
+      kind: "workspace-a.event",
+      createdAt: now,
+    });
+    appendEvent(db, {
+      workspaceId: "ws_b",
+      actorKind: "server",
+      kind: "workspace-b.event",
+      createdAt: now,
+    });
+
+    expect(loadEventBatch(db, watermark, 10, "ws_a").map((event) => event.kind)).toEqual([
+      "workspace-a.event",
+    ]);
+
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id
+           FROM events
+          WHERE workspace_id = ? AND ingest_sequence > ?
+          ORDER BY ingest_sequence ASC
+          LIMIT ?`,
+      )
+      .all("ws_a", watermark.sequence, 10) as Array<{ detail: string }>;
+    expect(plan.some(({ detail }) => detail.includes("events_workspace_ingest_sequence_idx"))).toBe(
+      true,
+    );
+    db.close();
+  });
 });

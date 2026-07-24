@@ -1,11 +1,11 @@
 <script lang="ts">
   import { invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
+  import { visibleConversationPartText } from "$lib/components/conversation/conversation-view";
   import {
     sessionStatusIdentity,
     sessionStatusUsage,
-    visibleConversationPartText,
-  } from "$lib/components/conversation";
+  } from "$lib/components/conversation/session-status";
   import type {
     SessionQueueItem,
     SessionQueueLabels,
@@ -37,10 +37,15 @@
     type SparkSessionView,
   } from "@zendev-lab/spark-protocol";
   import type { CockpitMessages } from "@zendev-lab/spark-cockpit-i18n";
-  import { onMount, tick, untrack } from "svelte";
+  import {
+    onMount,
+    tick,
+    untrack,
+    type Component,
+    type Snippet,
+  } from "svelte";
   import SessionDetailsPanel from "$lib/sessions-workspace/SessionDetailsPanel.svelte";
   import SessionStartPane from "$lib/sessions-workspace/SessionStartPane.svelte";
-  import SessionConversationPane from "$lib/sessions-workspace/SessionConversationPane.svelte";
   import type { SessionConversationHost } from "$lib/sessions-workspace/conversation-host";
   // SessionAskPanel mounts from SessionComposerPane via conversationHost.sessionPendingAsk.
   import {
@@ -84,6 +89,10 @@
   } from "$lib/sessions-workspace/types";
 
   type Messages = CockpitMessages["sessions"];
+  type ConversationPaneComponent = Component<{
+    host: SessionConversationHost;
+    sessionDetails: Snippet<[boolean?]>;
+  }>;
 
   type Props = {
     sessions: SessionRecord[];
@@ -133,6 +142,24 @@
   let selected = $derived(
     sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
   );
+  let ConversationPane = $state<ConversationPaneComponent | null>(null);
+  let conversationPaneRequest: Promise<ConversationPaneComponent> | null = null;
+
+  $effect(() => {
+    if (!selected || ConversationPane) return;
+    let cancelled = false;
+    conversationPaneRequest ??= import(
+      "$lib/sessions-workspace/SessionConversationPane.svelte"
+    ).then((module) => module.default);
+    void conversationPaneRequest.then((component) => {
+      if (!cancelled) ConversationPane = component;
+    }, () => {
+      conversationPaneRequest = null;
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
   let sessionPendingAsk = $derived.by(() => {
     const ask = (page.data as { pendingAsk?: PendingWorkbenchAsk | null }).pendingAsk;
     if (!ask?.sessionId || !selected?.sessionId) return null;
@@ -709,8 +736,10 @@
         onSlashSelect={(suggestion) => selectSlashSuggestion(suggestion, "start")}
         onSlashAction={(action) => handleSlashAction(action, "start")}
       />
+    {:else if ConversationPane}
+      <ConversationPane host={conversationHost} {sessionDetails} />
     {:else}
-      <SessionConversationPane host={conversationHost} {sessionDetails} />
+      <div class="conversation-loading" aria-busy="true"></div>
     {/if}
   </main>
 
@@ -733,6 +762,15 @@
     height: 100%;
     min-height: 520px;
     overflow: hidden;
+  }
+
+  .conversation-loading {
+    background:
+      linear-gradient(90deg, var(--color-surface-muted), transparent 60%) 24px 32px / 55% 12px
+        no-repeat,
+      linear-gradient(90deg, var(--color-surface-muted), transparent 70%) 24px 60px / 72% 10px
+        no-repeat;
+    min-height: 180px;
   }
 
   .sessions-stage.has-selection {

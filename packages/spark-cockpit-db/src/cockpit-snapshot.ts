@@ -82,12 +82,14 @@ export interface CockpitRestoreResult {
 }
 
 export class CockpitDatabaseLockedError extends Error {
-  constructor(
-    readonly lockPath: string,
-    readonly record: Partial<CockpitDatabaseLockRecord> | null,
-  ) {
+  readonly lockPath: string;
+  readonly record: Partial<CockpitDatabaseLockRecord> | null;
+
+  constructor(lockPath: string, record: Partial<CockpitDatabaseLockRecord> | null) {
     const owner = record?.pid ? ` by process ${record.pid}` : "";
     super(`Spark Cockpit database is locked${owner}: ${lockPath}`);
+    this.lockPath = lockPath;
+    this.record = record;
     this.name = "CockpitDatabaseLockedError";
   }
 }

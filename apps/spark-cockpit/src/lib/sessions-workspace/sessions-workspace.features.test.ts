@@ -10,7 +10,11 @@ import {
 import { connectionLabel, modelValue, queueRemoveFormId } from "./presentation";
 import { resultMessage, resultModel, invocationStatusFromActionResult } from "./form-results";
 import { slashActionAvailability, type SlashAvailabilityContext } from "./slash-availability";
-import { bumpTimelineRenderLimit, loadLatestSessionTimeline } from "./timeline-window";
+import {
+  bumpTimelineRenderLimit,
+  clearLatestSessionTimelineCache,
+  loadLatestSessionTimeline,
+} from "./timeline-window";
 import { adoptQueuedTurnIntoLiveState, adoptCancelledTurnIntoLiveState } from "./turn-adoption";
 import { createSessionLiveEventState } from "$lib/session-live-events";
 import { SESSION_TIMELINE_PAGE_SIZE } from "$lib/session-timeline";
@@ -211,6 +215,7 @@ describe("sessions-workspace feature safety net", () => {
   });
 
   it("refreshes the canonical latest transcript window without a cursor", async () => {
+    clearLatestSessionTimelineCache();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -245,6 +250,49 @@ describe("sessions-workspace feature safety net", () => {
       cache: "no-store",
     });
     fetchSpy.mockRestore();
+  });
+
+  it("reuses a recent canonical snapshot behind the server revision fence", async () => {
+    clearLatestSessionTimelineCache();
+    const updatedAt = "2026-07-24T00:00:00.000Z";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          snapshot: {
+            version: 1,
+            sessionId: "sess_cached",
+            status: "idle",
+            updatedAt,
+            messages: [],
+            tools: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            metadata: {},
+          },
+          history: {
+            totalMessages: 0,
+            loadedMessages: 0,
+            hiddenMessages: 0,
+            earlierMessages: 0,
+            laterMessages: 0,
+            hasEarlierMessages: false,
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      loadLatestSessionTimeline("sess_cached", { minimumUpdatedAt: updatedAt }),
+    ).resolves.toMatchObject({ snapshot: { sessionId: "sess_cached" } });
+    await expect(
+      loadLatestSessionTimeline("sess_cached", { minimumUpdatedAt: updatedAt }),
+    ).resolves.toMatchObject({ snapshot: { sessionId: "sess_cached" } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    fetchSpy.mockRestore();
+    clearLatestSessionTimelineCache();
   });
 });
 

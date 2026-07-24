@@ -61,8 +61,11 @@ export type SparkDaemonServerProfileCasResult =
   | { applied: false; current: SparkDaemonServerProfile | undefined };
 
 export class SparkDaemonServerProfilesLockTimeoutError extends Error {
-  constructor(readonly lockPath: string) {
+  readonly lockPath: string;
+
+  constructor(lockPath: string) {
     super(`Timed out waiting for Spark daemon server profiles lock: ${lockPath}`);
+    this.lockPath = lockPath;
     this.name = "SparkDaemonServerProfilesLockTimeoutError";
   }
 }
