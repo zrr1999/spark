@@ -20,6 +20,50 @@ export const sparkTurnOriginBindingSchema = z.object({
   recipient: z.string().min(1),
 });
 
+export const SPARK_TURN_ATTACHMENT_MAX_COUNT = 8;
+export const SPARK_TURN_ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024;
+export const SPARK_TURN_ATTACHMENT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+
+const sparkTurnAttachmentSchema = z
+  .object({
+    kind: z.enum(["image", "file"]),
+    name: z.string().trim().min(1).max(240),
+    mediaType: z.string().trim().min(1).max(160),
+    size: z.number().int().nonnegative().max(SPARK_TURN_ATTACHMENT_MAX_BYTES),
+    /** Raw base64 bytes; data URLs are rejected at the browser boundary. */
+    data: z.string().max(Math.ceil((SPARK_TURN_ATTACHMENT_MAX_BYTES * 4) / 3) + 4),
+  })
+  .superRefine((attachment, context) => {
+    const decodedSize = decodedBase64Size(attachment.data);
+    if (decodedSize === null || decodedSize !== attachment.size) {
+      context.addIssue({
+        code: "custom",
+        message: "attachment data must be canonical base64 matching size",
+        path: ["data"],
+      });
+    }
+    if (attachment.kind === "image" && !attachment.mediaType.startsWith("image/")) {
+      context.addIssue({
+        code: "custom",
+        message: "image attachment mediaType must start with image/",
+        path: ["mediaType"],
+      });
+    }
+  });
+
+export const sparkTurnAttachmentsSchema = z
+  .array(sparkTurnAttachmentSchema)
+  .max(SPARK_TURN_ATTACHMENT_MAX_COUNT)
+  .superRefine((attachments, context) => {
+    const totalBytes = attachments.reduce((total, attachment) => total + attachment.size, 0);
+    if (totalBytes > SPARK_TURN_ATTACHMENT_MAX_TOTAL_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message: `turn attachments exceed ${SPARK_TURN_ATTACHMENT_MAX_TOTAL_BYTES} bytes`,
+      });
+    }
+  });
+
 export const sparkTurnSubmitRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string(),
@@ -30,6 +74,7 @@ export const sparkTurnSubmitRequestSchema = z.object({
     .optional(),
   reset: z.boolean().optional(),
   originBinding: sparkTurnOriginBindingSchema.optional(),
+  attachments: sparkTurnAttachmentsSchema.optional(),
 });
 
 export const sparkTurnSubmitResultSchema = z.object({
@@ -165,6 +210,7 @@ export const sparkInvocationRetentionPreviewResultSchema = z.object({
 });
 
 export type SparkInvocationStatus = z.infer<typeof sparkInvocationStatusSchema>;
+export type SparkTurnAttachment = z.infer<typeof sparkTurnAttachmentSchema>;
 export type SparkTurnSubmitRequest = z.infer<typeof sparkTurnSubmitRequestSchema>;
 export type SparkTurnSubmitResult = z.infer<typeof sparkTurnSubmitResultSchema>;
 export type SparkInvocationListRequest = z.infer<typeof sparkInvocationListRequestSchema>;
@@ -186,3 +232,11 @@ export type SparkInvocationRetentionPreviewRequest = z.infer<
 export type SparkInvocationRetentionPreviewResult = z.infer<
   typeof sparkInvocationRetentionPreviewResultSchema
 >;
+
+function decodedBase64Size(value: string): number | null {
+  if (value.length === 0) return 0;
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)) return null;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const bytes = (value.length * 3) / 4 - padding;
+  return Number.isInteger(bytes) ? bytes : null;
+}

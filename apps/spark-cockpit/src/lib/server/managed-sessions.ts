@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES } from "@zendev-lab/spark-protocol";
 import type {
   SparkSessionBindRequest,
+  SparkSessionMediaReadRequest,
+  SparkSessionMediaReadResult,
   SparkSessionRegistryRecord,
   SparkSideThreadSnapshot,
 } from "@zendev-lab/spark-protocol";
@@ -34,6 +37,10 @@ export interface CockpitManagedSessionsClient {
     sessionId: string,
     options?: CockpitRuntimeSessionSnapshotRequest,
   ): Promise<SessionSnapshotWindow>;
+  media?(
+    sessionId: string,
+    request: Omit<SparkSessionMediaReadRequest, "sessionId">,
+  ): Promise<SparkSessionMediaReadResult>;
   sideThreadSnapshot?(
     parentSessionId: string,
     options?: { beforeExchangeId?: string; limit?: number },
@@ -246,6 +253,73 @@ export async function getManagedSessionSnapshotForCockpit(
     }
     throw error;
   }
+}
+
+export async function getManagedSessionMediaForCockpit(
+  sessionId: string,
+  request: Pick<SparkSessionMediaReadRequest, "messageId" | "contentIndex">,
+  client: CockpitManagedSessionsClient = runtimeManagedSessionsClient,
+): Promise<{
+  body: Buffer;
+  mediaType: SparkSessionMediaReadResult["mediaType"];
+  name?: string;
+} | null> {
+  if (!client.media) return null;
+  try {
+    const session = await client.get(sessionId);
+    if (!isCockpitWorkspaceSession(session)) return null;
+    const first = await client.media(sessionId, {
+      ...request,
+      offset: 0,
+      limit: SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES,
+    });
+    const body = Buffer.alloc(first.sizeBytes);
+    copySessionMediaChunk(body, first, request);
+    let nextOffset = first.nextOffset;
+    while (nextOffset !== undefined) {
+      const chunk = await client.media(sessionId, {
+        ...request,
+        offset: nextOffset,
+        limit: SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES,
+      });
+      copySessionMediaChunk(body, chunk, request);
+      nextOffset = chunk.nextOffset;
+    }
+    return {
+      body,
+      mediaType: first.mediaType,
+      ...(first.name ? { name: first.name } : {}),
+    };
+  } catch (error) {
+    if (error instanceof CockpitRuntimeSessionUnavailableError) return null;
+    if (isCockpitRuntimeSessionNotFoundError(error)) return null;
+    if (
+      error instanceof RuntimeControlCommandError &&
+      error.reasonCode === "COMMAND_RESULT_TIMEOUT"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function copySessionMediaChunk(
+  target: Buffer,
+  chunk: SparkSessionMediaReadResult,
+  request: Pick<SparkSessionMediaReadRequest, "messageId" | "contentIndex">,
+): void {
+  if (
+    chunk.messageId !== request.messageId ||
+    chunk.contentIndex !== request.contentIndex ||
+    chunk.sizeBytes !== target.byteLength
+  ) {
+    throw new RuntimeControlCommandError(
+      "Session media changed while it was being read.",
+      "SESSION_MEDIA_CHANGED",
+    );
+  }
+  const decoded = Buffer.from(chunk.data, "base64");
+  decoded.copy(target, chunk.offset);
 }
 
 /**

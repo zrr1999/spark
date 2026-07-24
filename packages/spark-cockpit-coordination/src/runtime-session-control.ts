@@ -440,6 +440,11 @@ export function recordRuntimeSessionControlProjection(
     const sessionId = requireCommandSessionId(command);
     const snapshot = sparkSessionViewSchema.parse(projection.data.snapshot);
     const history = parseHistory(projection.data.history, snapshot.messages.length);
+    // Cursor-addressed history pages are command results for one browser, not
+    // replacements for the canonical latest-session projection. Persisting an
+    // older page here makes a later navigation paint that middle window as if
+    // it were the transcript tail.
+    if (history.laterMessages > 0) return;
     updateRuntimeSessionSnapshot(
       db,
       command.runtimeId,
@@ -742,7 +747,12 @@ function requireCommandSessionId(command: RuntimeControlCommandRecord): string {
 function parseHistory(
   value: unknown,
   loadedMessages: number,
-): { totalMessages: number; loadedMessages: number; hiddenMessages: number } {
+): {
+  totalMessages: number;
+  loadedMessages: number;
+  hiddenMessages: number;
+  laterMessages: number;
+} {
   if (!isRecord(value)) {
     throw new RuntimeControlCommandError(
       "Session snapshot history projection is invalid.",
@@ -752,13 +762,21 @@ function parseHistory(
   const total = integer(value.totalMessages);
   const loaded = integer(value.loadedMessages);
   const hidden = integer(value.hiddenMessages);
+  // Older runtime peers did not project cursor direction. Their only emitted
+  // snapshot was the latest window, so absence remains compatible with zero.
+  const later = value.laterMessages === undefined ? 0 : integer(value.laterMessages);
   if (loaded !== loadedMessages || total !== loaded + hidden) {
     throw new RuntimeControlCommandError(
       "Session snapshot history counts are inconsistent.",
       "SESSION_SNAPSHOT_INVALID",
     );
   }
-  return { totalMessages: total, loadedMessages: loaded, hiddenMessages: hidden };
+  return {
+    totalMessages: total,
+    loadedMessages: loaded,
+    hiddenMessages: hidden,
+    laterMessages: later,
+  };
 }
 
 function runtimeSessionProjectionRecord(

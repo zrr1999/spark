@@ -54,6 +54,8 @@ describe("daemon session registry", () => {
       recordTurnQueued: (sessionId, now) => track(() => backing.recordTurnQueued(sessionId, now)),
       recordTurnSettled: (sessionId, now) => track(() => backing.recordTurnSettled(sessionId, now)),
       recordRun: (input) => track(() => backing.recordRun(input)),
+      bindTranscriptPath: (input) => track(() => backing.bindTranscriptPath(input)),
+      relocateTranscriptPath: (input) => track(() => backing.relocateTranscriptPath(input)),
       ensureSideThread: (input) => track(() => backing.ensureSideThread(input)),
       resetSideThread: (input) => track(() => backing.resetSideThread(input)),
       configureSideThread: (input) => track(() => backing.configureSideThread(input)),

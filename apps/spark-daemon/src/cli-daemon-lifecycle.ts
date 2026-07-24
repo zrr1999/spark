@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createSparkProviderControl } from "@zendev-lab/spark-ai/control";
 import { createId } from "@zendev-lab/spark-protocol";
@@ -15,6 +16,7 @@ import {
 import { createSparkDaemonUplinkControl, startSparkDaemon } from "./daemon.js";
 import { getSparkDaemonServerProfile } from "./server-profiles.js";
 import { createSparkDaemonModelControl } from "./model-control.ts";
+import { unifyDaemonSessionTranscripts } from "./session-transcript-unification.ts";
 import type { DaemonChannelIngressRuntime } from "./channels/ingress.ts";
 import { SparkDaemonHumanWaitRegistry } from "./core/human-waits.ts";
 import { SparkDaemonLeaseTransferBroker } from "./core/lease-transfer.ts";
@@ -249,6 +251,23 @@ export async function start(
       ...(respondHumanInteraction ? { respondHumanInteraction } : {}),
     });
   try {
+    const transcriptMigration = await unifyDaemonSessionTranscripts({
+      registry: sessionRegistry,
+      transcriptSparkHome: paths.piAgentDir ?? join(paths.dataDir, "pi-agent"),
+      backupRoot: join(
+        paths.dataDir,
+        "backups",
+        "session-transcript-unification",
+        new Date().toISOString().replaceAll(":", "-"),
+      ),
+      apply: true,
+    });
+    const migratedSessions = transcriptMigration.sessions.filter((session) => session.changed);
+    if (migratedSessions.length > 0) {
+      console.error(
+        `[spark-daemon] unified ${migratedSessions.length} session transcripts; backup: ${transcriptMigration.backupRoot}`,
+      );
+    }
     await startSparkDaemon({
       paths,
       ...(process.env.SPARK_HOME?.trim() ? { sparkHome: process.env.SPARK_HOME.trim() } : {}),

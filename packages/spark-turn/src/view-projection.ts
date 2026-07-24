@@ -25,6 +25,10 @@ export function nextViewMessageId(sessionId: string, role: string): string {
 
 export function messageToView(message: Message, id: string): SparkMessageView {
   const role = message.role === "toolResult" ? "tool" : message.role;
+  const parts =
+    role === "user"
+      ? assistantConversationParts((message as { content?: unknown }).content, id, "done")
+      : [];
   return {
     version: SPARK_PROTOCOL_VERSION,
     id,
@@ -32,6 +36,7 @@ export function messageToView(message: Message, id: string): SparkMessageView {
     text: contentToText((message as { content?: unknown }).content),
     status: "done",
     createdAt: timestampToIso((message as { timestamp?: unknown }).timestamp),
+    ...(parts.length > 0 ? { parts } : {}),
     metadata: jsonMetadata({ sourceRole: message.role }),
   };
 }
@@ -189,6 +194,7 @@ export function contentToText(content: unknown): string {
     .map((part) => {
       if (!part || typeof part !== "object") return String(part);
       if ("type" in part && part.type === "text" && "text" in part) return String(part.text);
+      if ("type" in part && part.type === "image") return "";
       if ("type" in part && part.type === "toolCall" && "name" in part) {
         return `[tool call: ${String(part.name)}]`;
       }

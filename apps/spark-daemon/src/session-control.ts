@@ -11,6 +11,7 @@ import {
   sparkSessionCreateRequestSchema,
   sparkSessionGetRequestSchema,
   sparkSessionListRequestSchema,
+  sparkSessionMediaReadRequestSchema,
   sparkSessionSnapshotPageSchema,
   sparkSessionSnapshotRequestSchema,
   sparkSessionUnbindRequestSchema,
@@ -29,7 +30,11 @@ import {
   type SparkSessionRegistryRecord,
   type SparkSessionView,
 } from "@zendev-lab/spark-protocol";
-import { loadSparkSessionSnapshot, SparkSessionRegistryError } from "@zendev-lab/spark-session";
+import {
+  loadSparkSessionMediaChunk,
+  loadSparkSessionSnapshot,
+  SparkSessionRegistryError,
+} from "@zendev-lab/spark-session";
 import type { SparkPaths } from "@zendev-lab/spark-system";
 
 import type { SparkDaemonModelControl } from "./model-control.ts";
@@ -59,6 +64,7 @@ export interface SparkDaemonSessionControlRequest {
     | "session.list.request"
     | "session.get.request"
     | "session.snapshot.request"
+    | "session.media.read.request"
     | "session.create.request"
     | "session.bind.request"
     | "session.unbind.request"
@@ -139,6 +145,26 @@ export async function executeSparkDaemonSessionControl(
       const window = boundedSessionSnapshot(snapshot, parsed);
       const data = publicObject(window);
       return { result: data, projection: { kind: "session.snapshot", data } };
+    }
+    case "session.media.read.request": {
+      const parsed = sparkSessionMediaReadRequestSchema.parse({
+        ...request.payload,
+        sessionId: request.sessionId ?? request.payload.sessionId,
+      });
+      const session = await requireSession(options, parsed.sessionId, request);
+      assertOrdinarySessionVisible(session);
+      if (!options.paths.piAgentDir) {
+        throw new Error("Spark daemon native session storage is not available.");
+      }
+      const chunk = await loadSparkSessionMediaChunk({
+        sessionsRoot: join(options.paths.piAgentDir, "sessions"),
+        session,
+        messageId: parsed.messageId,
+        contentIndex: parsed.contentIndex,
+        offset: parsed.offset,
+        limit: parsed.limit,
+      });
+      return { result: publicObject(chunk) };
     }
     case "session.create.request": {
       const parsed = sparkSessionCreateRequestSchema.parse(request.payload);
@@ -268,6 +294,7 @@ export async function executeSparkDaemonSessionControl(
             ...(route.workspaceId ? { workspaceId: route.workspaceId } : {}),
             ...(parsed.assignment ? { assignment: parsed.assignment } : {}),
             ...(parsed.messageMetadata ? { messageMetadata: parsed.messageMetadata } : {}),
+            ...(parsed.attachments?.length ? { attachments: parsed.attachments } : {}),
             ...(parsed.originBinding
               ? {
                   channelReply: {
@@ -377,6 +404,7 @@ function assertIdempotentTurnReplay(
     task.reset !== parsed.reset ||
     JSON.stringify(task.assignment) !== JSON.stringify(parsed.assignment) ||
     JSON.stringify(task.messageMetadata) !== JSON.stringify(parsed.messageMetadata) ||
+    JSON.stringify(task.attachments) !== JSON.stringify(parsed.attachments) ||
     JSON.stringify(originBindingFromTask(task)) !== JSON.stringify(parsed.originBinding)
   ) {
     throw new Error(`Invocation idempotency conflict: ${parsed.idempotencyKey ?? "unknown"}`);

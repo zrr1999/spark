@@ -485,6 +485,7 @@ function loadSessionReports(
               created_at AS createdAt
        FROM events
        WHERE workspace_id = ?
+         AND session_id = ?
          AND kind IN (
            'daemon.view_event',
            'daemon.task.lifecycle',
@@ -501,6 +502,7 @@ function loadSessionReports(
     )
     .all(
       input.workspaceId,
+      input.sessionId,
       input.sessionId,
       input.sessionId,
       input.sessionId,

@@ -272,6 +272,13 @@ export function createComposerController(sources: ComposerSources) {
     renewSubmissionId("session");
   }
 
+  function handleSessionAttachmentsChange() {
+    const transition = cockpitComposerFeedbackAfterInput(sendState);
+    sendState = transition.state;
+    if (transition.clearFeedback) sendFeedback = null;
+    renewSubmissionId("session");
+  }
+
   return {
     get startModel() {
       return startModel;
@@ -397,6 +404,7 @@ export function createComposerController(sources: ComposerSources) {
     renewSubmissionId,
     handleStartMessageChange,
     handleSessionMessageChange,
+    handleSessionAttachmentsChange,
     matchesStartPending: startConversationPendingSubmissionMatches,
   };
 }

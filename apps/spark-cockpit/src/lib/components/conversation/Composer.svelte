@@ -7,6 +7,7 @@
     name?: string;
     value?: string;
     rows?: number;
+    required?: boolean;
     placeholder: string;
     disabled?: boolean;
     submitDisabled?: boolean;
@@ -16,7 +17,9 @@
     ariaLabel: string;
     multilineHint: string;
     header?: Snippet;
+    attachments?: Snippet;
     actions?: Snippet;
+    tools?: Snippet;
     context?: Snippet;
     feedback?: Snippet;
     onValueChange?: (value: string) => void;
@@ -33,6 +36,7 @@
     name = "message",
     value = $bindable(""),
     rows = 3,
+    required = true,
     placeholder,
     disabled = false,
     submitDisabled = false,
@@ -42,7 +46,9 @@
     ariaLabel,
     multilineHint,
     header,
+    attachments,
     actions,
+    tools,
     context,
     feedback,
     onValueChange,
@@ -92,13 +98,14 @@
 
 <div class="conversation-composer-shell">
   {#if header}<div class="composer-header">{@render header()}</div>{/if}
+  {#if attachments}<div class="composer-attachments">{@render attachments()}</div>{/if}
   <div class="composer-body">
     <label class="sr-only" for={id}>{ariaLabel}</label>
     <textarea
       {id}
       {name}
       {rows}
-      required
+      {required}
       {placeholder}
       bind:value
       bind:this={textareaElement}
@@ -116,6 +123,7 @@
   {#if feedback}<div class="composer-feedback">{@render feedback()}</div>{/if}
   <footer class="composer-toolbar">
     <div class="composer-context">
+      {#if tools}{@render tools()}{/if}
       {#if context}{@render context()}{/if}
       <span class="keyboard-hint">{multilineHint}</span>
     </div>
@@ -125,8 +133,10 @@
         type="submit"
         data-conversation-submit
         disabled={disabled || submitDisabled}
+        aria-label={submitting ? submittingLabel : submitLabel}
+        title={submitting ? submittingLabel : submitLabel}
       >
-        <Icon name="play" size={15} />
+        <Icon name="arrow-up" size={17} stroke={2.2} />
         <span class="submit-label">{submitting ? submittingLabel : submitLabel}</span>
       </button>
     </div>
@@ -163,6 +173,15 @@
   .composer-header {
     min-width: 0;
     padding: 8px 12px 0;
+  }
+
+  .composer-attachments {
+    min-width: 0;
+    padding: 10px 12px 0;
+  }
+
+  .composer-header + .composer-attachments {
+    padding-top: 8px;
   }
 
   .composer-body {
@@ -215,14 +234,13 @@
 
   .composer-toolbar {
     align-items: center;
-    background: var(--color-surface-soft);
-    border-top: 1px solid var(--color-border-soft);
+    background: transparent;
     display: grid;
     gap: 8px;
     grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 40px;
+    min-height: 46px;
     min-width: 0;
-    padding: 8px;
+    padding: 6px 8px 8px;
   }
 
   .composer-context {
@@ -256,7 +274,8 @@
     align-items: center;
     background: var(--color-primary);
     border: 0;
-    border-radius: var(--rounded-md);
+    aspect-ratio: 1;
+    border-radius: 999px;
     color: var(--color-on-primary, #fff);
     cursor: pointer;
     display: inline-flex;
@@ -264,10 +283,11 @@
     font: inherit;
     font-size: 13px;
     font-weight: 600;
-    gap: 6px;
+    gap: 0;
     justify-content: center;
-    min-height: 40px;
-    padding: 0 13px;
+    height: 38px;
+    padding: 0;
+    width: 38px;
   }
 
   .composer-submit:hover:not(:disabled) {
@@ -282,6 +302,19 @@
   .composer-submit:disabled {
     cursor: not-allowed;
     opacity: 0.5;
+  }
+
+  .submit-label {
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 
   .sr-only {
@@ -309,28 +342,13 @@
     }
 
     .composer-submit {
-      padding-inline: 12px;
+      padding: 0;
     }
   }
 
   @container conversation-composer (max-width: 360px) {
     .composer-submit {
-      aspect-ratio: 1;
-      padding: 0;
-      width: 40px;
-    }
-
-    .submit-label {
-      border: 0;
-      clip: rect(0 0 0 0);
-      clip-path: inset(50%);
-      height: 1px;
-      margin: -1px;
-      overflow: hidden;
-      padding: 0;
-      position: absolute;
-      white-space: nowrap;
-      width: 1px;
+      width: 38px;
     }
   }
 

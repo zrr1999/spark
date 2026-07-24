@@ -21,7 +21,7 @@
   import { resolveSessionActivityState } from "$lib/session-activity-state";
   import {
     activeSessionTimelineProcessItemId,
-    buildSessionTimeline,
+    buildCanonicalSessionTimeline,
     latestSessionRetryCandidate,
     sessionTimelineWindow,
   } from "$lib/session-timeline";
@@ -188,7 +188,14 @@
     getInitialEventCursor: () => initialEventCursor,
     getActivityCommandIds: () => activityCommands.map((command) => command.id),
     getActivityInvocationIds: () =>
-      activityCommands.flatMap((command) => (command.invocationId ? [command.invocationId] : [])),
+      [
+        ...activityCommands.flatMap((command) =>
+          command.invocationId ? [command.invocationId] : [],
+        ),
+        ...activityReports.flatMap((report) =>
+          report.invocationId ? [report.invocationId] : [],
+        ),
+      ],
     getSessionActivityState: () => sessionActivityState,
     invalidateAll,
     onRefreshActivity: () => activityRefresh.scheduleActivityRefresh(),
@@ -329,23 +336,12 @@
         .map((turn) => turn.invocationId),
     ),
   );
-  let queuedPromptReportIds = $derived(
-    new Set(
-      queuedTurns
-        .filter((turn) => turn.status === "queued")
-        .map((turn) => `turn-submit:${turn.commandId}:prompt`),
-    ),
-  );
   let timelineSessionMessages = $derived(
     sessionMessages.filter((entry) => {
       const invocationId = sessionMessageInvocationId(entry);
       return !invocationId || !queuedInvocationIds.has(invocationId);
     }),
   );
-  let timelineActivityReports = $derived(
-    activityReports.filter((report) => !queuedPromptReportIds.has(report.id)),
-  );
-
   let modelRuntimeLabels = $derived(buildModelRuntimeLabels(copy));
   let statusBarLabels = $derived(buildStatusBarLabels(copy));
   let conversationPartLabels = $derived(buildConversationPartLabels(copy));
@@ -354,10 +350,8 @@
   );
 
   let timelineItems = $derived(
-    buildSessionTimeline({
+    buildCanonicalSessionTimeline({
       messages: timelineSessionMessages,
-      commands: activityCommands,
-      reports: timelineActivityReports,
       fallbackTimestamp:
         sessionView?.updatedAt ?? selected?.updatedAt ?? new Date(0).toISOString(),
     }),
@@ -649,6 +643,7 @@
     enhanceSendMessage,
     slashActionAvailability: (action, _surface) => slashActionAvailability(action, "session"),
     handleSessionMessageChange: composer.handleSessionMessageChange,
+    handleSessionAttachmentsChange: composer.handleSessionAttachmentsChange,
     handleSlashCompletionKeydown: (event, _surface) =>
       handleSlashCompletionKeydown(event, "session"),
     selectSlashSuggestion: (suggestion, _surface) => selectSlashSuggestion(suggestion, "session"),

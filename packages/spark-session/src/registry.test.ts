@@ -402,6 +402,63 @@ describe("SparkSessionRegistry", () => {
     await expect(registry.get(created.sessionId)).resolves.toEqual(replayed);
   });
 
+  it("binds a transcript without settling the turn and rejects implicit relocation", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({
+      sessionId: "sess_bound",
+      workspaceId: "ws_bound",
+      status: "running",
+    });
+    const bound = await registry.bindTranscriptPath({
+      sessionId: created.sessionId,
+      sessionPath: "/tmp/sessions/sess_bound.jsonl",
+    });
+
+    expect(bound).toMatchObject({
+      status: "running",
+      sessionPath: "/tmp/sessions/sess_bound.jsonl",
+    });
+    await expect(
+      registry.recordRun({
+        sessionId: created.sessionId,
+        sessionPath: "/tmp/sessions/another.jsonl",
+      }),
+    ).rejects.toMatchObject({
+      code: "session_transcript_conflict",
+    } satisfies Partial<SparkSessionRegistryError>);
+  });
+
+  it("relocates an ordinary transcript only through an explicit path CAS", async () => {
+    const registry = await tempRegistry();
+    const created = await registry.create({
+      sessionId: "sess_relocated",
+      workspaceId: "ws_relocated",
+    });
+    await registry.bindTranscriptPath({
+      sessionId: created.sessionId,
+      sessionPath: "/tmp/sessions/before.jsonl",
+    });
+
+    await expect(
+      registry.relocateTranscriptPath({
+        sessionId: created.sessionId,
+        expectedSessionPath: "/tmp/sessions/stale.jsonl",
+        sessionPath: "/tmp/sessions/after.jsonl",
+      }),
+    ).rejects.toMatchObject({
+      code: "session_transcript_cas_failed",
+    } satisfies Partial<SparkSessionRegistryError>);
+    await expect(
+      registry.relocateTranscriptPath({
+        sessionId: created.sessionId,
+        expectedSessionPath: "/tmp/sessions/before.jsonl",
+        sessionPath: "/tmp/sessions/after.jsonl",
+      }),
+    ).resolves.toMatchObject({
+      sessionPath: "/tmp/sessions/after.jsonl",
+    });
+  });
+
   it("tracks queued and settled turns for rail ordering", async () => {
     const registry = await tempRegistry();
     const created = await registry.create({

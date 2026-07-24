@@ -129,6 +129,7 @@ export type SessionConversationHost = {
   enhanceSendMessage: SubmitFunction;
   slashActionAvailability: (action: SparkActionView, surface: "session") => SlashActionAvailability;
   handleSessionMessageChange: (value: string) => void;
+  handleSessionAttachmentsChange: () => void;
   handleSlashCompletionKeydown: (event: KeyboardEvent, surface: "session") => void;
   selectSlashSuggestion: (
     suggestion: Readonly<{ id: string; command: string; title: string; description?: string }>,

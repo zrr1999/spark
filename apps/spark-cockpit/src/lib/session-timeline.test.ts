@@ -4,6 +4,7 @@ import { visibleConversationParts } from "./components/conversation/conversation
 import { visibleThinkingChainSteps } from "./components/conversation/thinking-chain-view";
 import {
   activeSessionTimelineProcessItemId,
+  buildCanonicalSessionTimeline,
   buildSessionTimeline,
   latestSessionRetryCandidate,
   latestSessionRetryPrompt,
@@ -12,6 +13,21 @@ import {
 } from "./session-timeline";
 
 describe("session timeline", () => {
+  it("builds the product conversation from daemon transcript messages only", () => {
+    const timeline = buildCanonicalSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [message("u1", "user", "Canonical prompt", "2026-07-10T00:00:01.000Z")],
+    });
+
+    expect(timeline).toEqual([
+      expect.objectContaining({
+        id: "message:u1",
+        sourceMessageId: "u1",
+        body: "Canonical prompt",
+      }),
+    ]);
+  });
+
   it("windows historical rendering without splitting a user and assistant turn", () => {
     const items = [
       timelineItem("u1", "user"),
@@ -528,6 +544,61 @@ describe("session timeline", () => {
       ["message:u1", "Try again"],
       ["report:turn-submit:two:prompt", "Try again"],
     ]);
+  });
+
+  it("does not duplicate a rebuilt direct assistant reply once the canonical message arrives", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [
+        message(
+          "assistant-native",
+          "assistant",
+          "Found seven sessions.",
+          "2026-07-10T00:00:02.000Z",
+        ),
+      ],
+      commands: [],
+      reports: [
+        {
+          id: "turn-submit:one:assistant",
+          kind: "turn.submit.assistant",
+          title: "Assistant reply",
+          text: "Found seven sessions.",
+          role: "assistant",
+          status: "done",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline.map((item) => [item.id, item.body])).toEqual([
+      ["message:assistant-native", "Found seven sessions."],
+    ]);
+  });
+
+  it("does not render an internal title above a rebuilt assistant reply", () => {
+    const timeline = buildSessionTimeline({
+      fallbackTimestamp: "2026-07-10T00:00:00.000Z",
+      messages: [],
+      commands: [],
+      reports: [
+        {
+          id: "turn-submit:one:assistant",
+          kind: "turn.submit.assistant",
+          title: "Assistant reply",
+          text: "Found seven sessions.",
+          role: "assistant",
+          status: "done",
+          createdAt: "2026-07-10T00:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]).toMatchObject({
+      body: "Found seven sessions.",
+      title: null,
+    });
   });
 
   it("labels channel users from platform metadata and leaves local turns unlabeled", () => {

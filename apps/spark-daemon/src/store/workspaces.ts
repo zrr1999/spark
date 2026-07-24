@@ -784,6 +784,34 @@ export function resolveWorkspaceLocalPath(
   return legacyMatches.length === 1 ? legacyMatches[0]!.localPath : undefined;
 }
 
+/**
+ * Resolve any session-facing workspace identity to the binding identity used
+ * by the Cockpit uplink. Channel sessions commonly retain the server
+ * workspace id or the pre-registration local key, while invocation delivery
+ * must be fenced by the current runtime workspace binding id.
+ */
+export function resolveWorkspaceBindingId(
+  db: DatabaseSync,
+  workspaceId: string,
+): string | undefined {
+  const direct = getWorkspaceById(db, workspaceId);
+  if (direct) return direct.serverBindingId ?? direct.id;
+
+  const serverMatches = listWorkspaces(db).filter(
+    (workspace) => workspace.serverWorkspaceId === workspaceId,
+  );
+  if (serverMatches.length === 1) {
+    return serverMatches[0]!.serverBindingId ?? serverMatches[0]!.id;
+  }
+
+  const legacyMatches = listWorkspaces(db).filter(
+    (workspace) => workspace.localWorkspaceKey === workspaceId,
+  );
+  return legacyMatches.length === 1
+    ? (legacyMatches[0]!.serverBindingId ?? legacyMatches[0]!.id)
+    : undefined;
+}
+
 export function getWorkspaceByKey(
   db: DatabaseSync,
   serverUrl: string,

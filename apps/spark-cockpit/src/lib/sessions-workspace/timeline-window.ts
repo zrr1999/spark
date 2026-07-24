@@ -25,6 +25,26 @@ export type TimelineHistoryLoadResult = {
   timelineRenderLimitDelta?: number;
 };
 
+/** Refresh the canonical transcript tail after the projected first paint. */
+export async function loadLatestSessionTimeline(
+  sessionId: string,
+): Promise<SessionSnapshotWindow | null> {
+  try {
+    const query = new URLSearchParams({ limit: String(SESSION_SNAPSHOT_PAGE_SIZE) });
+    const response = await fetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?${query}`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) return null;
+    const window = parseSessionSnapshotWindow(await response.json());
+    return window.snapshot.sessionId === sessionId && window.history.laterMessages === 0
+      ? window
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch older snapshot pages until the conversation window has enough anchors.
  * Pure of Svelte state: callers supply getters and apply the returned window.

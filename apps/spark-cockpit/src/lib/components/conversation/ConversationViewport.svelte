@@ -54,7 +54,10 @@
   let navigationAnimationFrame: number | undefined;
   let navigationPositions = $state<Record<string, number>>({});
   let activeNavigationId = $state("");
-  let showNavigationRail = $derived(navigationItems.length >= MIN_TURN_RAIL_ITEMS);
+  let viewportWidth = $state(Number.POSITIVE_INFINITY);
+  let showNavigationRail = $derived(
+    viewportWidth > 520 && navigationItems.length >= MIN_TURN_RAIL_ITEMS,
+  );
 
   $effect(() => {
     if (!hasEarlier) retryAfterMs = 0;
@@ -71,7 +74,9 @@
     if (!viewport) return;
     const element = viewport;
     const contentElement = content;
+    viewportWidth = element.clientWidth;
     const observer = new ResizeObserver(() => {
+      viewportWidth = element.clientWidth;
       if (atBottom && !suspendFollow) scheduleScrollToLatest();
       scheduleNavigationUpdate();
     });
@@ -339,6 +344,10 @@
     scrollbar-gutter: stable;
   }
 
+  .conversation-scroll.with-navigation {
+    padding-left: max(calc(var(--spacing-sm) + 30px), calc((100% - 800px) / 2 + 30px));
+  }
+
   .conversation-content {
     display: grid;
     gap: 22px;
@@ -406,12 +415,6 @@
   @media (max-width: 960px) {
     .conversation-scroll {
       padding-inline: var(--spacing-sm);
-    }
-  }
-
-  @media (min-width: 721px) and (max-width: 960px) {
-    .conversation-scroll.with-navigation {
-      padding-left: calc(var(--spacing-sm) + 22px);
     }
   }
 

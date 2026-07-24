@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSparkSessionRegistryRecord } from "@zendev-lab/spark-protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSparkSessionSnapshot } from "./snapshot.ts";
+import { loadSparkSessionMediaChunk, loadSparkSessionSnapshot } from "./snapshot.ts";
 
 const roots: string[] = [];
 
@@ -12,6 +12,80 @@ afterEach(async () => {
 });
 
 describe("loadSparkSessionSnapshot", () => {
+  it("projects persisted user images without folding bytes into message text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spark-session-image-"));
+    roots.push(root);
+    const transcriptPath = join(root, "session.jsonl");
+    const imageData = Buffer.from([137, 80, 78, 71]).toString("base64");
+    const entries = [
+      {
+        type: "session",
+        version: 3,
+        id: "sess_image",
+        timestamp: "2026-07-23T10:00:00.000Z",
+        cwd: "/workspace/demo",
+      },
+      {
+        type: "message",
+        id: "user-image",
+        parentId: null,
+        timestamp: "2026-07-23T10:00:01.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "[图片]\n这是什么动物" },
+            { type: "image", data: imageData, mimeType: "image/png", name: "cat.png" },
+          ],
+        },
+      },
+    ];
+    await writeFile(
+      transcriptPath,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+    const session = parseSparkSessionRegistryRecord({
+      sessionId: "sess_image",
+      scope: { kind: "workspace", workspaceId: "ws_demo" },
+      status: "ready",
+      sessionPath: transcriptPath,
+      bindings: [],
+      createdAt: "2026-07-23T10:00:00.000Z",
+      updatedAt: "2026-07-23T10:00:01.000Z",
+    });
+
+    const snapshot = await loadSparkSessionSnapshot({ sessionsRoot: root, session });
+
+    expect(snapshot.messages).toMatchObject([
+      {
+        id: "user-image",
+        text: "[图片]\n这是什么动物",
+        parts: [
+          { type: "text", text: "[图片]\n这是什么动物" },
+          { type: "image", contentIndex: 1, mediaType: "image/png", name: "cat.png" },
+        ],
+      },
+    ]);
+
+    const media = await loadSparkSessionMediaChunk({
+      sessionsRoot: root,
+      session,
+      messageId: "user-image",
+      contentIndex: 1,
+      offset: 0,
+      limit: 2,
+    });
+    expect(media).toMatchObject({
+      messageId: "user-image",
+      contentIndex: 1,
+      mediaType: "image/png",
+      sizeBytes: 4,
+      data: Buffer.from([137, 80]).toString("base64"),
+      nextOffset: 2,
+      complete: false,
+    });
+  });
+
   it("projects lifetime usage, current context, runtime selection, and daemon-local branch", async () => {
     const root = await mkdtemp(join(tmpdir(), "spark-session-usage-"));
     roots.push(root);

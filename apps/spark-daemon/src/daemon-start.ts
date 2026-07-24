@@ -74,6 +74,7 @@ import {
   markSparkDaemonServerDisconnected,
   reconcileWorkspaces,
   reconcileWorkspacesForServer,
+  resolveWorkspaceBindingId,
   resolveWorkspaceLocalPath,
 } from "./store/workspaces.js";
 import { runSparkCommandBridge, cancelSparkBridgeInvocation } from "./spark/bridge.js";
@@ -1051,6 +1052,12 @@ function prepareChannelIngress(
               `channel session ${assignment.sessionId} has no daemon-local execution directory`,
             );
           }
+          const workspaceBindingId = resolveWorkspaceBindingId(options.db, workspaceId);
+          if (!workspaceBindingId) {
+            throw new Error(
+              `channel session ${assignment.sessionId} has no runtime workspace binding`,
+            );
+          }
           const task = {
             type: "session.run" as const,
             sessionId: assignment.sessionId,
@@ -1059,6 +1066,7 @@ function prepareChannelIngress(
             ...(thinkingLevel ? { thinkingLevel } : {}),
             assignment: assignment.assignment,
             workspaceId,
+            workspaceBindingId,
             cwd,
             channelReply: {
               ...assignment.channelReply,

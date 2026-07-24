@@ -639,6 +639,7 @@ function isRuntimeSessionControlKind(
     kind === "session.list.request" ||
     kind === "session.get.request" ||
     kind === "session.snapshot.request" ||
+    kind === "session.media.read.request" ||
     kind === "session.create.request" ||
     kind === "session.bind.request" ||
     kind === "session.unbind.request" ||

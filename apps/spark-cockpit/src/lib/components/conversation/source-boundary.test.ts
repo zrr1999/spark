@@ -75,7 +75,8 @@ describe("source-derived conversation component boundary", () => {
     expect(shell).toContain('action="?/sendMessage"');
     expect(shell).toContain('action="?/selectModel"');
     expect(shell).toContain('action="?/selectThinking"');
-    expect(shell).toContain("use:enhance={host.enhanceSendMessage}");
+    expect(shell).toContain("use:enhance={enhanceSendMessage}");
+    expect(shell).toContain("host.enhanceSendMessage(submission)");
     expect(startPane).toContain('name="submissionId" value={startSubmissionId}');
     expect(shell).toContain('name="submissionId" value={host.sendSubmissionId}');
     expect(shell).toContain("retryAction={item.id === host.retryableTimelineItemId");

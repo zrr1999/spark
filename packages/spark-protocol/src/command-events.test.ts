@@ -149,6 +149,7 @@ describe("SparkCommand vocabulary", () => {
       "session.list.request",
       "session.get.request",
       "session.snapshot.request",
+      "session.media.read.request",
       "session.create.request",
       "session.bind.request",
       "session.unbind.request",

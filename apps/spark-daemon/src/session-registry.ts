@@ -50,6 +50,17 @@ export interface DaemonSessionRegistry {
     sessionPath: string;
     now?: Date;
   }): Promise<SparkSessionRegistryRecord>;
+  bindTranscriptPath(input: {
+    sessionId: string;
+    sessionPath: string;
+    now?: Date;
+  }): Promise<SparkSessionRegistryRecord>;
+  relocateTranscriptPath(input: {
+    sessionId: string;
+    expectedSessionPath?: string;
+    sessionPath: string;
+    now?: Date;
+  }): Promise<SparkSessionRegistryRecord>;
   ensureSideThread(input: EnsureSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
   resetSideThread(input: ResetSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
   configureSideThread(input: ConfigureSparkSideThreadInput): Promise<SparkSessionRegistryRecord>;
@@ -117,6 +128,8 @@ export function createSerializedDaemonSessionRegistry(
     recordTurnQueued: (sessionId, now) => mutate(() => registry.recordTurnQueued(sessionId, now)),
     recordTurnSettled: (sessionId, now) => mutate(() => registry.recordTurnSettled(sessionId, now)),
     recordRun: (input) => mutate(() => registry.recordRun(input)),
+    bindTranscriptPath: (input) => mutate(() => registry.bindTranscriptPath(input)),
+    relocateTranscriptPath: (input) => mutate(() => registry.relocateTranscriptPath(input)),
     ensureSideThread: (input) => mutate(() => registry.ensureSideThread(input)),
     resetSideThread: (input) => mutate(() => registry.resetSideThread(input)),
     configureSideThread: (input) => mutate(() => registry.configureSideThread(input)),
@@ -148,6 +161,8 @@ export function createDaemonSessionRegistry(
     recordTurnQueued: async (sessionId, now) => await registry.recordTurnQueued(sessionId, now),
     recordTurnSettled: async (sessionId, now) => await registry.recordTurnSettled(sessionId, now),
     recordRun: async (input) => await registry.recordRun(input),
+    bindTranscriptPath: async (input) => await registry.bindTranscriptPath(input),
+    relocateTranscriptPath: async (input) => await registry.relocateTranscriptPath(input),
     ensureSideThread: async (input) => await registry.ensureSideThread(input),
     resetSideThread: async (input) => await registry.resetSideThread(input),
     configureSideThread: async (input) => await registry.configureSideThread(input),

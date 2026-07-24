@@ -26,6 +26,12 @@ export type ConversationPart =
       streaming: boolean;
     }
   | {
+      type: "image";
+      contentIndex: number;
+      mediaType: "image/bmp" | "image/gif" | "image/jpeg" | "image/png" | "image/webp";
+      name?: string;
+    }
+  | {
       type: "reasoning";
       summary: string;
       state: "streaming" | "complete";
@@ -119,6 +125,8 @@ export type ConversationApprovalState =
 
 export type ConversationMessageView = {
   id: string;
+  /** Native transcript message id used by lazy media routes. */
+  sourceMessageId?: string;
   actor: "user" | "spark" | "session";
   body: string;
   title: string | null;

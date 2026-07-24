@@ -25,6 +25,7 @@ import {
   reconcileWorkspaces,
   registerWorkspace,
   releaseWorkspaceClient,
+  resolveWorkspaceBindingId,
   sparkDaemonServerStatusSummaries,
   stopWorkspace,
   workspaceKeyForName,
@@ -720,6 +721,13 @@ describe("Spark daemon workspace store", () => {
       });
       expect(workspaceSummaries(db)[0]?.bindingId).toBe("rtwb_11111111111141111111111111111111");
       expect(getWorkspaceById(db, "rtwb_11111111111141111111111111111111")?.id).toBe(local.id);
+      expect(resolveWorkspaceBindingId(db, local.id)).toBe("rtwb_11111111111141111111111111111111");
+      expect(resolveWorkspaceBindingId(db, "ws_11111111111141111111111111111111")).toBe(
+        "rtwb_11111111111141111111111111111111",
+      );
+      expect(resolveWorkspaceBindingId(db, local.localWorkspaceKey)).toBe(
+        "rtwb_11111111111141111111111111111111",
+      );
       expect(listWorkspaces(db)).toHaveLength(1);
     });
   });

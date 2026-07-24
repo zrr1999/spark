@@ -72,6 +72,49 @@ describe("Cockpit conversation control", () => {
     );
   });
 
+  it("forwards attachment bytes while keeping transcript metadata display-safe", async () => {
+    const submit = vi.fn().mockResolvedValue({
+      invocationId: "inv_attachment",
+      status: "queued",
+      acceptedAt: "2026-07-15T00:00:00.000Z",
+    });
+    const attachment = {
+      kind: "image" as const,
+      name: "shot.png",
+      mediaType: "image/png",
+      size: 3,
+      data: "AQID",
+    };
+
+    await submitConversationTurnForCockpit(
+      {
+        sessionId: "sess_demo",
+        prompt: "Inspect this image.\n\n[Image: shot.png]",
+        title: "Inspect this image.",
+        attachments: [attachment],
+      },
+      { submit },
+    );
+
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [attachment],
+        messageMetadata: {
+          origin: { kind: "user", host: "web", surface: "local" },
+          attachments: [
+            {
+              kind: "image",
+              name: "shot.png",
+              mediaType: "image/png",
+              size: 3,
+            },
+          ],
+        },
+      }),
+    );
+    expect(JSON.stringify(submit.mock.calls[0]?.[0].messageMetadata)).not.toContain("AQID");
+  });
+
   it("submits daemon-global messages without inventing a workspace target", async () => {
     const submit = vi.fn().mockResolvedValue({
       invocationId: "inv_global",

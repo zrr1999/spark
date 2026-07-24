@@ -2,10 +2,12 @@
 
 import {
   parseSparkAssignment,
+  sparkTurnAttachmentsSchema,
   type SparkAssignment,
   type SparkDaemonEvent,
   type SparkDriverContinuity,
   type SparkDriverKind,
+  type SparkTurnAttachment,
 } from "@zendev-lab/spark-protocol";
 import {
   CHANNEL_IMAGE_MAX_COUNT,
@@ -85,6 +87,8 @@ export interface SparkDaemonSessionRunTask {
   assignment?: SparkAssignment;
   /** Direct request message metadata persisted on the target user turn. */
   messageMetadata?: Record<string, unknown>;
+  /** Browser/local attachments frozen with the durable turn admission. */
+  attachments?: SparkTurnAttachment[];
   /** Complete immutable channel origin. Channel-origin tasks fail closed when this is incomplete. */
   channelReply?: {
     workspaceId: string;
@@ -159,6 +163,9 @@ export function validateSparkDaemonTask(value: unknown): SparkDaemonTask {
     ...(task.messageMetadata === undefined
       ? {}
       : { messageMetadata: requiredRecord(task.messageMetadata, "messageMetadata") }),
+    ...(task.attachments === undefined
+      ? {}
+      : { attachments: sparkTurnAttachmentsSchema.parse(task.attachments) }),
     ...(parseChannelReply(task.channelReply)
       ? { channelReply: parseChannelReply(task.channelReply) }
       : {}),

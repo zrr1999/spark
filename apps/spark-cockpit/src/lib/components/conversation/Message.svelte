@@ -4,6 +4,7 @@
   import ApprovalPart from "./ApprovalPart.svelte";
   import ArtifactPart from "./ArtifactPart.svelte";
   import ErrorPart from "./ErrorPart.svelte";
+  import ImagePart from "./ImagePart.svelte";
   import MessageActions from "./MessageActions.svelte";
   import NoticePart from "./NoticePart.svelte";
   import ReasoningPart from "./ReasoningPart.svelte";
@@ -19,6 +20,7 @@
 
   type Props = {
     item: ConversationMessageView;
+    sessionId: string;
     userLabel: string;
     assistantLabel: string;
     sessionLabel: string;
@@ -40,6 +42,7 @@
 
   let {
     item,
+    sessionId,
     userLabel,
     assistantLabel,
     sessionLabel,
@@ -100,6 +103,14 @@
             {:else}
               <p class="user-content">{part.text}</p>
             {/if}
+          {:else if part.type === "image"}
+            <ImagePart
+              {sessionId}
+              messageId={item.sourceMessageId ?? item.id}
+              contentIndex={part.contentIndex}
+              mediaType={part.mediaType}
+              name={part.name}
+            />
           {:else if part.type === "reasoning"}
             <ReasoningPart
               summary={part.summary}

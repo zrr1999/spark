@@ -35,8 +35,16 @@ export interface ChannelImageSource {
 export interface MaterializeChannelImagesOptions {
   /** Trusted test seam; production downloads use a DNS-pinned HTTPS request. */
   fetchImpl?: typeof fetch;
-  /** Test seam for DNS policy; every returned address must be publicly routable. */
+  /** Test seam for DNS policy; addresses must be public unless the platform URL is trusted. */
   lookupHostname?: ChannelImageHostnameLookup;
+  /**
+   * Narrow transport-owned exception for an authenticated platform media
+   * endpoint. HTTPS, credential-free URLs, DNS pinning, and redirect
+   * revalidation still apply.
+   */
+  isTrustedPrivateUrl?: (url: URL) => boolean;
+  /** Per-hop headers for authenticated platform media; do not return secrets for redirects. */
+  requestHeaders?: (url: URL) => Promise<Readonly<Record<string, string>> | undefined>;
   maxCount?: number;
   maxBytes?: number;
   maxTotalBytes?: number;
@@ -65,6 +73,8 @@ export async function materializeChannelImages(
       const image = await materializeChannelImage(source, {
         fetchImpl: options.fetchImpl,
         lookupHostname: options.lookupHostname,
+        isTrustedPrivateUrl: options.isTrustedPrivateUrl,
+        requestHeaders: options.requestHeaders,
         maxBytes: Math.min(maxBytes, maxTotalBytes - totalBytes),
       });
       const bytes = decodedBase64Bytes(image.data);
@@ -105,6 +115,8 @@ async function materializeChannelImage(
   options: {
     fetchImpl?: typeof fetch;
     lookupHostname?: ChannelImageHostnameLookup;
+    isTrustedPrivateUrl?: (url: URL) => boolean;
+    requestHeaders?: (url: URL) => Promise<Readonly<Record<string, string>> | undefined>;
     maxBytes: number;
   },
 ): Promise<ChannelImage> {
@@ -125,6 +137,8 @@ async function materializeChannelImage(
     source.url!,
     options.fetchImpl,
     options.lookupHostname ?? defaultHostnameLookup,
+    options.isTrustedPrivateUrl,
+    options.requestHeaders,
   );
   if (!response.ok) {
     throw new Error(`channel image download failed with HTTP ${response.status}`);
@@ -143,32 +157,43 @@ async function fetchImageWithRedirects(
   rawUrl: string,
   fetchImpl: typeof fetch | undefined,
   lookupHostname: ChannelImageHostnameLookup,
+  isTrustedPrivateUrl: ((url: URL) => boolean) | undefined,
+  requestHeaders: ((url: URL) => Promise<Readonly<Record<string, string>> | undefined>) | undefined,
 ): Promise<Response> {
-  let url = validateRemoteImageUrl(rawUrl);
+  let url = validateRemoteImageUrl(rawUrl, isTrustedPrivateUrl);
   for (let redirects = 0; redirects <= 3; redirects += 1) {
-    const resolved = await resolveRemoteImageAddresses(url, lookupHostname);
+    const resolved = await resolveRemoteImageAddresses(url, lookupHostname, isTrustedPrivateUrl);
+    const headers = requestHeaders ? await requestHeaders(url) : undefined;
     const response = fetchImpl
-      ? await fetchImpl(url.toString(), { method: "GET", redirect: "manual" })
-      : await fetchPinnedHttps(url, resolved);
+      ? await fetchImpl(url.toString(), {
+          method: "GET",
+          redirect: "manual",
+          ...(headers ? { headers } : {}),
+        })
+      : await fetchPinnedHttps(url, resolved, headers);
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
     if (!location || redirects === 3) throw new Error("channel image redirect limit exceeded");
-    url = validateRemoteImageUrl(new URL(location, url).toString());
+    url = validateRemoteImageUrl(new URL(location, url).toString(), isTrustedPrivateUrl);
   }
   throw new Error("channel image redirect limit exceeded");
 }
 
-function validateRemoteImageUrl(rawUrl: string): URL {
+function validateRemoteImageUrl(
+  rawUrl: string,
+  isTrustedPrivateUrl: ((url: URL) => boolean) | undefined,
+): URL {
   const url = new URL(rawUrl);
   if (url.protocol !== "https:") throw new Error("channel image URL must use HTTPS");
   if (url.username || url.password)
     throw new Error("channel image URL must not contain credentials");
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "");
   if (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local") ||
-    isReservedIp(hostname)
+    (hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") ||
+      isReservedIp(hostname)) &&
+    !isTrustedPrivateUrl?.(url)
   ) {
     throw new Error("channel image URL must not target a local or private address");
   }
@@ -178,8 +203,10 @@ function validateRemoteImageUrl(rawUrl: string): URL {
 async function resolveRemoteImageAddresses(
   url: URL,
   lookupHostname: ChannelImageHostnameLookup,
+  isTrustedPrivateUrl: ((url: URL) => boolean) | undefined,
 ): Promise<readonly LookupAddress[]> {
   const hostname = normalizedHostname(url);
+  const trustedPrivateUrl = isTrustedPrivateUrl?.(url) === true;
   const literalFamily = isIP(hostname);
   const resolved = literalFamily
     ? [{ address: hostname, family: literalFamily }]
@@ -192,7 +219,7 @@ async function resolveRemoteImageAddresses(
   const seen = new Set<string>();
   for (const record of resolved) {
     const family = isIP(record.address);
-    if ((family !== 4 && family !== 6) || isReservedIp(record.address)) {
+    if ((family !== 4 && family !== 6) || (!trustedPrivateUrl && isReservedIp(record.address))) {
       throw new Error("channel image URL must not target a local or private address");
     }
     const key = `${family}:${record.address}`;
@@ -211,12 +238,17 @@ async function defaultHostnameLookup(hostname: string): Promise<readonly LookupA
  * Pin each production connection to the addresses accepted above. A second DNS
  * lookup inside `fetch` would reopen a check/use window to DNS rebinding.
  */
-function fetchPinnedHttps(url: URL, addresses: readonly LookupAddress[]): Promise<Response> {
+function fetchPinnedHttps(
+  url: URL,
+  addresses: readonly LookupAddress[],
+  headers: Readonly<Record<string, string>> | undefined,
+): Promise<Response> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
       url,
       {
         agent: false,
+        headers,
         method: "GET",
         lookup: pinnedLookup(addresses),
       },

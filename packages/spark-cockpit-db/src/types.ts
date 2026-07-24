@@ -481,6 +481,7 @@ export interface EventsTable {
   ingest_sequence: number;
   workspace_id: string | null;
   project_id: string | null;
+  session_id: string | null;
   actor_kind: "user" | "runtime" | "server";
   actor_id: string | null;
   kind: string;

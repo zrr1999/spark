@@ -7,6 +7,11 @@ import {
   submitConversationTurnForCockpit,
 } from "$lib/server/conversation-control";
 import { formText } from "$lib/server/form-data";
+import {
+  TurnAttachmentValidationError,
+  attachmentPrompt,
+  turnAttachmentsFromFormData,
+} from "$lib/server/turn-attachments";
 import { getDatabase } from "$lib/server/db";
 import { requireWorkspaceByRouteId } from "$lib/server/workspace-routing";
 import { conversationStartSessionId } from "../../../lib/server/conversation-submission";
@@ -215,6 +220,19 @@ export const actions = {
     const message = formText(formData, "message").trim();
     const submissionId = formText(formData, "submissionId").trim() || createCockpitSubmissionId();
     const values = { sessionId, message, submissionId };
+    let attachments;
+    try {
+      attachments = await turnAttachmentsFromFormData(formData);
+    } catch (caught) {
+      const error = turnAttachmentErrorMessage(caught, t.workbench);
+      return fail(400, {
+        intent: "sendMessage",
+        success: false,
+        error,
+        message: error,
+        values,
+      });
+    }
 
     if (!sessionId) {
       return fail(400, {
@@ -225,7 +243,7 @@ export const actions = {
         values,
       });
     }
-    if (!message) {
+    if (!message && attachments.length === 0) {
       return fail(400, {
         intent: "sendMessage",
         success: false,
@@ -234,7 +252,9 @@ export const actions = {
         values,
       });
     }
-    const slashActionError = cockpitSlashSubmissionError(message, t.workbench.slashActions);
+    const slashActionError = message
+      ? cockpitSlashSubmissionError(message, t.workbench.slashActions)
+      : null;
     if (slashActionError) {
       return fail(400, {
         intent: "sendMessage",
@@ -293,10 +313,15 @@ export const actions = {
     }
 
     try {
+      const prompt = attachmentPrompt(message, attachments, {
+        image: t.workbench.attachmentImage,
+        file: t.workbench.attachmentFile,
+      });
       const turn = await submitConversationMessage({
         workspaceId,
         sessionId,
-        message,
+        message: prompt,
+        attachments,
         submissionId,
       });
 
@@ -598,6 +623,7 @@ async function submitConversationMessage(input: {
   sessionId: string;
   message: string;
   submissionId?: string;
+  attachments?: import("@zendev-lab/spark-protocol").SparkTurnAttachment[];
 }) {
   const title = titleFromPrompt(input.message);
   return await submitConversationTurnForCockpit({
@@ -605,6 +631,23 @@ async function submitConversationMessage(input: {
     sessionId: input.sessionId,
     prompt: input.message,
     title,
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     ...(input.submissionId ? { submissionId: input.submissionId } : {}),
   });
+}
+
+function turnAttachmentErrorMessage(
+  caught: unknown,
+  copy: {
+    attachmentCountError: string;
+    attachmentSizeError: string;
+    attachmentTotalSizeError: string;
+  },
+): string {
+  if (!(caught instanceof TurnAttachmentValidationError)) return copy.attachmentTotalSizeError;
+  if (caught.code === "count") return copy.attachmentCountError;
+  if (caught.code === "file_size") {
+    return copy.attachmentSizeError.replace("{name}", caught.fileName ?? "attachment");
+  }
+  return copy.attachmentTotalSizeError;
 }

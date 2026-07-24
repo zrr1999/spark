@@ -19,6 +19,7 @@ import type { SessionSnapshotHistory } from "$lib/session-snapshot-window";
 import type { SparkSessionView } from "@zendev-lab/spark-protocol";
 import { attachSessionLiveEventSource, attachSessionStatusProbe } from "./live-connection";
 import { resetDequeueUiOnSessionChange, type DequeueTurnUiState } from "./cancel-dequeue";
+import { loadLatestSessionTimeline } from "./timeline-window";
 
 export type LiveSessionSources = {
   getSelectedSessionId: () => string | null | undefined;
@@ -80,6 +81,7 @@ export function createLiveSessionController(sources: LiveSessionSources) {
       });
       liveSessionView = liveEventState.view;
       liveSessionHistory = sessionHistory;
+      void refreshLatestWindow(sessionId);
       return;
     }
 
@@ -116,6 +118,26 @@ export function createLiveSessionController(sources: LiveSessionSources) {
       liveEventState?.invocationIds.add(invocationId);
     }
   });
+
+  async function refreshLatestWindow(sessionId: string): Promise<void> {
+    const window = await loadLatestSessionTimeline(sessionId);
+    if (!window || untrack(() => liveSessionId) !== sessionId) return;
+    const state = untrack(() => liveEventState);
+    if (!state || state.sessionId !== sessionId) return;
+    if (
+      reconcileSessionLiveEventState(state, {
+        workspaceId: sources.getSelectedWorkspaceId(),
+        view: window.snapshot,
+        preserveCurrentHistory: true,
+      })
+    ) {
+      liveSessionView = state.view;
+    }
+    const currentHistory = untrack(() => liveSessionHistory);
+    if (shouldAdoptSessionHistory(currentHistory, window.history)) {
+      liveSessionHistory = window.history;
+    }
+  }
 
   $effect(() => {
     const streamSessionId = liveSessionId;

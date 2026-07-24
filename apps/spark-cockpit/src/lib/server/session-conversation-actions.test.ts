@@ -50,6 +50,11 @@ vi.mock("$lib/i18n", () => ({
       selectModelRequired: "Select a conversation and model.",
       selectThinkingRequired: "Select a conversation and thinking level.",
       workbench: {
+        attachmentCountError: "Attach up to 8 files at a time.",
+        attachmentFile: "File",
+        attachmentImage: "Image",
+        attachmentSizeError: "{name} is larger than 6 MB.",
+        attachmentTotalSizeError: "Attachments are larger than 12 MB in total.",
         modelFailed: "Could not switch models.",
         modelUpdated: "Model updated. It will be used for future messages.",
         slashActions: {
@@ -472,6 +477,37 @@ describe("session conversation actions", () => {
     expect(mocks.getManagedSessionForCockpit).not.toHaveBeenCalled();
   });
 
+  it("accepts an image-only follow-up and forwards its bytes to the daemon turn", async () => {
+    const result = await requireAction("sendMessage")(
+      actionEvent({
+        sessionId: "sess_conversation",
+        attachments: [new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" })],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      intent: "sendMessage",
+      success: true,
+      values: { sessionId: "sess_conversation", message: "" },
+    });
+    expect(mocks.submitConversationTurnForCockpit).toHaveBeenCalledWith({
+      workspaceId: "ws_demo",
+      sessionId: "sess_conversation",
+      prompt: "[Image: shot.png]",
+      title: "[Image: shot.png]",
+      attachments: [
+        {
+          kind: "image",
+          name: "shot.png",
+          mediaType: "image/png",
+          size: 3,
+          data: "AQID",
+        },
+      ],
+      submissionId: expect.any(String),
+    });
+  });
+
   it("passes the hidden browser submission nonce through the send action", async () => {
     const result = await requireAction("sendMessage")(
       actionEvent({
@@ -871,10 +907,14 @@ function requireAction(name: keyof typeof actions) {
   return action;
 }
 
-function actionEvent(values: Record<string, string>, workspaceId?: string) {
+function actionEvent(values: Record<string, string | File | File[]>, workspaceId?: string) {
   const formData = new FormData();
   for (const [key, value] of Object.entries(values)) {
-    formData.set(key, value);
+    if (Array.isArray(value)) {
+      for (const item of value) formData.append(key, item);
+    } else {
+      formData.set(key, value);
+    }
   }
   return {
     cookies: { get: () => undefined },

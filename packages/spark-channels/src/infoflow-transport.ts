@@ -1,13 +1,17 @@
 import {
+  Client,
   LogLevel,
   Logger,
   WSClient,
   type EventMessage,
+  type GetMessageOptions,
+  type MessageDetail,
   type NormalizedEventData,
 } from "@core-workspace/infoflow-sdk-nodejs";
 import {
   materializeChannelImages,
   type ChannelImage,
+  type ChannelImageHostnameLookup,
   type ChannelImageSource,
 } from "./channel-images.ts";
 import { normalizeInfoflowContent, type InfoflowAttachment } from "./infoflow-content.ts";
@@ -25,11 +29,23 @@ export const DEFAULT_INFOFLOW_WS_GATEWAY = "infoflow-open-gateway.baidu.com";
 const INFOFLOW_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const DEFAULT_INFOFLOW_PONG_TIMEOUT_MS = 30_000;
 const DEFAULT_INFOFLOW_CONNECT_TIMEOUT_MS = 45_000;
+const INFOFLOW_IMAGE_DOWNLOAD_HOST = "apiin.im.baidu.com";
+const INFOFLOW_IMAGE_DOWNLOAD_PATH = "/api/v2/im/images";
 
 export interface InfoflowTransportOptions {
   outbound?: InfoflowSdkOutbound;
   /** Test seam for downloading platform-issued inbound image URLs. */
   fetchImpl?: typeof fetch;
+  /** Test seam for platform media DNS policy. */
+  lookupHostname?: ChannelImageHostnameLookup;
+  /** Test seam for authenticated Infoflow image downloads. */
+  getImageAccessToken?: () => Promise<string>;
+  /**
+   * Read-only history lookup used because private MIXED callbacks can collapse
+   * to a text-only event while the message detail still contains face/image
+   * blocks.
+   */
+  getMessageDetail?: (input: GetMessageOptions) => Promise<MessageDetail | undefined>;
   wsClientFactory?: () => WSClient;
   /** Test seam for the wrapper-owned connect recovery schedule. */
   reconnectDelaysMs?: readonly number[];
@@ -80,6 +96,26 @@ export function createInfoflowTransport(
   const wsGateway = config.ws_gateway?.trim() || DEFAULT_INFOFLOW_WS_GATEWAY;
   const appAgentId = config.app_agent_id?.trim();
   const outbound = options.outbound ?? createInfoflowSdkOutbound(config);
+  const historyClient =
+    options.getMessageDetail || options.wsClientFactory || !appKey || !appSecret || !appAgentId
+      ? undefined
+      : new Client({
+          appKey,
+          appSecret,
+          agentId: appAgentId,
+          baseUrl: infoflowApiBaseUrl(apiHost),
+          loggerLevel: LogLevel.warn,
+        });
+  const getMessageDetail =
+    options.getMessageDetail ??
+    (historyClient
+      ? async (input: GetMessageOptions) => await historyClient.im.message.getMessage(input)
+      : undefined);
+  const getImageAccessToken =
+    options.getImageAccessToken ??
+    (historyClient
+      ? async () => await historyClient.getTokenManager().getAccessToken()
+      : undefined);
 
   let wsClient: WSClient | null = null;
   let onMessage: ((raw: unknown) => void) | null = null;
@@ -190,23 +226,66 @@ export function createInfoflowTransport(
     ) {
       return;
     }
-    const normalized = normalizeInfoflowSdkEvent(event, { agentId: appAgentId });
-    if (!normalized) {
+    const callbackNormalized = normalizeInfoflowSdkEvent(event, { agentId: appAgentId });
+    if (!callbackNormalized) {
       console.error(`[spark-channels] infoflow skipped sdk event type=${String(event.type ?? "")}`);
       return;
+    }
+    let normalized = callbackNormalized;
+    let detailImageSources: ChannelImageSource[] = [];
+    const detailRequest = infoflowMessageDetailRequest(callbackNormalized, appAgentId);
+    if (detailRequest && getMessageDetail) {
+      try {
+        const detail = await getMessageDetail(detailRequest);
+        if (detail) {
+          const enriched = infoflowContentFromMessageDetail(detail);
+          if (enriched?.text) {
+            normalized = {
+              ...callbackNormalized,
+              text: enriched.text,
+              content_type: enriched.contentType,
+              ...(enriched.attachments.length ? { attachments: enriched.attachments } : {}),
+              ...(enriched.messageReference
+                ? { message_reference: enriched.messageReference }
+                : {}),
+              ...(enriched.mentions.length ? { mentions: enriched.mentions } : {}),
+            };
+          }
+          detailImageSources = infoflowMessageDetailImageSources(detail);
+        }
+      } catch (error) {
+        console.error(
+          `[spark-channels] infoflow message detail unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
     console.error(
       `[spark-channels] infoflow inbound ${normalized.chat_type}` +
         ` textChars=${normalized.text.length}` +
         (normalized.mentions?.length ? ` mentions=${JSON.stringify(normalized.mentions)}` : ""),
     );
-    const imageSources = infoflowImageSources(event);
+    const imageSources = uniqueInfoflowImageSources([
+      ...infoflowImageSources(event),
+      ...detailImageSources,
+    ]);
     if (imageSources.length === 0) {
       onMessage?.(normalized);
       return;
     }
     const images = await materializeChannelImages(imageSources, {
       fetchImpl: options.fetchImpl,
+      lookupHostname: options.lookupHostname,
+      isTrustedPrivateUrl: isAuthenticatedInfoflowImageUrl,
+      ...(getImageAccessToken
+        ? {
+            requestHeaders: async (url: URL) =>
+              isAuthenticatedInfoflowImageUrl(url)
+                ? { Authorization: `Bearer-${await getImageAccessToken()}` }
+                : undefined,
+          }
+        : {}),
       onError: (error) => {
         console.error(`[spark-channels] infoflow image skipped: ${error.message}`);
       },
@@ -547,6 +626,81 @@ export function createInfoflowTransport(
       };
     },
   };
+}
+
+function infoflowApiBaseUrl(endpoint: string): string {
+  return /\/api\/v\d+$/u.test(endpoint) ? endpoint : `${endpoint}/api/v1`;
+}
+
+function isAuthenticatedInfoflowImageUrl(url: URL): boolean {
+  return (
+    url.hostname.toLowerCase() === INFOFLOW_IMAGE_DOWNLOAD_HOST &&
+    url.pathname === INFOFLOW_IMAGE_DOWNLOAD_PATH
+  );
+}
+
+function infoflowMessageDetailRequest(
+  inbound: InfoflowNormalizedInbound,
+  agentId: string | undefined,
+): GetMessageOptions | undefined {
+  const msgId = inbound.message_id?.trim();
+  if (!msgId) return undefined;
+  if (inbound.chat_type === "group") {
+    const receiverId = inbound.chat_id?.trim();
+    if (!receiverId) return undefined;
+    return { fromId: inbound.user_id, receiverId, receiverType: 2, msgId };
+  }
+  if (!agentId) return undefined;
+  return { fromId: inbound.user_id, receiverId: agentId, receiverType: 7, msgId };
+}
+
+function infoflowContentFromMessageDetail(
+  detail: MessageDetail,
+): ReturnType<typeof normalizeInfoflowContent> | undefined {
+  const source = detail.content;
+  const content =
+    source && typeof source === "object" && !Array.isArray(source) ? source : undefined;
+  const body = Array.isArray(source)
+    ? source
+    : Array.isArray(content?.blocks)
+      ? content.blocks
+      : Array.isArray(content?.body)
+        ? content.body
+        : Array.isArray(content?.items)
+          ? content.items
+          : undefined;
+  const normalized = normalizeInfoflowContent({
+    messageType: detail.subType || detail.msgType,
+    ...(body ? { body } : { content: source }),
+  });
+  return normalized.text ? normalized : undefined;
+}
+
+function infoflowMessageDetailImageSources(detail: MessageDetail): ChannelImageSource[] {
+  const content =
+    detail.content && typeof detail.content === "object" && !Array.isArray(detail.content)
+      ? detail.content
+      : undefined;
+  const body = Array.isArray(detail.content)
+    ? detail.content
+    : Array.isArray(content?.blocks)
+      ? content.blocks
+      : Array.isArray(content?.body)
+        ? content.body
+        : Array.isArray(content?.items)
+          ? content.items
+          : [];
+  return infoflowImageSources({ body });
+}
+
+function uniqueInfoflowImageSources(sources: ChannelImageSource[]): ChannelImageSource[] {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    const key = "url" in source ? `url:${source.url}` : `data:${source.data}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Extract temporary image sources without copying them into normalized metadata. */

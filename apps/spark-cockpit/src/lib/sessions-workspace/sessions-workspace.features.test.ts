@@ -10,7 +10,7 @@ import {
 import { connectionLabel, modelValue, queueRemoveFormId } from "./presentation";
 import { resultMessage, resultModel, invocationStatusFromActionResult } from "./form-results";
 import { slashActionAvailability, type SlashAvailabilityContext } from "./slash-availability";
-import { bumpTimelineRenderLimit } from "./timeline-window";
+import { bumpTimelineRenderLimit, loadLatestSessionTimeline } from "./timeline-window";
 import { adoptQueuedTurnIntoLiveState, adoptCancelledTurnIntoLiveState } from "./turn-adoption";
 import { createSessionLiveEventState } from "$lib/session-live-events";
 import { SESSION_TIMELINE_PAGE_SIZE } from "$lib/session-timeline";
@@ -208,6 +208,43 @@ describe("sessions-workspace feature safety net", () => {
     expect(bumpTimelineRenderLimit(SESSION_TIMELINE_PAGE_SIZE)).toBe(
       SESSION_TIMELINE_PAGE_SIZE * 2,
     );
+  });
+
+  it("refreshes the canonical latest transcript window without a cursor", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          snapshot: {
+            version: 1,
+            sessionId: "sess_latest",
+            status: "idle",
+            messages: [],
+            tools: [],
+            runs: [],
+            tasks: [],
+            artifacts: [],
+            metadata: {},
+          },
+          history: {
+            totalMessages: 0,
+            loadedMessages: 0,
+            hiddenMessages: 0,
+            earlierMessages: 0,
+            laterMessages: 0,
+            hasEarlierMessages: false,
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    await expect(loadLatestSessionTimeline("sess_latest")).resolves.toMatchObject({
+      snapshot: { sessionId: "sess_latest" },
+      history: { laterMessages: 0 },
+    });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v1/sessions/sess_latest/snapshot?limit=32", {
+      cache: "no-store",
+    });
+    fetchSpy.mockRestore();
   });
 });
 

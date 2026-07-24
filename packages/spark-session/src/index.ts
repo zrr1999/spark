@@ -8,12 +8,17 @@ export {
   type ResetSparkSideThreadInput,
   type ConfigureSparkSideThreadInput,
   type RecordSparkSessionRunInput,
+  type RelocateSparkSessionTranscriptInput,
   type ResolveBindingInput,
   type SparkSessionRegistryFile,
   type SparkSessionRegistryOptions,
   type SparkSessionUnboundPolicy,
 } from "./registry.ts";
-export { loadSparkSessionSnapshot, type LoadSparkSessionSnapshotInput } from "./snapshot.ts";
+export {
+  loadSparkSessionMediaChunk,
+  loadSparkSessionSnapshot,
+  type LoadSparkSessionSnapshotInput,
+} from "./snapshot.ts";
 export {
   executePersistentSessionCall,
   executeSparkSessionAction,

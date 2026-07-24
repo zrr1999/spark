@@ -190,6 +190,66 @@ export const sparkSessionSnapshotRequestSchema = sparkSessionGetRequestSchema.ex
   beforeMessageId: z.string().trim().min(1).optional(),
 });
 
+export const SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES = 40 * 1024;
+export const SPARK_SESSION_MEDIA_MAX_BYTES = 6 * 1024 * 1024;
+
+/** Read one bounded chunk of a daemon-owned native image part. */
+export const sparkSessionMediaReadRequestSchema = sparkSessionGetRequestSchema.extend({
+  messageId: z.string().trim().min(1),
+  contentIndex: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative().default(0),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES)
+    .default(SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES),
+});
+
+export const sparkSessionMediaReadResultSchema = z
+  .object({
+    sessionId: z.string().trim().min(1),
+    messageId: z.string().trim().min(1),
+    contentIndex: z.number().int().nonnegative(),
+    mediaType: z.enum(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]),
+    name: z.string().trim().min(1).max(255).optional(),
+    offset: z.number().int().nonnegative(),
+    sizeBytes: z.number().int().positive().max(SPARK_SESSION_MEDIA_MAX_BYTES),
+    data: z
+      .string()
+      .min(1)
+      .max(Math.ceil((SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES * 4) / 3) + 4)
+      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u),
+    nextOffset: z.number().int().positive().optional(),
+    complete: z.boolean(),
+  })
+  .superRefine((result, context) => {
+    const padding = result.data.endsWith("==") ? 2 : result.data.endsWith("=") ? 1 : 0;
+    const chunkBytes = (result.data.length / 4) * 3 - padding;
+    if (
+      chunkBytes === 0 ||
+      chunkBytes > SPARK_SESSION_MEDIA_CHUNK_MAX_BYTES ||
+      result.offset + chunkBytes > result.sizeBytes
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["data"],
+        message: "session media chunk has invalid decoded bounds",
+      });
+    }
+    const expectedNextOffset = result.offset + chunkBytes;
+    if (
+      result.complete !== (expectedNextOffset === result.sizeBytes) ||
+      result.nextOffset !== (result.complete ? undefined : expectedNextOffset)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextOffset"],
+        message: "session media continuation does not match chunk bounds",
+      });
+    }
+  });
+
 export const sparkSessionPendingTurnSchema = z.object({
   invocationId: z.string().min(1),
   prompt: z.string(),
@@ -271,6 +331,8 @@ export type SparkSessionListRequest =
     };
 export type SparkSessionGetRequest = z.infer<typeof sparkSessionGetRequestSchema>;
 export type SparkSessionSnapshotRequest = z.infer<typeof sparkSessionSnapshotRequestSchema>;
+export type SparkSessionMediaReadRequest = z.infer<typeof sparkSessionMediaReadRequestSchema>;
+export type SparkSessionMediaReadResult = z.infer<typeof sparkSessionMediaReadResultSchema>;
 export type SparkSessionPendingTurn = z.infer<typeof sparkSessionPendingTurnSchema>;
 export type SparkSessionBindRequest = z.infer<typeof sparkSessionBindRequestSchema>;
 export type SparkSessionUnbindRequest = z.infer<typeof sparkSessionUnbindRequestSchema>;

@@ -160,6 +160,7 @@ export function submitChannelInboundInvocation(
       prompt: task.prompt,
       task,
       sourceKind: "channel",
+      workspaceBindingId: task.workspaceBindingId,
       ...(idempotencyKey ? { idempotencyKey } : {}),
     });
   } catch (error) {
