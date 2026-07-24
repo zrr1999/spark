@@ -115,6 +115,7 @@ export interface LocalDaemonStatusResult {
   invocationHealth: { oldestQueuedAt?: string; oldestRunningAt?: string };
   channelDeliveries?: SparkChannelDeliverySummary;
   lifecycle: SparkDaemonLifecycleSnapshot;
+  buildFingerprint?: string;
   observedAt: string;
 }
 
@@ -209,6 +210,7 @@ export interface LocalRpcHandlerOptions {
   relocateSparkDaemonCockpit?: RelocateSparkDaemonCockpit;
   onUplinkReconfigure?: (serverUrl?: string) => void;
   getLifecycle?: () => SparkDaemonLifecycleSnapshot;
+  getBuildFingerprint?: () => string;
   /** Startup fence: before this opens, only readiness/status and stop are admitted. */
   isReady?: () => boolean;
   eventBus?: SparkDaemonLocalEventBus;

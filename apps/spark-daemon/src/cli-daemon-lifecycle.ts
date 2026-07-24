@@ -57,8 +57,15 @@ import {
   releaseSparkDaemonProcessOwnership,
   runSparkDaemonRestartSuccessor,
   scheduleSparkDaemonRestartSuccessor,
+  rotateSparkDaemonServiceLogs,
   stopSparkDaemonService,
 } from "./service.js";
+import {
+  sparkDaemonDeploymentEntrypointPath,
+  sparkDaemonEntrypointFingerprint,
+  watchSparkDaemonBuild,
+} from "./build-reload.ts";
+import { createRepeatedErrorReporter } from "./repeated-error-reporter.ts";
 import {
   type CliIo,
   STRINGS,
@@ -159,9 +166,71 @@ export async function start(
   let flushHumanRequestOutbox: (() => void) | undefined;
   let drainProgress: SparkDaemonDrainProgress | undefined;
   const uplinkControl = createSparkDaemonUplinkControl();
+  const deployedEntrypoint = sparkDaemonDeploymentEntrypointPath();
+  const runningBuildFingerprint = sparkDaemonEntrypointFingerprint(deployedEntrypoint);
+  const buildWatchErrors = createRepeatedErrorReporter(
+    "[spark-daemon] deployed build watcher failed",
+  );
+  const serviceLogErrors = createRepeatedErrorReporter(
+    "[spark-daemon] service log rotation failed",
+  );
   let armedRestart: Awaited<ReturnType<typeof scheduleSparkDaemonRestartSuccessor>> | undefined;
   let restartArming: ReturnType<typeof scheduleSparkDaemonRestartSuccessor> | undefined;
   let localRpc: Awaited<ReturnType<typeof startLocalRpcServer>> | undefined;
+  let stopBuildWatcher: (() => void) | undefined;
+  const rotateServiceLogs = () => {
+    try {
+      rotateSparkDaemonServiceLogs(paths);
+      serviceLogErrors.recovered();
+    } catch (error) {
+      serviceLogErrors.report(error);
+    }
+  };
+  const logRotationTimer = setInterval(rotateServiceLogs, 5 * 60_000);
+  logRotationTimer.unref();
+  const requestSafeRestart = async () => {
+    if (stopRequested || shutdown.signal.aborted) {
+      throw new Error("Spark daemon is already stopping; restart was not armed.");
+    }
+    if (
+      lifecycle.restartRequested &&
+      armedRestart &&
+      !isSparkDaemonRestartHelperDefinitelyDead(armedRestart)
+    ) {
+      return lifecycle.requestRestart(armedRestart.requestedAt, armedRestart.restartId, {
+        instanceId: armedRestart.targetInstanceId,
+        generation: armedRestart.targetGeneration,
+      });
+    }
+    const requestedAt = new Date().toISOString();
+    const arming =
+      restartArming ??
+      scheduleSparkDaemonRestartSuccessor(
+        paths,
+        process.pid,
+        lifecycle.processIdentity,
+        requestedAt,
+        { signal: stopIntent.signal, supervisorManaged: options.managed },
+      );
+    restartArming = arming;
+    let armed;
+    try {
+      armed = await arming;
+      armedRestart = armed;
+    } finally {
+      if (restartArming === arming) restartArming = undefined;
+    }
+    if (stopRequested || shutdown.signal.aborted || stopIntent.signal.aborted) {
+      cancelSparkDaemonRestartSuccessor(paths);
+      throw new Error("Spark daemon stopped while restart was being armed.");
+    }
+    // Admission closes only after durable intent and its external helper
+    // exist. A crash during a long drain therefore still has a successor.
+    return lifecycle.requestRestart(armed.requestedAt, armed.restartId, {
+      instanceId: armed.targetInstanceId,
+      generation: armed.targetGeneration,
+    });
+  };
   const startLocalControl = () =>
     startLocalRpcServer({
       paths,
@@ -175,49 +244,8 @@ export async function start(
       },
       onStop: () => shutdown.abort(new Error("Spark daemon local RPC stop requested.")),
       onUplinkReconfigure: (serverUrl) => uplinkControl.requestReconfigure(serverUrl),
-      onRestart: async () => {
-        if (stopRequested || shutdown.signal.aborted) {
-          throw new Error("Spark daemon is already stopping; restart was not armed.");
-        }
-        if (
-          lifecycle.restartRequested &&
-          armedRestart &&
-          !isSparkDaemonRestartHelperDefinitelyDead(armedRestart)
-        ) {
-          return lifecycle.requestRestart(armedRestart.requestedAt, armedRestart.restartId, {
-            instanceId: armedRestart.targetInstanceId,
-            generation: armedRestart.targetGeneration,
-          });
-        }
-        const requestedAt = new Date().toISOString();
-        const arming =
-          restartArming ??
-          scheduleSparkDaemonRestartSuccessor(
-            paths,
-            process.pid,
-            lifecycle.processIdentity,
-            requestedAt,
-            { signal: stopIntent.signal, supervisorManaged: options.managed },
-          );
-        restartArming = arming;
-        let armed;
-        try {
-          armed = await arming;
-          armedRestart = armed;
-        } finally {
-          if (restartArming === arming) restartArming = undefined;
-        }
-        if (stopRequested || shutdown.signal.aborted || stopIntent.signal.aborted) {
-          cancelSparkDaemonRestartSuccessor(paths);
-          throw new Error("Spark daemon stopped while restart was being armed.");
-        }
-        // Admission closes only after durable intent and its external helper
-        // exist. A crash during a long drain therefore still has a successor.
-        return lifecycle.requestRestart(armed.requestedAt, armed.restartId, {
-          instanceId: armed.targetInstanceId,
-          generation: armed.targetGeneration,
-        });
-      },
+      onRestart: requestSafeRestart,
+      getBuildFingerprint: () => runningBuildFingerprint,
       getLifecycle: () => {
         const snapshot = lifecycle.snapshot();
         return snapshot.state === "draining" && drainProgress
@@ -306,7 +334,19 @@ export async function start(
           stopRequested = true;
           stopIntent.abort(new Error("Spark daemon restart was cancelled before readiness."));
           shutdown.abort();
+          return;
         }
+        stopBuildWatcher = watchSparkDaemonBuild({
+          entrypoint: deployedEntrypoint,
+          initialFingerprint: runningBuildFingerprint,
+          onChange: async ({ previousFingerprint, nextFingerprint }) => {
+            console.error(
+              `[spark-daemon] deployed build changed (${previousFingerprint.slice(0, 15)} -> ${nextFingerprint.slice(0, 15)}); requesting a safe drain restart`,
+            );
+            await requestSafeRestart();
+          },
+          onError: (error) => buildWatchErrors.report(error),
+        });
       },
     });
     return sparkDaemonServiceExitCode({
@@ -315,6 +355,10 @@ export async function start(
       stopRequested,
     });
   } finally {
+    stopBuildWatcher?.();
+    clearInterval(logRotationTimer);
+    buildWatchErrors.flush();
+    serviceLogErrors.flush();
     await localRpc?.close();
     db.close();
     process.off("SIGINT", onSigint);
@@ -446,12 +490,14 @@ export async function daemon(
       return await stop(paths, args, io);
     case "restart":
       return await restart(paths, args, io);
+    case "sync":
+      return await daemonSync(paths, args, io);
     case "logs":
       return await logsCommand(paths, args, io);
     case "submit":
       return await daemonSubmit(paths, args, io);
     default:
-      throw new Error("Usage: spark daemon <status|start|stop|restart|logs|submit>");
+      throw new Error("Usage: spark daemon <status|start|stop|restart|sync|logs|submit>");
   }
 }
 
@@ -474,6 +520,47 @@ export async function restart(
     return await reportRequestedDaemonRestart(paths, previousPid, flags, io, requested);
 
   return await restartWithoutDrainSupport(paths, previousPid, flags, io);
+}
+
+export async function daemonSync(
+  paths: ReturnType<typeof resolveSparkPaths>,
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  prepareSparkDaemonState(paths);
+  const flags = parseFlags(args);
+  const status = await buildDaemonStatus(paths, io);
+  if (!status.running && status.restart) {
+    io.stdout.write(
+      `Spark daemon restart ${status.restart.restartId} is already ${status.restart.state}.\n`,
+    );
+    if (shouldWaitForDaemon(flags)) {
+      const replacementPid = await waitForDaemonReady(paths, status.restart.previousPid, io, {
+        restartId: status.restart.restartId,
+        targetInstanceId: status.restart.targetInstanceId,
+        targetGeneration: status.restart.targetGeneration,
+      });
+      io.stdout.write(`Spark daemon restarted as process ${replacementPid}.\n`);
+    }
+    return 0;
+  }
+  if (!status.running && !("unreachable" in status)) {
+    io.stdout.write("Spark daemon is stopped; starting the deployed build.\n");
+    return await startStoppedDaemon(paths, flags, io);
+  }
+  if (status.running && !status.build.updateAvailable) {
+    io.stdout.write(
+      `Spark daemon already runs the deployed build ${shortBuildFingerprint(status.build.availableFingerprint)}.\n`,
+    );
+    return 0;
+  }
+
+  io.stdout.write(
+    status.running
+      ? `Spark daemon build changed (${shortBuildFingerprint(status.build.runningFingerprint)} -> ${shortBuildFingerprint(status.build.availableFingerprint)}); requesting a safe drain restart.\n`
+      : "Spark daemon is running but unreachable; repairing it with the deployed build.\n",
+  );
+  return await restart(paths, ["--yes", ...(shouldWaitForDaemon(flags) ? ["--wait"] : [])], io);
 }
 
 async function requestDrainRestart(
@@ -998,6 +1085,7 @@ export async function daemonStatus(
           `  drain blockers   ${status.lifecycle.drain.scheduler.length} scheduler · ${status.lifecycle.drain.direct.length} direct\n`
         : "") +
       (status.lifecycle.stopReason ? `  stop reason      ${status.lifecycle.stopReason}\n` : "") +
+      `  build            ${shortBuildFingerprint(status.build.runningFingerprint)}${status.build.updateAvailable ? ` (deployed ${shortBuildFingerprint(status.build.availableFingerprint)} available)` : ""}\n` +
       `  socket           ${status.socketPath}\n` +
       `  state db         ${status.stateDbPath}\n` +
       `  started          ${status.startedAt}\n` +
@@ -1102,6 +1190,11 @@ export type DaemonStatus =
         cancelled: number;
       };
       lifecycle: SparkDaemonLifecycleSnapshot;
+      build: {
+        runningFingerprint?: string;
+        availableFingerprint: string;
+        updateAvailable: boolean;
+      };
     };
 
 export async function buildDaemonStatus(
@@ -1117,6 +1210,7 @@ export async function buildDaemonStatus(
 
   try {
     const status = await (io.daemonStatusFromService ?? requestDaemonStatus)(paths);
+    const availableFingerprint = sparkDaemonEntrypointFingerprint();
     return {
       running: true,
       pid,
@@ -1126,6 +1220,12 @@ export async function buildDaemonStatus(
       servers: status.servers,
       invocations: status.invocations,
       lifecycle: status.lifecycle,
+      build: {
+        ...(status.buildFingerprint ? { runningFingerprint: status.buildFingerprint } : {}),
+        availableFingerprint,
+        updateAvailable:
+          status.buildFingerprint === undefined || status.buildFingerprint !== availableFingerprint,
+      },
     };
   } catch (error) {
     return {
@@ -1139,6 +1239,10 @@ export async function buildDaemonStatus(
       ...(restart ? { restart } : {}),
     };
   }
+}
+
+function shortBuildFingerprint(fingerprint: string | undefined): string {
+  return fingerprint ? fingerprint.replace(/^sha256:/, "").slice(0, 12) : "unknown";
 }
 
 function daemonRestartStatus(

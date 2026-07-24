@@ -36,6 +36,11 @@ export interface SparkSessionMailboxFile {
 export interface SparkSessionMailStoreOptions {
   sparkHome?: string;
   now?: () => number;
+  /**
+   * Global reconciliation scans isolate a corrupt mailbox and continue with
+   * later owners. Direct reads remain strict and keep the corrupt owner visible.
+   */
+  onCorruptMailbox?: (input: { path: string; error: unknown }) => void;
 }
 
 export interface SparkSessionMailSendInput {
@@ -418,7 +423,12 @@ export class SparkSessionMailStore {
           messages.set(message.id, mergeStoredMessageState(existing, message));
         }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        try {
+          this.options.onCorruptMailbox?.({ path: join(root, entry.name, "mailbox.json"), error });
+        } catch {
+          // Operator diagnostics must not restore the poison-record failure.
+        }
       }
     }
     return [...messages.values()].sort(compareMailMessages);

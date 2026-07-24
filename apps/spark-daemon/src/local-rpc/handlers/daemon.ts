@@ -30,6 +30,9 @@ export async function handleDaemonRequest(
           },
           channelDeliveries: new SparkChannelDeliveryStore(db).summary(),
           lifecycle: options.getLifecycle?.() ?? { state: "running" },
+          ...(options.getBuildFingerprint
+            ? { buildFingerprint: options.getBuildFingerprint() }
+            : {}),
           observedAt: new Date().toISOString(),
         },
       };

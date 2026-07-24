@@ -172,6 +172,7 @@ Commands:
   start
   stop
   restart [--yes] [--wait]
+  sync [--wait]
   logs [--follow] [--lines <n>]
   submit --session <id> --prompt <text> [--idempotency-key <key>] [--json]
 
@@ -201,6 +202,7 @@ Commands:
   start
   stop
   restart [--yes] [--wait]
+  sync [--wait]
   logs
 
 Workspace registration may print a one-time browser key. Mint additional keys on the

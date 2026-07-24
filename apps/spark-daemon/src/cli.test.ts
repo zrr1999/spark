@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runtimeProtocolVersion } from "@zendev-lab/spark-protocol";
 import { gitCommand, resolveSparkPaths } from "@zendev-lab/spark-system";
 import { main, sparkDaemonServiceExitCode, type CliIo } from "./cli.js";
+import { sparkDaemonEntrypointFingerprint } from "./build-reload.ts";
 import { readSparkDaemonConfig, writeSparkDaemonConfig } from "./config.js";
 import { LocalRpcUnavailableError } from "./local-rpc.js";
 import { RegistrationGrantRefusedError } from "./registration.js";
@@ -2779,6 +2780,62 @@ describe("Spark daemon CLI", () => {
       expect(capture.stdout()).toContain("draining active invocations");
       expect(capture.stdout()).toContain("Replacement will start after active work finishes");
       expect(capture.stderr()).toBe("");
+    });
+  });
+
+  it("keeps daemon sync idempotent when the deployed build is already running", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn();
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
+        buildFingerprint: sparkDaemonEntrypointFingerprint(),
+        observedAt: "2026-07-24T00:00:00.000Z",
+      }));
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "sync"], capture.io)).resolves.toBe(0);
+
+      expect(daemonRestartFromService).not.toHaveBeenCalled();
+      expect(capture.stdout()).toContain("already runs the deployed build");
+    });
+  });
+
+  it("uses the fenced drain restart when daemon sync observes an older build", async () => {
+    await withTempSparkEnv(async () => {
+      const paths = resolveSparkPaths({ app: "daemon" });
+      mkdirSync(paths.runtimeDir, { recursive: true });
+      writeFileSync(paths.pidFile, `${process.pid}\n`);
+      const daemonRestartFromService = vi.fn(async () => ({
+        accepted: true as const,
+        state: "draining" as const,
+        restartId: "restart-build-sync",
+        processInstanceId: "old-instance",
+        processGeneration: "old-generation",
+        targetInstanceId: "new-instance",
+        targetGeneration: "new-generation",
+        requestedAt: "2026-07-24T00:00:00.000Z",
+      }));
+      const daemonStatusFromService = vi.fn(async () => ({
+        servers: [],
+        invocations: { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        invocationHealth: {},
+        lifecycle: { state: "running" as const },
+        buildFingerprint: "sha256:older",
+        observedAt: "2026-07-24T00:00:00.000Z",
+      }));
+      const capture = createCliIo({ daemonRestartFromService, daemonStatusFromService });
+
+      await expect(main(["daemon", "sync"], capture.io)).resolves.toBe(0);
+
+      expect(daemonRestartFromService).toHaveBeenCalledOnce();
+      expect(capture.stdout()).toContain("build changed");
+      expect(capture.stdout()).toContain("draining active invocations");
     });
   });
 

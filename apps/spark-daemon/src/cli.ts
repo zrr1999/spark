@@ -86,6 +86,7 @@ import {
   bindCliDaemonLogs,
   buildDaemonStatus,
   daemon,
+  daemonSync,
   daemonSubmit,
   type DaemonStatus,
   restart,
@@ -147,6 +148,8 @@ export async function main(argv = process.argv.slice(2), io: CliIo = defaultIo):
         return await stop(paths, args.slice(1), io);
       case "restart":
         return await restart(paths, args.slice(1), io);
+      case "sync":
+        return await daemonSync(paths, args.slice(1), io);
       case "__restart-successor":
         return await restartSuccessor(paths, args.slice(1), io);
       case "submit":

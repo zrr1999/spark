@@ -12,6 +12,7 @@ import {
   getRuntimeSessionProjection,
   getRuntimeTurnStatusProjection,
   getRuntimeTurnStreamProjection,
+  listRuntimeSessionProjections,
   listRuntimeSessionRoutes,
   reconcileRuntimeSessionListProjection,
   recordRuntimeSessionControlProjection,
@@ -331,6 +332,103 @@ describe("runtime session projections", () => {
         )
         .get(invocationId),
     ).toEqual({ count: 1 });
+    h.db.close();
+  });
+
+  it("keeps the session rail available when one cached snapshot uses a newer part schema", () => {
+    const h = setup();
+    const compatible = workspaceSession(h.workspaceId);
+    const newer = { ...workspaceSession(h.workspaceId), title: "Newer snapshot" };
+    projectSession(h, compatible, "workspace");
+    projectSession(h, newer, "workspace");
+
+    for (const session of [compatible, newer]) {
+      const command = submitRuntimeControlCommand(h.db, {
+        runtimeId: h.runtimeId,
+        workspaceId: h.workspaceId,
+        sessionId: session.sessionId,
+        payload: {
+          kind: "session.snapshot.request",
+          scope: "workspace",
+          payload: { sessionId: session.sessionId },
+        },
+        createdAt: now,
+      });
+      recordResult(h, command.commandId, {
+        status: "succeeded",
+        result: {},
+        projection: {
+          kind: "session.snapshot",
+          data: {
+            snapshot: {
+              version: 1,
+              sessionId: session.sessionId,
+              status: "idle",
+              messages: [],
+              tools: [],
+              runs: [],
+              tasks: [],
+              artifacts: [],
+              metadata: {},
+            },
+            history: { totalMessages: 0, loadedMessages: 0, hiddenMessages: 0 },
+          },
+        },
+        completedAt: now,
+      });
+    }
+
+    const incompatibleSnapshot = {
+      version: 1,
+      sessionId: newer.sessionId,
+      status: "idle",
+      messages: [
+        {
+          version: 1,
+          id: "future-message",
+          role: "user",
+          text: "",
+          status: "done",
+          parts: [{ type: "future-media", mediaType: "image/avif" }],
+          metadata: {},
+        },
+      ],
+      tools: [],
+      runs: [],
+      tasks: [],
+      artifacts: [],
+      metadata: {},
+    };
+    h.db
+      .prepare(
+        `UPDATE runtime_session_projections
+         SET snapshot_json = ?
+         WHERE runtime_id = ? AND session_id = ?`,
+      )
+      .run(JSON.stringify(incompatibleSnapshot), h.runtimeId, newer.sessionId);
+
+    expect(getRuntimeSessionProjection(h.db, newer.sessionId)).toMatchObject({
+      session: { sessionId: newer.sessionId, title: "Newer snapshot" },
+      snapshotStatus: "incompatible",
+    });
+    expect(getRuntimeSessionProjection(h.db, newer.sessionId)?.snapshot).toBeUndefined();
+    expect(
+      listRuntimeSessionProjections(h.db, {
+        runtimeId: h.runtimeId,
+        workspaceId: h.workspaceId,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          session: expect.objectContaining({ sessionId: compatible.sessionId }),
+          snapshotStatus: "compatible",
+        }),
+        expect.objectContaining({
+          session: expect.objectContaining({ sessionId: newer.sessionId }),
+          snapshotStatus: "incompatible",
+        }),
+      ]),
+    );
     h.db.close();
   });
 
