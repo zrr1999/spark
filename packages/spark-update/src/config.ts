@@ -65,13 +65,18 @@ export async function writeSparkUpdateConfig(
 export function parseUpdateToml(source: string): Partial<SparkUpdateConfig> {
   const result: Partial<SparkUpdateConfig> = {};
   for (const rawLine of source.split(/\r?\n/u)) {
-    const line = rawLine.replace(/#.*$/u, "").trim();
+    const commentStart = rawLine.indexOf("#");
+    const line = (commentStart >= 0 ? rawLine.slice(0, commentStart) : rawLine).trim();
     if (!line) continue;
-    const match = /^([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+)$/u.exec(line);
-    if (!match) throw new Error(`Invalid update.toml line: ${rawLine}`);
-    const [, key, rawValue] = match;
-    if (key === "policy") result.policy = requirePolicy(unquote(rawValue!));
-    else if (key === "channel") result.channel = requireChannel(unquote(rawValue!));
+    const separator = line.indexOf("=");
+    if (separator <= 0) throw new Error(`Invalid update.toml line: ${rawLine}`);
+    const key = line.slice(0, separator).trim();
+    const rawValue = line.slice(separator + 1).trim();
+    if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(key) || !rawValue) {
+      throw new Error(`Invalid update.toml line: ${rawLine}`);
+    }
+    if (key === "policy") result.policy = requirePolicy(unquote(rawValue));
+    else if (key === "channel") result.channel = requireChannel(unquote(rawValue));
     else if (key === "checkIntervalHours") {
       result.checkIntervalHours = normalizeInterval(Number(rawValue));
     } else {

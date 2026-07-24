@@ -100,7 +100,7 @@ async function writeBuildInfo() {
   );
   const protocolVersion = Number(/SPARK_PROTOCOL_VERSION\s*=\s*(\d+)/u.exec(protocolSource)?.[1]);
   if (!Number.isSafeInteger(protocolVersion)) {
-    throw new Error("Unable to resolve SPARK_PROTOCOL_VERSION for build-info.json");
+    throw new TypeError("Unable to resolve SPARK_PROTOCOL_VERSION for build-info.json");
   }
   const fingerprint = `sha256:${createHash("sha256")
     .update([rootManifest.version, gitSha, String(protocolVersion), migrationHead].join("\n"))

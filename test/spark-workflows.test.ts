@@ -2700,9 +2700,9 @@ test("Spark workflow_run tool resolves controlled nested saved workflows", async
         details: Record<string, unknown>;
       }>;
     };
-    await mkdir(join(dir, ".spark", "workflows"), { recursive: true });
+    await mkdir(join(dir, ".agents", "workflows"), { recursive: true });
     await writeFile(
-      join(dir, ".spark", "workflows", "child.js"),
+      join(dir, ".agents", "workflows", "child.js"),
       `export const meta = { name: 'child', description: 'saved child workflow' }
 return { marker: 'saved-child', args }
 `,

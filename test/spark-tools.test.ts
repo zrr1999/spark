@@ -829,9 +829,9 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
     await loopCommand.handler("停止", initializedCtx);
     assert.equal(await loadSessionLoop(initializedDir, initializedCtx), undefined);
 
-    await mkdir(join(initializedDir, ".spark", "workflows"), { recursive: true });
+    await mkdir(join(initializedDir, ".agents", "workflows"), { recursive: true });
     await writeFile(
-      join(initializedDir, ".spark", "workflows", "triage.js"),
+      join(initializedDir, ".agents", "workflows", "triage.js"),
       `export const meta = {
         name: "Triage Workflow",
         description: "Triage incidents with specialist stages.",
@@ -840,7 +840,7 @@ test("/plan, /implement, /goal, and /workflow selector commands enter Spark mode
       export default async function workflow() { return "not run during discovery"; }`,
     );
     await writeFile(
-      join(initializedDir, ".spark", "workflows", "broken.js"),
+      join(initializedDir, ".agents", "workflows", "broken.js"),
       `export const meta = { name: "Broken" };`,
     );
     const workflowCommand = initializedRun.commands.get("workflow");
@@ -7308,7 +7308,7 @@ test("impl_workflow_runs renders and controls dynamic workflow_run records", asy
     });
     assert.match(toolText(saved), /Dynamic workflow save:/);
     assert.match(toolText(saved), /workspace:completed-control/);
-    assert.equal(existsSync(join(dir, ".spark", "workflows", "completed-control.js")), true);
+    assert.equal(existsSync(join(dir, ".agents", "workflows", "completed-control.js")), true);
     assert.equal(
       (await dynamicStore.get(completedRun.ref))?.savedWorkflow?.selector,
       "workspace:completed-control",

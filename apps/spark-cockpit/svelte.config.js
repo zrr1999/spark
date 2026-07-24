@@ -5,7 +5,7 @@ import { typescriptWithSvelteImports } from "./src/svelte-preprocess.js";
 
 const buildVersion =
   process.env.SPARK_BUILD_GIT_SHA?.trim() ||
-  execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {

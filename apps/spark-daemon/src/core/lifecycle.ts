@@ -198,26 +198,27 @@ export class SparkDaemonLifecycle {
   requestRestart(
     now = new Date().toISOString(),
     restartId: string = randomUUID(),
-    target: {
+    target?: {
       instanceId: string;
       generation: string;
       version?: string;
       buildFingerprint?: string;
-    } = {
-      instanceId: randomUUID(),
-      generation: randomUUID(),
     },
   ): SparkDaemonRestartRequestResult {
+    const resolvedTarget = target ?? {
+      instanceId: randomUUID(),
+      generation: randomUUID(),
+    };
     if (this.stopRequestedAt) {
       throw new Error("Spark daemon is stopping and cannot restart.");
     }
     if (!this.restartRequestedAt) {
       this.restartRequestedAt = now;
       this.restartId = restartId;
-      this.targetInstanceId = target.instanceId;
-      this.targetGeneration = target.generation;
-      this.targetVersion = target.version;
-      this.targetBuildFingerprint = target.buildFingerprint;
+      this.targetInstanceId = resolvedTarget.instanceId;
+      this.targetGeneration = resolvedTarget.generation;
+      this.targetVersion = resolvedTarget.version;
+      this.targetBuildFingerprint = resolvedTarget.buildFingerprint;
       const reason = new SparkDaemonRestartRequestedError();
       this.drainController.abort(reason);
       // Let the local-RPC response enter the socket write buffer before the

@@ -9,7 +9,6 @@ import {
   readFileSync,
   readSync,
   readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -24,6 +23,7 @@ import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-daemon-client/local-rpc";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
+import { sparkDaemonEntrypointPath } from "./build-reload.ts";
 
 const launchdLabel = "dev.spark.daemon";
 const restartIntentFileName = "restart.intent.json";
@@ -1660,7 +1660,7 @@ function sparkDaemonStartCommand(): string[] {
 function sparkDaemonCliCommand(): string[] {
   const stableLauncher = process.env.SPARK_STABLE_LAUNCHER?.trim();
   if (stableLauncher) return [stableLauncher, "daemon"];
-  return [process.execPath, realpathSync(process.argv[1]!)];
+  return [process.execPath, sparkDaemonEntrypointPath()];
 }
 
 export function rotateSparkDaemonServiceLogs(

@@ -12,6 +12,8 @@ import {
   loadEvidencePage,
   loadInboxDetailPage,
   loadInboxPage,
+  loadProjectsPage,
+  loadWorkbenchHome,
   loadWorkbenchLayout,
   loadWorkspaceDashboard,
   loadWorkspaceRegistrationPage,
@@ -155,6 +157,60 @@ describe("loadWorkbenchLayout", () => {
     });
     expect(layout.workspaces.map((item) => item.slug)).toEqual(["spore"]);
     expect(layout.activeWorkspace?.id).toBe(workspace.id);
+    db.close();
+  });
+});
+
+describe("public product artifact counts", () => {
+  it("excludes internal evidence from workspace and project counts", () => {
+    const { db, workspace, bindingId } = setupWorkspace("spore");
+    const project = db
+      .prepare("SELECT id FROM projects WHERE workspace_id = ? LIMIT 1")
+      .get(workspace.id) as { id: string };
+    const now = "2026-07-09T03:30:00.000Z";
+    db.prepare(
+      `INSERT INTO artifacts
+        (id, workspace_id, project_id, scope, kind, title, format, source,
+         runtime_workspace_binding_id, invocation_id, human_request_id,
+         content_ref_json, provenance_json, created_at, updated_at)
+       VALUES
+         ('art_trace', ?, NULL, 'workspace', 'trace', 'Run trace', 'json',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_report', ?, ?, 'project', 'report', 'Internal report', 'markdown',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_preview', ?, NULL, 'workspace', 'preview', 'UI preview', 'markdown',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?),
+         ('art_pr', ?, ?, 'project', 'pr', 'Pull request', 'json',
+          'runtime', ?, NULL, NULL, '{}', '{}', ?, ?)`,
+    ).run(
+      workspace.id,
+      bindingId,
+      now,
+      now,
+      workspace.id,
+      project.id,
+      bindingId,
+      now,
+      now,
+      workspace.id,
+      bindingId,
+      now,
+      now,
+      workspace.id,
+      project.id,
+      bindingId,
+      now,
+      now,
+    );
+
+    const home = loadWorkbenchHome(db, {
+      forceWorkspaceCreate: false,
+      pendingWorkspaceSetup: null,
+    });
+    expect(home.workspaces[0]?.artifactCount).toBe(2);
+
+    const projects = loadProjectsPage(db, "spore");
+    expect(projects?.projects[0]?.artifactCount).toBe(1);
     db.close();
   });
 });

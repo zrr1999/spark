@@ -39,7 +39,7 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${package_version}"
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Run repository checks
         run: pnpm run check

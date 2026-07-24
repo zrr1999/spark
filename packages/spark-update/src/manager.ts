@@ -13,7 +13,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 
@@ -84,17 +84,16 @@ export class SparkUpdateManager {
       readSparkUpdateState(this.paths),
     ]);
     const managed = await isManagedCurrentLink(this.paths);
-    return {
+    const status: SparkUpdateStatus = {
       managed,
       config,
       state,
       paths: this.paths,
-      ...(!managed
-        ? {
-            repairCommand: `spark install --managed --prefix ${JSON.stringify(dirname(dirname(this.paths.launcherPath)))}`,
-          }
-        : {}),
     };
+    if (!managed) {
+      status.repairCommand = `spark install --managed --prefix ${JSON.stringify(dirname(dirname(this.paths.launcherPath)))}`;
+    }
+    return status;
   }
 
   async configure(change: Partial<SparkUpdateConfig>): Promise<SparkUpdateConfig> {
@@ -127,13 +126,12 @@ export class SparkUpdateManager {
       ...state,
       lastCheckAt: this.#now().toISOString(),
       ...(release.etag ? { registryEtag: release.etag } : {}),
-      ...(release.notModified
-        ? {}
-        : release.version === state.currentVersion
-          ? { availableVersion: undefined }
-          : { availableVersion: release.version }),
       failure: undefined,
     };
+    if (!release.notModified) {
+      nextState.availableVersion =
+        release.version === state.currentVersion ? undefined : release.version;
+    }
     if (
       options.background &&
       config.policy === "notify" &&
@@ -196,24 +194,8 @@ export class SparkUpdateManager {
         "This Spark installation is not managed. Run `spark install --managed` first; source checkouts are never modified.",
       );
     }
-    let candidate =
-      requestedVersion && requestedVersion === state.pendingVersion
-        ? await readReadyCandidate(this.paths, requestedVersion, state.pendingFingerprint)
-        : undefined;
-    let exact: SparkAvailableRelease | undefined;
-    let version = requestedVersion;
-    if (!candidate) {
-      try {
-        exact = requestedVersion
-          ? await this.queryExactVersion(requestedVersion)
-          : await this.queryRegistry(config.channel);
-        version = exact.version;
-      } catch (error) {
-        await this.recordFailure("release_resolution_failed", error, requestedVersion);
-        throw error;
-      }
-    }
-    if (!version) throw new Error("No Spark update version was selected");
+    const target = await this.resolveApplyTarget(requestedVersion, state, config.channel);
+    const version = target.version;
     requireExactVersion(version);
     if (isQuarantined(state, version)) {
       throw new Error(
@@ -226,94 +208,157 @@ export class SparkUpdateManager {
       return await this.status();
     }
     try {
-      if (!candidate) {
-        if (!exact) throw new Error(`Missing immutable release metadata for Spark ${version}`);
-        candidate = await this.stageAndVerify(exact);
-      }
-      state = {
-        ...state,
-        availableVersion: version,
-        pendingVersion: version,
-        pendingFingerprint: candidate.fingerprint,
-      };
-      await writeSparkUpdateState(this.paths, state);
-      if (options.automatic && !(await this.daemonIsProvablyIdle())) {
-        return await this.status();
-      }
-      const previousVersion = state.currentVersion;
-      const previousFingerprint = state.currentFingerprint;
-      await this.activateVersion(version);
-      state = {
-        ...state,
-        currentVersion: version,
-        currentFingerprint: candidate.fingerprint,
-        ...(previousVersion ? { rollbackVersion: previousVersion } : {}),
-        ...(previousFingerprint ? { rollbackFingerprint: previousFingerprint } : {}),
-      };
-      await writeSparkUpdateState(this.paths, state);
-      try {
-        if (options.wait !== false) {
-          await this.syncDaemon(candidate);
-          await this.healthCheck(candidate);
-          await this.healthCheckCockpit();
-        }
-      } catch (error) {
-        if (previousVersion) {
-          await this.activateVersion(previousVersion);
-          const previousBuild = await readInstalledBuildInfo(this.paths, previousVersion);
-          await writeSparkUpdateState(this.paths, {
-            ...(await readSparkUpdateState(this.paths)),
-            currentVersion: previousVersion,
-            currentFingerprint: previousFingerprint,
-            pendingVersion: undefined,
-            pendingFingerprint: undefined,
-          });
-          try {
-            await this.syncDaemon(previousBuild);
-            await this.healthCheck(previousBuild);
-            await this.healthCheckCockpit();
-          } catch (rollbackError) {
-            throw new AggregateError(
-              [error, rollbackError],
-              `Spark ${version} failed and rollback health verification also failed`,
-            );
-          }
-        } else {
-          await this.#run(this.paths.launcherPath, ["daemon", "stop", "--yes"], {
-            env: this.#env,
-            timeoutMs: 30_000,
-          }).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-          await rm(this.paths.currentLink, { force: true });
-          await writeSparkUpdateState(this.paths, {
-            ...(await readSparkUpdateState(this.paths)),
-            currentVersion: undefined,
-            currentFingerprint: undefined,
-            pendingVersion: undefined,
-            pendingFingerprint: undefined,
-          });
-        }
-        throw error;
-      }
-      await writeSparkUpdateState(this.paths, {
-        ...state,
-        lastGoodVersion: version,
-        lastGoodFingerprint: candidate.fingerprint,
-        ...(previousVersion ? { rollbackVersion: previousVersion } : {}),
-        ...(previousFingerprint ? { rollbackFingerprint: previousFingerprint } : {}),
-        availableVersion: undefined,
-        pendingVersion: undefined,
-        pendingFingerprint: undefined,
-        failure: undefined,
-      });
-      await this.cleanupVersions(
-        new Set([version, previousVersion, state.pendingVersion].filter(Boolean) as string[]),
-      );
-      return await this.status();
+      const candidate = await this.prepareApplyCandidate(target);
+      return await this.activateCandidate(version, candidate, state, options);
     } catch (error) {
       await this.quarantine(version, error);
       await this.recordFailure("update_apply_failed", error, version);
       throw error;
     }
+  }
+
+  private async resolveApplyTarget(
+    requestedVersion: string | undefined,
+    state: SparkUpdateState,
+    channel: SparkUpdateConfig["channel"],
+  ): Promise<{
+    version: string;
+    candidate?: SparkBuildInfo;
+    release?: SparkAvailableRelease;
+  }> {
+    if (requestedVersion && requestedVersion === state.pendingVersion) {
+      const candidate = await readReadyCandidate(
+        this.paths,
+        requestedVersion,
+        state.pendingFingerprint,
+      );
+      if (candidate) return { version: requestedVersion, candidate };
+    }
+    try {
+      const release = requestedVersion
+        ? await this.queryExactVersion(requestedVersion)
+        : await this.queryRegistry(channel);
+      return { version: release.version, release };
+    } catch (error) {
+      await this.recordFailure("release_resolution_failed", error, requestedVersion);
+      throw error;
+    }
+  }
+
+  private async prepareApplyCandidate(target: {
+    version: string;
+    candidate?: SparkBuildInfo;
+    release?: SparkAvailableRelease;
+  }): Promise<SparkBuildInfo> {
+    if (target.candidate) return target.candidate;
+    if (!target.release) {
+      throw new Error(`Missing immutable release metadata for Spark ${target.version}`);
+    }
+    return await this.stageAndVerify(target.release);
+  }
+
+  private async activateCandidate(
+    version: string,
+    candidate: SparkBuildInfo,
+    initialState: SparkUpdateState,
+    options: { automatic?: boolean; wait?: boolean },
+  ): Promise<SparkUpdateStatus> {
+    let state: SparkUpdateState = {
+      ...initialState,
+      availableVersion: version,
+      pendingVersion: version,
+      pendingFingerprint: candidate.fingerprint,
+    };
+    await writeSparkUpdateState(this.paths, state);
+    if (options.automatic && !(await this.daemonIsProvablyIdle())) {
+      return await this.status();
+    }
+    const previousVersion = state.currentVersion;
+    const previousFingerprint = state.currentFingerprint;
+    await this.activateVersion(version);
+    state = {
+      ...state,
+      currentVersion: version,
+      currentFingerprint: candidate.fingerprint,
+      ...(previousVersion ? { rollbackVersion: previousVersion } : {}),
+      ...(previousFingerprint ? { rollbackFingerprint: previousFingerprint } : {}),
+    };
+    await writeSparkUpdateState(this.paths, state);
+    try {
+      await this.verifyCandidateWhenRequested(candidate, options.wait);
+    } catch (error) {
+      await this.restoreAfterFailedActivation(error, version, previousVersion, previousFingerprint);
+      throw error;
+    }
+    await writeSparkUpdateState(this.paths, {
+      ...state,
+      lastGoodVersion: version,
+      lastGoodFingerprint: candidate.fingerprint,
+      ...(previousVersion ? { rollbackVersion: previousVersion } : {}),
+      ...(previousFingerprint ? { rollbackFingerprint: previousFingerprint } : {}),
+      availableVersion: undefined,
+      pendingVersion: undefined,
+      pendingFingerprint: undefined,
+      failure: undefined,
+    });
+    await this.cleanupVersions(new Set([version, previousVersion].filter(Boolean) as string[]));
+    return await this.status();
+  }
+
+  private async verifyCandidateWhenRequested(
+    candidate: SparkBuildInfo,
+    wait: boolean | undefined,
+  ): Promise<void> {
+    if (wait === false) return;
+    await this.syncDaemon(candidate);
+    await this.healthCheck(candidate);
+    await this.healthCheckCockpit();
+  }
+
+  private async restoreAfterFailedActivation(
+    error: unknown,
+    failedVersion: string,
+    previousVersion: string | undefined,
+    previousFingerprint: string | undefined,
+  ): Promise<void> {
+    if (!previousVersion) {
+      await this.stopFailedInitialInstall();
+      return;
+    }
+    await this.activateVersion(previousVersion);
+    const previousBuild = await readInstalledBuildInfo(this.paths, previousVersion);
+    await writeSparkUpdateState(this.paths, {
+      ...(await readSparkUpdateState(this.paths)),
+      currentVersion: previousVersion,
+      currentFingerprint: previousFingerprint,
+      pendingVersion: undefined,
+      pendingFingerprint: undefined,
+    });
+    try {
+      await this.syncDaemon(previousBuild);
+      await this.healthCheck(previousBuild);
+      await this.healthCheckCockpit();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `Spark ${failedVersion} failed and rollback health verification also failed`,
+      );
+    }
+  }
+
+  private async stopFailedInitialInstall(): Promise<void> {
+    await this.#run(this.paths.launcherPath, ["daemon", "stop", "--yes"], {
+      env: this.#env,
+      timeoutMs: 30_000,
+    }).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    await rm(this.paths.currentLink, { force: true });
+    await writeSparkUpdateState(this.paths, {
+      ...(await readSparkUpdateState(this.paths)),
+      currentVersion: undefined,
+      currentFingerprint: undefined,
+      pendingVersion: undefined,
+      pendingFingerprint: undefined,
+    });
   }
 
   async rollback(options: { wait?: boolean } = {}): Promise<SparkUpdateStatus> {
@@ -717,6 +762,8 @@ child.on("exit", (code, signal) => {
     const logDue = !same || elapsedAtLeast(state.failure?.lastLoggedAt, now, 60 * 60_000);
     const notificationDue =
       !same || elapsedAtLeast(state.failure?.lastNotifiedAt, now, 24 * 60 * 60_000);
+    const lastLoggedAt = retainedTimestamp(logDue, state.failure?.lastLoggedAt, now);
+    const lastNotifiedAt = retainedTimestamp(notificationDue, state.failure?.lastNotifiedAt, now);
     await writeSparkUpdateState(this.paths, {
       ...state,
       failure: {
@@ -727,16 +774,8 @@ child.on("exit", (code, signal) => {
         firstAt: same ? state.failure!.firstAt : now.toISOString(),
         lastAt: now.toISOString(),
         nextRetryAt: nextUpdateRetryAt(count, now),
-        ...(logDue
-          ? { lastLoggedAt: now.toISOString() }
-          : state.failure?.lastLoggedAt
-            ? { lastLoggedAt: state.failure.lastLoggedAt }
-            : {}),
-        ...(notificationDue
-          ? { lastNotifiedAt: now.toISOString() }
-          : state.failure?.lastNotifiedAt
-            ? { lastNotifiedAt: state.failure.lastNotifiedAt }
-            : {}),
+        ...(lastLoggedAt ? { lastLoggedAt } : {}),
+        ...(lastNotifiedAt ? { lastNotifiedAt } : {}),
       },
     });
     if (logDue) console.error(`[spark-update] ${code}: ${errorMessage(error)}`);
@@ -877,8 +916,16 @@ export function isNetworkCheckDue(
 
 function deterministicJitterMinutes(seed: string, maximum: number): number {
   let hash = 0;
-  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  for (const character of seed) hash = (hash * 31 + character.codePointAt(0)!) >>> 0;
   return hash % (maximum + 1);
+}
+
+function retainedTimestamp(
+  due: boolean,
+  previous: string | undefined,
+  now: Date,
+): string | undefined {
+  return due ? now.toISOString() : previous;
 }
 
 function elapsedAtLeast(value: string | undefined, now: Date, durationMs: number): boolean {

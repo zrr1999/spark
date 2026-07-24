@@ -1,8 +1,8 @@
-import { join } from "node:path";
 import {
   listSavedWorkflows,
   normalizeWorkflowId,
   userWorkflowDir as piWorkflowUserWorkflowDir,
+  workspaceWorkflowDir as portableWorkspaceWorkflowDir,
   type WorkflowDescriptor,
   type WorkflowRegistryError,
   type WorkflowRegistryOptions,
@@ -56,7 +56,7 @@ export async function listSparkWorkflowRegistry(
 }
 
 export function workspaceWorkflowDir(cwd: string): string {
-  return join(cwd, ".spark", "workflows");
+  return portableWorkspaceWorkflowDir(cwd);
 }
 
 export function userWorkflowDir(): string {

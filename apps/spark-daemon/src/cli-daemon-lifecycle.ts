@@ -1249,12 +1249,16 @@ export async function buildDaemonStatus(
     const availableBuild = readDeployedSparkBuildInfo(deployedEntrypoint);
     const availableFingerprint = sparkDaemonEntrypointFingerprint(deployedEntrypoint);
     const updateState = await readUpdaterProjectionForDaemonStatus();
-    const runningVersion =
-      status.buildFingerprint === availableFingerprint
-        ? availableBuild.version
-        : status.buildFingerprint === updateState.lastGoodFingerprint
-          ? updateState.lastGoodVersion
-          : undefined;
+    const runningVersion = resolveRunningBuildVersion({
+      runningFingerprint: status.buildFingerprint,
+      availableFingerprint,
+      availableVersion: availableBuild.version,
+      lastGoodFingerprint: updateState.lastGoodFingerprint,
+      lastGoodVersion: updateState.lastGoodVersion,
+    });
+    const targetVersion = status.lifecycle.targetVersion ?? updateState.pendingVersion;
+    const targetFingerprint =
+      status.lifecycle.targetBuildFingerprint ?? updateState.pendingFingerprint;
     return {
       running: true,
       pid,
@@ -1269,16 +1273,8 @@ export async function buildDaemonStatus(
         availableFingerprint,
         ...(runningVersion ? { runningVersion } : {}),
         availableVersion: availableBuild.version,
-        ...(status.lifecycle.targetVersion
-          ? { targetVersion: status.lifecycle.targetVersion }
-          : updateState.pendingVersion
-            ? { targetVersion: updateState.pendingVersion }
-            : {}),
-        ...(status.lifecycle.targetBuildFingerprint
-          ? { targetFingerprint: status.lifecycle.targetBuildFingerprint }
-          : updateState.pendingFingerprint
-            ? { targetFingerprint: updateState.pendingFingerprint }
-            : {}),
+        ...(targetVersion ? { targetVersion } : {}),
+        ...(targetFingerprint ? { targetFingerprint } : {}),
         updateAvailable:
           status.buildFingerprint === undefined || status.buildFingerprint !== availableFingerprint,
       },
@@ -1295,6 +1291,18 @@ export async function buildDaemonStatus(
       ...(restart ? { restart } : {}),
     };
   }
+}
+
+function resolveRunningBuildVersion(input: {
+  runningFingerprint: string | undefined;
+  availableFingerprint: string;
+  availableVersion: string;
+  lastGoodFingerprint: string | undefined;
+  lastGoodVersion: string | undefined;
+}): string | undefined {
+  if (input.runningFingerprint === input.availableFingerprint) return input.availableVersion;
+  if (input.runningFingerprint === input.lastGoodFingerprint) return input.lastGoodVersion;
+  return undefined;
 }
 
 function readDeployedSparkBuildInfo(deployedEntrypoint: string) {

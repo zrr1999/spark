@@ -52,71 +52,71 @@ export async function runSparkUpdateCommand(
     const [action = "status", ...rest] = argv;
     const prefix = optionValue(rest, "--prefix");
     const manager = new SparkUpdateManager({ prefix });
-    if (action === "status") {
-      const status = await manager.status();
-      (io.stdout ?? process.stdout).write(
-        rest.includes("--json")
-          ? `${JSON.stringify(status, null, 2)}\n`
-          : `${formatStatus(status)}\n`,
-      );
-      return;
-    }
-    if (action === "check") {
-      const status = await manager.check();
-      (io.stdout ?? process.stdout).write(
-        rest.includes("--json")
-          ? `${JSON.stringify(status, null, 2)}\n`
-          : `${formatStatus(status)}\n`,
-      );
-      return;
-    }
-    if (action === "__tick") {
-      try {
-        await manager.tick();
-      } catch {
-        // Background failures are already rate-limited and persisted by the
-        // updater. Keep launchd's 15-minute tick from duplicating log noise.
-      }
-      return;
-    }
-    if (action === "configure") {
-      const policyValue = optionValue(rest, "--policy");
-      const channelValue = optionValue(rest, "--channel");
-      const policy = policyValue ? parsePolicy(policyValue) : undefined;
-      const channel = channelValue ? parseChannel(channelValue) : undefined;
-      if (policyValue && !policy) throw new Error(`Invalid update policy: ${policyValue}`);
-      if (channelValue && !channel) throw new Error(`Invalid update channel: ${channelValue}`);
-      if (!policy && !channel) {
-        throw new Error("spark update configure requires --policy and/or --channel");
-      }
-      const config = await manager.configure({
-        ...(policy ? { policy } : {}),
-        ...(channel ? { channel } : {}),
-      });
-      (io.stdout ?? process.stdout).write(`${JSON.stringify(config, null, 2)}\n`);
-      return;
-    }
-    if (action === "apply") {
-      requireConfirmation(rest);
-      const version = positional(rest);
-      const status = await manager.apply(version, { wait: true });
-      (io.stdout ?? process.stdout).write(`${formatStatus(status)}\n`);
-      return;
-    }
-    if (action === "rollback") {
-      requireConfirmation(rest);
-      const status = await manager.rollback({ wait: true });
-      (io.stdout ?? process.stdout).write(`${formatStatus(status)}\n`);
-      return;
-    }
-    if (action === "retry") {
-      requireConfirmation(rest);
-      const status = await manager.retry(positional(rest));
-      (io.stdout ?? process.stdout).write(`${formatStatus(status)}\n`);
-      return;
-    }
-    throw new Error(`Unknown spark update action: ${action}`);
+    const handler = UPDATE_COMMAND_HANDLERS[action];
+    if (!handler) throw new Error(`Unknown spark update action: ${action}`);
+    await handler({ manager, rest, stdout: io.stdout ?? process.stdout });
   });
+}
+
+interface UpdateCommandContext {
+  manager: SparkUpdateManager;
+  rest: string[];
+  stdout: Output;
+}
+
+type UpdateCommandHandler = (context: UpdateCommandContext) => Promise<void>;
+
+const UPDATE_COMMAND_HANDLERS: Readonly<Record<string, UpdateCommandHandler>> = {
+  status: async ({ manager, rest, stdout }) => {
+    writeStatus(stdout, await manager.status(), rest.includes("--json"));
+  },
+  check: async ({ manager, rest, stdout }) => {
+    writeStatus(stdout, await manager.check(), rest.includes("--json"));
+  },
+  __tick: async ({ manager }) => {
+    try {
+      await manager.tick();
+    } catch {
+      // Background failures are already rate-limited and persisted by the
+      // updater. Keep launchd's 15-minute tick from duplicating log noise.
+    }
+  },
+  configure: async ({ manager, rest, stdout }) => {
+    const policyValue = optionValue(rest, "--policy");
+    const channelValue = optionValue(rest, "--channel");
+    const policy = policyValue ? parsePolicy(policyValue) : undefined;
+    const channel = channelValue ? parseChannel(channelValue) : undefined;
+    if (policyValue && !policy) throw new Error(`Invalid update policy: ${policyValue}`);
+    if (channelValue && !channel) throw new Error(`Invalid update channel: ${channelValue}`);
+    if (!policy && !channel) {
+      throw new Error("spark update configure requires --policy and/or --channel");
+    }
+    const config = await manager.configure({
+      ...(policy ? { policy } : {}),
+      ...(channel ? { channel } : {}),
+    });
+    stdout.write(`${JSON.stringify(config, null, 2)}\n`);
+  },
+  apply: async ({ manager, rest, stdout }) => {
+    requireConfirmation(rest);
+    stdout.write(`${formatStatus(await manager.apply(positional(rest), { wait: true }))}\n`);
+  },
+  rollback: async ({ manager, rest, stdout }) => {
+    requireConfirmation(rest);
+    stdout.write(`${formatStatus(await manager.rollback({ wait: true }))}\n`);
+  },
+  retry: async ({ manager, rest, stdout }) => {
+    requireConfirmation(rest);
+    stdout.write(`${formatStatus(await manager.retry(positional(rest)))}\n`);
+  },
+};
+
+function writeStatus(
+  output: Output,
+  status: Awaited<ReturnType<SparkUpdateManager["status"]>>,
+  json: boolean,
+): void {
+  output.write(json ? `${JSON.stringify(status, null, 2)}\n` : `${formatStatus(status)}\n`);
 }
 
 function optionValue(argv: string[], name: string): string | undefined {
