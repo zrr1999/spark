@@ -12,6 +12,7 @@ spark daemon invocation status <invocation-id> --json
 spark daemon invocation stream <invocation-id> --after <cursor> --limit 500 --json
 spark daemon invocation cancel <invocation-id> --reason <text> --json
 spark daemon restart --yes
+spark daemon sync --wait
 ```
 
 Use `--token -` to read a one-line registration token from stdin. Browser/device login stores a private machine credential for connectivity and refresh only; every workspace registration consumes a fresh workspace token. A successful registration prints a separate one-time browser key for `/{slug}/login`. Mint additional workspace browser keys on the Cockpit host with `spark cockpit workspace access create --workspace <id>` (list/revoke there too; name is display-only). Cockpit-level remote login uses `spark cockpit access create` and `/login`. Remote Cockpit URLs require HTTPS unless both login and registration explicitly use `--allow-insecure-http` on a trusted private network.
@@ -19,5 +20,7 @@ Use `--token -` to read a one-line registration token from stdin. Browser/device
 The daemon owns workspace arbitration, persistent sessions, channels, SQLite invocations/events, per-session execution fencing, cancellation, timeout, restart recovery, and the runtime WebSocket uplink. Cockpit receives projections; it is not execution truth.
 
 `spark daemon restart` requests a drain restart. Before admission closes, the daemon starts an external watchdog and atomically persists a restart fence with an exact restart ID and target process generation. Queued work stays durable; active invocations finish in the current process; the successor becomes active only after scheduled work, direct invocations, and already-received channel admissions are idle. The command returns after acceptance so a daemon-hosted caller cannot wait on its own invocation; use `--wait` from an external shell to require the fenced replacement RPC identity to become ready.
+
+Keep source/package updates outside the daemon. An updater should build or install into a staging location, atomically replace the deployed package, then run `spark daemon sync --wait`. `sync` starts a stopped daemon, leaves an already-current daemon alone, and requests the same fenced drain restart when the running build fingerprint differs. A running daemon also watches its deployed entrypoint and automatically requests that safe restart after a changed fingerprint remains stable. On macOS the launchd service remains the process supervisor; the daemon never pulls Git or overwrites its own installation.
 
 An unplanned daemon exit resumes durable invocations that were left `running`: the successor requeues them with `invocation.resume` and a resume notice for the model session. Invalid task payloads still fail closed with `DAEMON_EXECUTION_INTERRUPTED`. Invocations that were still `queued` remain eligible for the next daemon generation.

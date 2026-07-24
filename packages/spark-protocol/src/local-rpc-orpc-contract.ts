@@ -74,6 +74,7 @@ export const sparkLocalRpcDaemonStatusResultSchema = z.object({
   lifecycle: z.object({
     state: z.enum(["starting", "running", "draining", "stopping"]),
   }),
+  buildFingerprint: z.string().min(1).optional(),
   observedAt: isoDateTimeSchema,
 });
 

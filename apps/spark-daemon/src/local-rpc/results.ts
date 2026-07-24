@@ -61,6 +61,9 @@ export function daemonStatus(value: unknown): LocalDaemonStatusResult {
     invocationHealth: invocationHealthResult(value.invocationHealth),
     channelDeliveries: channelDeliverySummary(value.channelDeliveries),
     lifecycle: parseSparkDaemonLifecycleSnapshot(value.lifecycle),
+    ...(typeof value.buildFingerprint === "string"
+      ? { buildFingerprint: value.buildFingerprint }
+      : {}),
     observedAt: typeof value.observedAt === "string" ? value.observedAt : new Date().toISOString(),
   };
 }

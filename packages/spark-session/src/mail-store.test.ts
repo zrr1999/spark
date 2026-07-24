@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,50 @@ async function createStore(now: () => number = () => Date.parse("2026-07-15T00:0
 }
 
 describe("SparkSessionMailStore channel delivery receipts", () => {
+  it("isolates one corrupt mailbox while preserving later pending deliveries", async () => {
+    const corruptions: Array<{ path: string; error: unknown }> = [];
+    const sparkHome = await mkdtemp(join(tmpdir(), "spark-session-mail-corrupt-"));
+    tempRoots.push(sparkHome);
+    const store = new SparkSessionMailStore({
+      sparkHome,
+      onCorruptMailbox: (input) => corruptions.push(input),
+    });
+    const corrupt = await store.send({
+      toSessionId: "session:corrupt",
+      visibility: "user",
+      deliveryTargets: [{ adapter: "infoflow", externalKey: "user:corrupt" }],
+      body: "corrupt",
+    });
+    const corruptFile = JSON.parse(await readFile(corrupt.path, "utf8")) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    corruptFile.messages[0]!.originBinding = {
+      workspaceId: "workspace",
+      adapter: "infoflow",
+      externalKey: "user:corrupt",
+      recipient: "user:corrupt",
+    };
+    await writeFile(corrupt.path, JSON.stringify(corruptFile));
+    const valid = await store.send({
+      toSessionId: "session:valid",
+      visibility: "user",
+      deliveryTargets: [{ adapter: "qqbot", externalKey: "user:valid" }],
+      body: "valid",
+    });
+
+    await expect(store.pendingChannelDeliveries()).resolves.toMatchObject([
+      {
+        message: { id: valid.message.id, toSessionId: "session:valid" },
+        target: { adapter: "qqbot", externalKey: "user:valid" },
+      },
+    ]);
+    expect(corruptions).toHaveLength(1);
+    expect(corruptions[0]?.path).toBe(corrupt.path);
+    await expect(store.list("session:corrupt")).rejects.toThrow(
+      /originating channel binding requires/u,
+    );
+  });
+
   it("normalizes targets into one deterministic pending set and preserves idempotency", async () => {
     const store = await createStore();
     const first = await store.send({

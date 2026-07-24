@@ -105,6 +105,7 @@ import {
   workspaceSummary,
   type StartSparkDaemonOptions,
 } from "./daemon.ts";
+import { createRepeatedErrorReporter } from "./repeated-error-reporter.ts";
 
 export async function startSparkDaemon(options: StartSparkDaemonOptions): Promise<void> {
   const runtime = await createPreparedDaemonRuntime(options);
@@ -235,6 +236,9 @@ async function createPreparedDaemonRuntime(
   });
   await gcDriverHiddenSessions(driverStore);
   const userPaths = resolveSparkUserPaths({ sparkHome: options.sparkHome });
+  const corruptMailboxReporter = createRepeatedErrorReporter(
+    "[spark-daemon] corrupt session mailbox skipped",
+  );
   const scheduler = createDaemonScheduler({
     options,
     runtimeSignal,
@@ -297,6 +301,13 @@ async function createPreparedDaemonRuntime(
       options.mailStore ??
       new SparkSessionMailStore({
         sparkHome: userPaths.dataRoot,
+        onCorruptMailbox: ({ path, error }) => {
+          corruptMailboxReporter.report(
+            new Error(`Unable to read mailbox ${path}`, {
+              cause: error,
+            }),
+          );
+        },
       }),
     servingGate,
     loops: {},
@@ -941,14 +952,17 @@ async function runChannelReplyReconcileLoop(
   signal: AbortSignal,
   intervalMs: number,
 ): Promise<void> {
+  const errors = createRepeatedErrorReporter("[spark-daemon] channel reply reconciliation failed");
   while (!signal.aborted) {
     try {
       await reconcileChannelReplyDeliveries({ store, channelIngress });
+      errors.recovered();
     } catch (error) {
-      console.error("[spark-daemon] channel reply reconciliation failed", error);
+      errors.report(error);
     }
     await delayUnlessAborted(Math.max(250, Math.floor(intervalMs)), signal);
   }
+  errors.flush();
 }
 
 async function runChannelDeliveryReconcileLoop(
@@ -958,14 +972,19 @@ async function runChannelDeliveryReconcileLoop(
   intervalMs: number,
 ): Promise<void> {
   const workerId = `daemon:${process.pid}`;
+  const errors = createRepeatedErrorReporter(
+    "[spark-daemon] channel delivery reconciliation failed",
+  );
   while (!signal.aborted) {
     try {
       await reconcileDaemonChannelDeliveries({ store, channelIngress, workerId }, { limit: 50 });
+      errors.recovered();
     } catch (error) {
-      console.error("[spark-daemon] channel delivery reconciliation failed", error);
+      errors.report(error);
     }
     await delayUnlessAborted(Math.max(50, Math.floor(intervalMs)), signal);
   }
+  errors.flush();
 }
 
 async function runNotificationReconcileLoop(
@@ -977,6 +996,9 @@ async function runNotificationReconcileLoop(
   signal: AbortSignal,
   intervalMs: number,
 ): Promise<void> {
+  const errors = createRepeatedErrorReporter(
+    "[spark-daemon] session notification reconciliation failed",
+  );
   while (!signal.aborted) {
     try {
       await reconcileSessionNotificationDeliveries({
@@ -988,11 +1010,13 @@ async function runNotificationReconcileLoop(
           outbox: channelDeliveryOutbox,
         },
       });
+      errors.recovered();
     } catch (error) {
-      console.error("[spark-daemon] session notification reconciliation failed", error);
+      errors.report(error);
     }
     await delayUnlessAborted(Math.max(250, Math.floor(intervalMs)), signal);
   }
+  errors.flush();
 }
 
 function prepareChannelIngress(

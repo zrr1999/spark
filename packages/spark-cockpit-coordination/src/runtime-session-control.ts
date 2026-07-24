@@ -42,6 +42,12 @@ export interface RuntimeSessionProjectionRecord {
   workspaceId?: string;
   runtimeWorkspaceBindingId?: string;
   snapshot?: SparkSessionView;
+  /**
+   * A newer or corrupt daemon snapshot must not make the whole session rail
+   * unavailable. The registry record remains usable while reconciliation
+   * replaces the incompatible cached snapshot.
+   */
+  snapshotStatus?: "compatible" | "incompatible";
   history?: {
     totalMessages: number;
     loadedMessages: number;
@@ -783,9 +789,8 @@ function runtimeSessionProjectionRecord(
   row: RuntimeSessionProjectionRow,
 ): RuntimeSessionProjectionRecord {
   const session = parseSparkSessionRegistryRecord(JSON.parse(row.recordJson));
-  const snapshot = row.snapshotJson
-    ? sparkSessionViewSchema.parse(JSON.parse(row.snapshotJson))
-    : undefined;
+  const snapshotProjection = parseRuntimeSessionSnapshot(row.snapshotJson);
+  const snapshot = snapshotProjection.snapshot;
   return {
     runtimeId: row.runtimeId,
     session,
@@ -793,6 +798,7 @@ function runtimeSessionProjectionRecord(
     ...(row.runtimeWorkspaceBindingId
       ? { runtimeWorkspaceBindingId: row.runtimeWorkspaceBindingId }
       : {}),
+    ...(snapshotProjection.status ? { snapshotStatus: snapshotProjection.status } : {}),
     ...(snapshot
       ? {
           snapshot,
@@ -805,6 +811,21 @@ function runtimeSessionProjectionRecord(
       : {}),
     projectedAt: row.projectedAt,
   };
+}
+
+function parseRuntimeSessionSnapshot(snapshotJson: string | null): {
+  snapshot?: SparkSessionView;
+  status?: "compatible" | "incompatible";
+} {
+  if (!snapshotJson) return {};
+  try {
+    const parsed = sparkSessionViewSchema.safeParse(JSON.parse(snapshotJson));
+    return parsed.success
+      ? { snapshot: parsed.data, status: "compatible" }
+      : { status: "incompatible" };
+  } catch {
+    return { status: "incompatible" };
+  }
 }
 
 function listRuntimeSessionProjectionRows(

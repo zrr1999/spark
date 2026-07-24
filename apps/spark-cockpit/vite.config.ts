@@ -8,6 +8,12 @@ const runtimeWsPattern = /^\/api\/v1\/runtime\/runtimes\/(rt_[a-f0-9]{32})\/ws$/
 
 export default defineConfig({
   plugins: [runtimeWebSocketDevServer(), sveltekit()],
+  optimizeDeps: {
+    // streamdown-svelte 3.0.6 publishes component-relative sourcemap entries
+    // that Vite's optimizer resolves against the Cockpit app root. Loading the
+    // package directly avoids false "source file outside its package" warnings.
+    exclude: ["streamdown-svelte"],
+  },
   ssr: {
     // Lucide publishes Svelte source that must pass through the Svelte
     // transform before Rolldown parses the SSR graph.

@@ -26,6 +26,7 @@ import {
   readSparkDaemonProcessOwnership,
   readSparkDaemonRestartSuccessorContext,
   releaseSparkDaemonProcessOwnership,
+  rotateSparkDaemonServiceLogs,
   runSparkDaemonRestartSuccessor,
   scheduleSparkDaemonRestartSuccessor,
   stopSparkDaemonLaunchdLabel,
@@ -43,6 +44,27 @@ function readRestartTerminal(runtimeDir: string): Record<string, unknown> {
   if (!name) throw new Error("restart terminal record was not written");
   return JSON.parse(readFileSync(join(runtimeDir, name), "utf8")) as Record<string, unknown>;
 }
+
+describe("Spark daemon service logs", () => {
+  it("retains a bounded tail and rotates prior backups", () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-service-logs-"));
+    const logDir = join(root, "logs");
+    mkdirSync(logDir, { recursive: true });
+    const stderrPath = join(logDir, "service.stderr.log");
+    try {
+      writeFileSync(`${stderrPath}.1`, "older");
+      writeFileSync(stderrPath, "0123456789");
+
+      rotateSparkDaemonServiceLogs({ logDir }, { maxBytes: 4, backups: 2 });
+
+      expect(readFileSync(stderrPath, "utf8")).toBe("");
+      expect(readFileSync(`${stderrPath}.1`, "utf8")).toBe("6789");
+      expect(readFileSync(`${stderrPath}.2`, "utf8")).toBe("older");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Spark daemon restart successor", () => {
   it("publishes intent and waits for the helper to validate the exact committed fence", async () => {

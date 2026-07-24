@@ -2,12 +2,13 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
   linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -17,12 +18,12 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { launchctlCommand, type SparkPaths } from "@zendev-lab/spark-system";
 import { requestSparkDaemonLocalRpcWire } from "@zendev-lab/spark-daemon-client/local-rpc";
 import { SPARK_PROTOCOL_VERSION } from "@zendev-lab/spark-protocol";
 import { cappedExponentialCeiling } from "@zendev-lab/spark-retry";
+import { sparkDaemonEntrypointPath } from "./build-reload.ts";
 
 const launchdLabel = "dev.spark.daemon";
 const restartIntentFileName = "restart.intent.json";
@@ -1442,6 +1443,7 @@ function startLaunchdService(paths: SparkPaths): SparkDaemonServiceResult {
 
   runLaunchctl(["bootout", target]);
   runLaunchctl(["bootout", `gui/${uid}`, plistPath]);
+  rotateSparkDaemonServiceLogs(paths);
   const bootstrap = runLaunchctl(["bootstrap", `gui/${uid}`, plistPath]);
   if (bootstrap.status !== 0) {
     throw new Error(`Failed to register Spark daemon: ${bootstrap.stderr || bootstrap.stdout}`);
@@ -1534,6 +1536,7 @@ function startDetachedSparkDaemon(
   }
 
   mkdirSync(paths.logDir, { recursive: true, mode: 0o700 });
+  rotateSparkDaemonServiceLogs(paths);
   const stdout = openSync(join(paths.logDir, "service.stdout.log"), "a", 0o600);
   const stderr = openSync(join(paths.logDir, "service.stderr.log"), "a", 0o600);
   const command = sparkDaemonStartCommand();
@@ -1624,8 +1627,39 @@ function sparkDaemonStartCommand(): string[] {
 }
 
 function sparkDaemonCliCommand(): string[] {
-  const cliPath = realpathSync(process.argv[1] ?? fileURLToPath(import.meta.url));
-  return [process.execPath, cliPath];
+  return [process.execPath, sparkDaemonEntrypointPath()];
+}
+
+export function rotateSparkDaemonServiceLogs(
+  paths: Pick<SparkPaths, "logDir">,
+  options: { maxBytes?: number; backups?: number } = {},
+): void {
+  const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? 8 * 1024 * 1024));
+  const backups = Math.max(1, Math.floor(options.backups ?? 2));
+  mkdirSync(paths.logDir, { recursive: true, mode: 0o700 });
+  for (const name of ["service.stdout.log", "service.stderr.log"]) {
+    const path = join(paths.logDir, name);
+    if (!existsSync(path) || statSync(path).size <= maxBytes) continue;
+    for (let index = backups; index >= 2; index -= 1) {
+      const target = `${path}.${index}`;
+      const previous = `${path}.${index - 1}`;
+      rmSync(target, { force: true });
+      if (existsSync(previous)) renameSync(previous, target);
+    }
+
+    const descriptor = openSync(path, "r+");
+    try {
+      const size = statSync(path).size;
+      const retainedBytes = Math.min(size, maxBytes);
+      const tail = Buffer.allocUnsafe(retainedBytes);
+      readSync(descriptor, tail, 0, retainedBytes, size - retainedBytes);
+      writeFileSync(`${path}.1`, tail, { mode: 0o600 });
+      ftruncateSync(descriptor, 0);
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
 }
 
 function serviceEnvironment(): Record<string, string> {
