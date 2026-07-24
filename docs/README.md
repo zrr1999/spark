@@ -2,6 +2,10 @@
 
 These files are current contracts or operator procedures. Product and package implementation details belong in source and package READMEs.
 
+User-facing documentation is maintained separately in
+[`apps/spark-docs`](../apps/spark-docs/README.md); this directory remains the
+map for internal contracts and operator procedures.
+
 - [`specs/command-planes.md`](./specs/command-planes.md): canonical CLI planes, state ownership, adapter boundaries, growth ratchets, dependency adoption, and the npm product-distribution contract.
 - [`specs/package-architecture.md`](./specs/package-architecture.md): package layers, owners, state writers, dependency direction, extraction/merge criteria, and mechanical ratchets.
 - [`specs/configuration-and-paths.md`](./specs/configuration-and-paths.md): `SPARK_HOME` and XDG path layout, precedence, and migration policy.

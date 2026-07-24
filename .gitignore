@@ -29,6 +29,7 @@ package-lock.json
 .graft/
 build/
 .svelte-kit/
+.astro/
 playwright-report/
 test-results/
 .vitest-attachments/

@@ -6,13 +6,18 @@ import { test } from "vitest";
 const canonicalRootScripts = [
   "audit",
   "build",
+  "build:docs",
   "check",
+  "check:docs",
   "check:static",
   "check:test-quality",
   "check:test-quality:update",
+  "deploy:docs",
+  "dev:docs",
   "fix",
   "prepare",
   "preview",
+  "preview:docs",
   "release:pack",
   "report:hygiene",
   "smoke",
@@ -53,14 +58,20 @@ test("root package exposes one compact validation and release surface", async ()
   );
   assert.equal(
     scripts.check,
-    "pnpm run check:static && pnpm run test:unit && pnpm run test:process:source",
+    "pnpm run check:static && pnpm run check:docs && pnpm run test:unit && pnpm run test:process:source",
   );
+  assert.equal(scripts["build:docs"], "pnpm --filter @zendev-lab/spark-docs run build");
+  assert.equal(scripts["check:docs"], "pnpm --filter @zendev-lab/spark-docs run check");
+  assert.equal(scripts["deploy:docs"], "pnpm --filter @zendev-lab/spark-docs run deploy");
+  assert.equal(scripts["dev:docs"], "pnpm --filter @zendev-lab/spark-docs run dev");
+  assert.equal(scripts["preview:docs"], "pnpm --filter @zendev-lab/spark-docs run preview");
   assert.equal(scripts["test:process:source"], "vp test run --config vitest.process.config.ts");
   assert.match(
     scripts.fix ?? "",
     /^pnpm --filter @zendev-lab\/spark-cockpit exec svelte-kit sync/u,
   );
   for (const requiredCheckPhase of [
+    "pnpm --filter @zendev-lab/spark-docs exec astro sync",
     "node scripts/check-architecture-ratchets.mjs",
     "node scripts/check-npm-product.mjs",
     "depcruise --config .dependency-cruiser.cjs apps packages test",
@@ -153,9 +164,10 @@ test("workspace scripts contain package-local behavior instead of root boilerpla
   }
 });
 
-test("CI and prek consume the canonical package scripts", async () => {
-  const [verifyWorkflow, hygieneWorkflow, prek] = await Promise.all([
+test("CI, CD, and prek consume the canonical package scripts", async () => {
+  const [verifyWorkflow, docsCdWorkflow, hygieneWorkflow, prek] = await Promise.all([
     readFile(resolve(".github/workflows/ci-verify.yml"), "utf8"),
+    readFile(resolve(".github/workflows/cd-docs.yml"), "utf8"),
     readFile(resolve(".github/workflows/ce-hygiene.yml"), "utf8"),
     readFile(resolve("prek.toml"), "utf8"),
   ]);
@@ -164,9 +176,21 @@ test("CI and prek consume the canonical package scripts", async () => {
   assert.match(verifyWorkflow, /pnpm run test:unit/u);
   assert.match(verifyWorkflow, /pnpm run test:process:source/u);
   assert.match(verifyWorkflow, /pnpm run smoke/u);
+  assert.match(verifyWorkflow, /pnpm run check:docs/u);
+  assert.match(verifyWorkflow, /wrangler deploy --dry-run/u);
+  assert.match(verifyWorkflow, /re-actors\/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe/u);
+  assert.match(verifyWorkflow, /jobs: \$\{\{ toJSON\(needs\) \}\}/u);
   assert.match(verifyWorkflow, /pnpm run test:browser:cockpit/u);
   assert.match(verifyWorkflow, /name: verify/u);
   assert.doesNotMatch(verifyWorkflow, /test:npm-product/u);
+  assert.match(docsCdWorkflow, /name: "CD - Docs"/u);
+  assert.match(
+    docsCdWorkflow,
+    /cloudflare\/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0/u,
+  );
+  assert.match(docsCdWorkflow, /workingDirectory: apps\/spark-docs/u);
+  assert.match(docsCdWorkflow, /command: deploy/u);
+  assert.doesNotMatch(docsCdWorkflow, /run:\s*\|\s*$/mu);
   assert.match(hygieneWorkflow, /pnpm run report:hygiene/u);
   assert.doesNotMatch(hygieneWorkflow, /pnpm exec (?:knip|jscpd)/u);
   assert.match(prek, /id = "spark-check-fix"/u);

@@ -1,0 +1,165 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+import context from "virtual:starlight/project-context";
+import config from "virtual:starlight/user-config";
+
+const docsLocaleStorageKey = "spark-docs-locale";
+
+function stripTrailingSlash(pathname: string) {
+  return pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
+}
+
+function localizedPathname(locale: string | undefined) {
+  const url = new URL(Astro.url);
+
+  if (!config.locales) return url.pathname;
+  if (locale === "root") locale = "";
+
+  const base =
+    import.meta.env.BASE_URL === "/" ? "" : stripTrailingSlash(import.meta.env.BASE_URL);
+  const hasBase = base !== "" && url.pathname.startsWith(base);
+  if (hasBase) url.pathname = url.pathname.replace(base, "");
+
+  const [, baseSegment] = url.pathname.split("/");
+  const htmlExtension = ".html";
+  const isRootHtml = baseSegment?.endsWith(htmlExtension);
+  const baseSlug = isRootHtml ? baseSegment?.slice(0, -htmlExtension.length) : baseSegment;
+
+  if (baseSlug && baseSlug in config.locales) {
+    if (locale) {
+      url.pathname = url.pathname.replace(baseSlug, locale);
+    } else if (isRootHtml) {
+      url.pathname = "/index.html";
+    } else {
+      url.pathname = url.pathname.replace(`/${baseSlug}`, "");
+    }
+  } else if (locale) {
+    url.pathname =
+      baseSegment === "index.html" ? `/${locale}.html` : `/${locale}${url.pathname}`;
+  }
+
+  if (hasBase) url.pathname = base + url.pathname;
+  if (context.trailingSlash === "never") url.pathname = stripTrailingSlash(url.pathname);
+  return url.pathname;
+}
+
+const options = config.isMultilingual
+  ? Object.entries(config.locales).map(([code, locale]) => ({
+      code,
+      label: locale?.label ?? code,
+      selected: code === Astro.locals.starlightRoute.locale,
+      value: localizedPathname(code),
+    }))
+  : [];
+---
+
+{
+  config.isMultilingual && (
+    <starlight-lang-select>
+      <label style="--sl-select-width: 7em">
+        <span class="sr-only">{Astro.locals.t("languageSelect.accessibleLabel")}</span>
+        <Icon name="translate" class="icon label-icon" />
+        <select autocomplete="off">
+          {
+            options.map(({ value, selected, label, code }) => (
+              <option value={value} selected={selected} data-spark-locale={code} set:html={label} />
+            ))
+          }
+        </select>
+        <Icon name="down-caret" class="icon caret" />
+      </label>
+    </starlight-lang-select>
+  )
+}
+
+<script is:inline define:vars={{ docsLocaleStorageKey }}>
+  class SparkDocsLanguageSelect extends HTMLElement {
+    constructor() {
+      super();
+      const select = this.querySelector("select");
+      if (!select) return;
+
+      select.addEventListener("change", (event) => {
+        if (!(event.currentTarget instanceof HTMLSelectElement)) return;
+        const selectedOption = event.currentTarget.selectedOptions.item(0);
+        const locale = selectedOption?.dataset.sparkLocale;
+        if (locale) window.localStorage.setItem(docsLocaleStorageKey, locale);
+        window.location.pathname = event.currentTarget.value;
+      });
+
+      window.addEventListener("pageshow", (event) => {
+        if (!event.persisted) return;
+        const markupSelectedIndex = select.querySelector("option[selected]")?.index;
+        if (markupSelectedIndex !== select.selectedIndex) {
+          select.selectedIndex = markupSelectedIndex ?? 0;
+        }
+      });
+    }
+  }
+
+  customElements.define("starlight-lang-select", SparkDocsLanguageSelect);
+</script>
+
+<style>
+  @layer starlight.core {
+    label {
+      --sl-label-icon-size: 0.875rem;
+      --sl-caret-size: 1.25rem;
+      --sl-inline-padding: 0.5rem;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      color: var(--sl-color-gray-2);
+    }
+
+    label:hover {
+      color: var(--sl-color-white);
+    }
+
+    .icon {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    select {
+      width: calc(var(--sl-select-width) + var(--sl-inline-padding) * 2);
+      padding-block: 0.625rem;
+      padding-inline: calc(var(--sl-label-icon-size) + var(--sl-inline-padding) + 0.25rem)
+        calc(var(--sl-caret-size) + var(--sl-inline-padding) + 0.25rem);
+      margin-inline: calc(var(--sl-inline-padding) * -1);
+      overflow: hidden;
+      color: inherit;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      appearance: none;
+      background-color: transparent;
+      border: 0;
+    }
+
+    option {
+      color: var(--sl-color-gray-1);
+      background-color: var(--sl-color-bg-nav);
+    }
+
+    @media (min-width: 50rem) {
+      select {
+        font-size: var(--sl-text-sm);
+      }
+    }
+  }
+
+  @layer starlight.components {
+    .label-icon {
+      inset-inline-start: 0;
+      font-size: var(--sl-label-icon-size);
+    }
+
+    .caret {
+      inset-inline-end: 0;
+      font-size: var(--sl-caret-size);
+    }
+  }
+</style>

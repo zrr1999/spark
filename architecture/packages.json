@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "maxWorkspacePackages": 39,
+  "maxWorkspacePackages": 40,
   "packages": {
     "@zendev-lab/spark-cli": {
       "path": "apps/spark-cli",
@@ -22,6 +22,14 @@
       "owner": "daemon",
       "stability": "supported",
       "stateWriter": "daemon"
+    },
+    "@zendev-lab/spark-docs": {
+      "path": "apps/spark-docs",
+      "layer": "application",
+      "owner": "docs",
+      "stability": "supported",
+      "stateWriter": "none",
+      "allowedWorkspaceDependencies": []
     },
     "@zendev-lab/spark-tui-app": {
       "path": "apps/spark-tui",
