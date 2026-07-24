@@ -76,6 +76,7 @@ test("root package exposes one compact validation and release surface", async ()
     );
   }
   for (const requiredUnitPhase of [
+    "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync",
     "vp test run --config vitest.root.config.ts",
     "pnpm -r --filter './packages/*' --if-present run check",
     "pnpm --filter @zendev-lab/spark-cockpit run test",
