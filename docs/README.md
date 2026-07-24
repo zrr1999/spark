@@ -20,6 +20,7 @@ These files are current contracts or operator procedures. Product and package im
 - [`operations/acp-spike.md`](./operations/acp-spike.md): experimental ACP agent stub and future daemon wiring map (not default-enabled).
 - [`operations/mcp-spike.md`](./operations/mcp-spike.md): experimental MCP server exposing read-only Spark memory tools (not default-enabled).
 - [`operations/durable-execution-notes.md`](./operations/durable-execution-notes.md): Inngest/Restate step-checkpoint notes mapped to workflows/loop/invocations.
+- [`operations/releases.md`](./operations/releases.md): tag-only npm/GitHub releases, managed installation, automatic-update policy, rollback, and first-publish setup.
 
 ## Terminology: three “runtime” meanings
 

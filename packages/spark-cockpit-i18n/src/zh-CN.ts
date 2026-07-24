@@ -182,6 +182,21 @@ const messages = {
     eventsTitle: "最近事件",
     noEvents: "该调用尚未记录事件。",
   },
+  updateStatus: {
+    navLabel: "更新",
+    title: "Spark 更新",
+    lede: "只读显示托管安装状态与 daemon 交接状态。",
+    current: "当前版本",
+    available: "可用版本",
+    pending: "待切换版本",
+    policy: "更新策略",
+    none: "无",
+    unmanaged: "当前不是托管安装",
+    unmanagedBody:
+      "Cockpit 不会修改源码 checkout 或普通包管理器安装。请在终端执行下面的精确迁移命令。",
+    quarantined: "已隔离版本",
+    readOnly: "Cockpit 只显示 updater 状态。安装、回滚和隔离状态由外部 spark updater 独占管理。",
+  },
   errorPage: {
     brandLabel: "Spark Cockpit",
     routeEyebrow: "服务不匹配",

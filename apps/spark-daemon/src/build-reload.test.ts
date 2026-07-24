@@ -48,6 +48,21 @@ describe("Spark daemon build reload", () => {
     expect(sparkDaemonEntrypointFingerprint(entrypoint)).not.toBe(first);
   });
 
+  it("uses managed build-info as the deployment watch target and canonical fingerprint", () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-daemon-build-info-"));
+    tempRoots.push(root);
+    const buildInfo = join(root, "build-info.json");
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    writeFileSync(buildInfo, JSON.stringify({ fingerprint }));
+
+    expect(
+      sparkDaemonDeploymentEntrypointPath(["node", join(root, "old-cli.js")], import.meta.url, {
+        SPARK_DEPLOYMENT_WATCH_PATH: buildInfo,
+      }),
+    ).toBe(buildInfo);
+    expect(sparkDaemonEntrypointFingerprint(buildInfo)).toBe(fingerprint);
+  });
+
   it("requires a stable replacement before requesting a restart", () => {
     const probe = createSparkDaemonBuildChangeProbe("old", 2_000);
 

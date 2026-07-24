@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 
 import { sparkCliDispatcherStrings } from "@zendev-lab/spark-i18n/cli";
 import { resolveSparkPaths, resolveSparkUserPaths } from "@zendev-lab/spark-system";
-
-export const SPARK_CLI_VERSION = "0.1.0";
+import {
+  runSparkManagedInstallCommand,
+  runSparkUpdateCommand,
+  runSparkVersionCommand,
+} from "@zendev-lab/spark-update/cli";
 
 const dispatcherStrings = sparkCliDispatcherStrings();
 
@@ -20,7 +23,9 @@ export type SparkDispatcherCommand =
       autoSessionPrefix?: string;
     }
   | { kind: "help" }
-  | { kind: "version" }
+  | { kind: "version"; json?: true }
+  | { kind: "managed-install"; argv: string[] }
+  | { kind: "update"; argv: string[] }
   | { kind: "paths"; json: boolean }
   | { kind: "error"; message: string };
 
@@ -40,29 +45,54 @@ export interface SparkDispatcherLauncher {
 export function parseSparkDispatcherArgs(argv: string[]): SparkDispatcherCommand {
   const [first, ...rest] = argv;
   if (!first) return { kind: "dispatch", target: "tui", argv: [] };
-  if (first === "help" || first === "--help" || first === "-h") return { kind: "help" };
-  if (first === "version" || first === "--version" || first === "-v") return { kind: "version" };
-  if (first === "paths") return parseSparkPathsCommand(rest);
-  if (first === "run") return parseSparkRunCommand(rest);
-  if (first === "bg") return parseSparkBackgroundCommand(rest);
-  if (first === "doctor") return { kind: "dispatch", target: "daemon", argv: ["doctor", ...rest] };
-  if (first === "tui") return { kind: "dispatch", target: "tui", argv: rest };
-  if (first === "daemon") return { kind: "dispatch", target: "daemon", argv: rest };
-  if (first === "server") {
-    return {
-      kind: "error",
-      message: 'The "spark server" namespace was removed. Use "spark cockpit" instead.',
-    };
+  switch (first) {
+    case "help":
+    case "--help":
+    case "-h":
+      return { kind: "help" };
+    case "version":
+      return parseSparkVersionCommand(rest);
+    case "--version":
+    case "-v":
+      return { kind: "version" };
+    case "install":
+      return rest.includes("--managed")
+        ? { kind: "managed-install", argv: rest }
+        : { kind: "dispatch", target: "tui", argv };
+    case "update":
+      return isManagedUpdateCommand(rest)
+        ? { kind: "update", argv: rest }
+        : { kind: "dispatch", target: "tui", argv };
+    case "paths":
+      return parseSparkPathsCommand(rest);
+    case "run":
+      return parseSparkRunCommand(rest);
+    case "bg":
+      return parseSparkBackgroundCommand(rest);
+    case "doctor":
+      return { kind: "dispatch", target: "daemon", argv: ["doctor", ...rest] };
+    case "tui":
+      return { kind: "dispatch", target: "tui", argv: rest };
+    case "daemon":
+      return { kind: "dispatch", target: "daemon", argv: rest };
+    case "server":
+      return errorCommand('The "spark server" namespace was removed. Use "spark cockpit" instead.');
+    case "cockpit":
+      return { kind: "dispatch", target: "cockpit", argv: rest };
+    case "sessions":
+    case "session":
+      return { kind: "dispatch", target: "tui", argv };
+    default:
+      return isSparkTuiCompatibilityCommand(first)
+        ? { kind: "dispatch", target: "tui", argv }
+        : errorCommand(dispatcherStrings.unknownSubcommand(first, argv));
   }
-  if (first === "cockpit") return { kind: "dispatch", target: "cockpit", argv: rest };
-  if (first === "sessions" || first === "session") {
-    return { kind: "dispatch", target: "tui", argv };
-  }
-  if (isSparkTuiCompatibilityCommand(first)) return { kind: "dispatch", target: "tui", argv };
-  return {
-    kind: "error",
-    message: dispatcherStrings.unknownSubcommand(first, argv),
-  };
+}
+
+function parseSparkVersionCommand(argv: string[]): SparkDispatcherCommand {
+  if (argv.length === 0) return { kind: "version" };
+  if (argv.length === 1 && argv[0] === "--json") return { kind: "version", json: true };
+  return errorCommand('spark version accepts only the optional "--json" flag');
 }
 
 export async function runSparkDispatcher(
@@ -78,8 +108,11 @@ export async function runSparkDispatcher(
       stdout.write(helpText());
       return 0;
     case "version":
-      stdout.write(`${SPARK_CLI_VERSION}\n`);
-      return 0;
+      return await runSparkVersionCommand(command.json ? ["--json"] : [], { stdout, stderr });
+    case "managed-install":
+      return await runSparkManagedInstallCommand(command.argv, { stdout, stderr });
+    case "update":
+      return await runSparkUpdateCommand(command.argv, { stdout, stderr });
     case "paths": {
       const payload = {
         sparkHome: process.env.SPARK_HOME?.trim() ?? null,
@@ -237,6 +270,20 @@ function isSparkTuiCompatibilityCommand(first: string): boolean {
     first === "--mode" ||
     first === "--list-models" ||
     isSparkTuiResourceCommand(first)
+  );
+}
+
+function isManagedUpdateCommand(argv: readonly string[]): boolean {
+  const action = argv[0];
+  return (
+    action === undefined ||
+    action === "status" ||
+    action === "check" ||
+    action === "apply" ||
+    action === "rollback" ||
+    action === "retry" ||
+    action === "configure" ||
+    action === "__tick"
   );
 }
 

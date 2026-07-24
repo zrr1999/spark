@@ -41,11 +41,11 @@
     "test:browser:cockpit": "pnpm --filter @zendev-lab/spark-cockpit run test:browser",
     "test:mutation": "node scripts/run-leaf-mutation.mjs",
     "build": "pnpm --filter @zendev-lab/spark-daemon run build && pnpm --filter @zendev-lab/spark-cockpit run build",
+    "release:pack": "node scripts/pack-release.mjs",
     "preview": "pnpm --filter @zendev-lab/spark-cockpit run dev",
     "smoke": "node scripts/smoke-npm-product.mjs",
     "audit": "pnpm audit --registry=https://registry.npmjs.org/ --audit-level high",
     "report:hygiene": "node scripts/report-hygiene.mjs",
-    "publish": "pnpm run check && pnpm run smoke && pnpm publish dist/npm-package --access public --registry=https://registry.npmjs.org/",
     "prepare": "prek install --hook-type commit-msg --hook-type pre-commit"
   },
   "dependencies": {
@@ -71,6 +71,7 @@
     "@zendev-lab/spark-tui": "workspace:^",
     "@zendev-lab/spark-tui-app": "workspace:^",
     "@zendev-lab/spark-turn": "workspace:^",
+    "@zendev-lab/spark-update": "workspace:^",
     "@zendev-lab/spark-web": "workspace:^",
     "@zendev-lab/spark-workflows": "workspace:^",
     "typebox": "catalog:"
@@ -119,5 +120,10 @@
       "./packages/spark-ai/src/baidu-oneapi-provider.ts",
       "./packages/spark-extension/src/extension/index.ts"
     ]
+  },
+  "sparkRelease": {
+    "minimumUpdaterVersion": "0.1.0",
+    "rollbackCompatibility": ">=0.1.0 <0.2.0",
+    "migrationMode": "expand-only"
   }
 }

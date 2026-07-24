@@ -11,6 +11,12 @@ import { exerciseSparkDaemonLifecycle } from "../test/support/spark-process-harn
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
+const tarballArgumentIndex = process.argv.indexOf("--tarball");
+const suppliedTarball =
+  tarballArgumentIndex >= 0 ? process.argv[tarballArgumentIndex + 1] : undefined;
+if (tarballArgumentIndex >= 0 && !suppliedTarball) {
+  throw new Error("--tarball requires a path");
+}
 
 function cleanPath() {
   const repoPrefix = `${root.replaceAll("\\", "/")}/`;
@@ -151,23 +157,30 @@ function terminateProcessTree(child) {
 
 const temporary = await temporaryRoot();
 try {
-  console.log("Building npm product artifact...");
-  await run("node", ["scripts/build-npm-product.mjs"], {
-    cwd: root,
-    env: process.env,
-    timeout: 300_000,
-  });
-  console.log("Packing generated npm artifact...");
-  await run("pnpm", ["pack", "--pack-destination", temporary], {
-    cwd: resolve(root, "dist/npm-package"),
-    env: { ...process.env, npm_config_ignore_scripts: "true" },
-  });
-  const tarballs = (await readdir(temporary)).filter((name) => name.endsWith(".tgz"));
-  if (tarballs.length !== 1) {
-    throw new Error(`expected exactly one packed tarball, found ${tarballs.join(", ")}`);
+  let tarballPath;
+  if (suppliedTarball) {
+    tarballPath = resolve(root, suppliedTarball);
+    console.log(`Using prebuilt npm product artifact ${tarballPath}...`);
+  } else {
+    console.log("Building npm product artifact...");
+    await run("node", ["scripts/build-npm-product.mjs"], {
+      cwd: root,
+      env: process.env,
+      timeout: 300_000,
+    });
+    console.log("Packing generated npm artifact...");
+    await run("pnpm", ["pack", "--pack-destination", temporary], {
+      cwd: resolve(root, "dist/npm-package"),
+      env: { ...process.env, npm_config_ignore_scripts: "true" },
+    });
+    const tarballs = (await readdir(temporary)).filter((name) => name.endsWith(".tgz"));
+    if (tarballs.length !== 1) {
+      throw new Error(`expected exactly one packed tarball, found ${tarballs.join(", ")}`);
+    }
+    tarballPath = resolve(temporary, tarballs[0]);
   }
-  const [tarball] = tarballs;
-  const packed = await stat(resolve(temporary, tarball));
+  const tarball = tarballPath.split(/[\\/]/u).at(-1);
+  const packed = await stat(tarballPath);
   const installRoot = resolve(temporary, "install");
   await mkdir(installRoot, { recursive: true });
   console.log("Installing tarball into an isolated directory...");
@@ -175,7 +188,7 @@ try {
     cwd: installRoot,
     env: { ...process.env, PATH: cleanPath() },
   });
-  await run("npm", ["install", "--ignore-scripts", resolve(temporary, tarball)], {
+  await run("npm", ["install", "--ignore-scripts", tarballPath], {
     cwd: installRoot,
     env: { ...process.env, PATH: cleanPath() },
     timeout: 300_000,
@@ -196,6 +209,21 @@ try {
   };
   console.log("Probing installed dispatcher, TUI, and daemon...");
   await run(spark, [...sparkArgvPrefix, "--help"], { cwd: installRoot, env: environment });
+  const version = await run(spark, [...sparkArgvPrefix, "version", "--json"], {
+    cwd: installRoot,
+    env: environment,
+  });
+  const buildInfo = JSON.parse(version.stdout);
+  if (buildInfo.packageName !== "@zendev-lab/spark" || !buildInfo.fingerprint) {
+    throw new Error("installed product did not expose valid build-info");
+  }
+  const updateStatus = await run(spark, [...sparkArgvPrefix, "update", "status", "--json"], {
+    cwd: installRoot,
+    env: environment,
+  });
+  if (JSON.parse(updateStatus.stdout).config?.policy !== "notify") {
+    throw new Error("installed product did not expose the default managed-update projection");
+  }
   await run(spark, [...sparkArgvPrefix, "tui", "--help"], { cwd: installRoot, env: environment });
   await exerciseSparkDaemonLifecycle({
     command: spark,

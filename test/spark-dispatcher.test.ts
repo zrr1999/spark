@@ -82,11 +82,28 @@ test("parseSparkDispatcherArgs routes default, tui, daemon, cockpit, sessions, a
     target: "tui",
     argv: ["install", "./skill", "--skill"],
   });
+  assert.deepEqual(parseSparkDispatcherArgs(["install", "--managed", "--version", "0.1.0"]), {
+    kind: "managed-install",
+    argv: ["--managed", "--version", "0.1.0"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["update", "status", "--json"]), {
+    kind: "update",
+    argv: ["status", "--json"],
+  });
+  assert.deepEqual(parseSparkDispatcherArgs(["update", "./resource"]), {
+    kind: "dispatch",
+    target: "tui",
+    argv: ["update", "./resource"],
+  });
 });
 
 test("parseSparkDispatcherArgs keeps help/version local and rejects unknown subcommands", () => {
   assert.deepEqual(parseSparkDispatcherArgs(["--help"]), { kind: "help" });
   assert.deepEqual(parseSparkDispatcherArgs(["version"]), { kind: "version" });
+  assert.deepEqual(parseSparkDispatcherArgs(["version", "--json"]), {
+    kind: "version",
+    json: true,
+  });
   const command = parseSparkDispatcherArgs(["build", "this"]);
   assert.equal(command.kind, "error");
   assert.match(command.kind === "error" ? command.message : "", /Unknown spark subcommand: build/u);

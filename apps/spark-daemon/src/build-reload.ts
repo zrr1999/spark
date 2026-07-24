@@ -18,12 +18,22 @@ export function sparkDaemonEntrypointPath(
 export function sparkDaemonDeploymentEntrypointPath(
   argv: readonly string[] = process.argv,
   fallbackUrl = import.meta.url,
+  env: Record<string, string | undefined> = process.env,
 ): string {
-  return resolve(argv[1] ?? fileURLToPath(fallbackUrl));
+  return resolve(env.SPARK_DEPLOYMENT_WATCH_PATH?.trim() || argv[1] || fileURLToPath(fallbackUrl));
 }
 
 export function sparkDaemonEntrypointFingerprint(entrypoint = sparkDaemonEntrypointPath()): string {
-  return `sha256:${createHash("sha256").update(readFileSync(entrypoint)).digest("hex")}`;
+  const content = readFileSync(entrypoint);
+  try {
+    const build = JSON.parse(content.toString("utf8")) as { fingerprint?: unknown };
+    if (typeof build.fingerprint === "string" && /^sha256:[0-9a-f]{64}$/u.test(build.fingerprint)) {
+      return build.fingerprint;
+    }
+  } catch {
+    // Source entrypoints are fingerprinted as bytes below.
+  }
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 export function createSparkDaemonBuildChangeProbe(

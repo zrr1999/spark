@@ -13,6 +13,7 @@ import {
 const nav: ConsoleNavCopy = {
   modelsProviders: "Models & providers",
   invocationDiagnostics: "Invocation diagnostics",
+  updateStatus: "Updates",
   channels: "Message platforms",
   workspaceDetails: "Basics",
   registration: "Runtime registration",
@@ -48,6 +49,7 @@ describe("console nav", () => {
     expect(result[1]?.items.map((item) => item.href)).toEqual([
       "/settings/models",
       "/settings/invocations",
+      "/settings/update",
     ]);
   });
 

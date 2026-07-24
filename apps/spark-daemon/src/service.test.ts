@@ -107,6 +107,8 @@ describe("Spark daemon restart successor", () => {
           helperCommand: [process.execPath, "-e", helper],
           helperEnv: { SPARK_TEST_RESTART_INTENT: intentPath },
           supervisorManaged: true,
+          targetVersion: "0.1.1",
+          targetBuildFingerprint: `sha256:${"b".repeat(64)}`,
         },
       );
 
@@ -116,6 +118,8 @@ describe("Spark daemon restart successor", () => {
         targetInstanceId: schedule.targetInstanceId,
         targetGeneration: schedule.targetGeneration,
         supervisorManaged: true,
+        targetVersion: "0.1.1",
+        targetBuildFingerprint: `sha256:${"b".repeat(64)}`,
       });
       if (schedule.helperPid) process.kill(schedule.helperPid, "SIGTERM");
     } finally {
@@ -1028,6 +1032,35 @@ describe("Spark daemon restart successor", () => {
       expect(plist).not.toContain("<key>KeepAlive</key>\n  <true/>");
       expect(plist).toContain("<string>__service-start</string>");
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pins launchd to the version-independent managed launcher", () => {
+    const root = mkdtempSync(join(tmpdir(), "spark-service-stable-launcher-"));
+    const launchdPaths = resolveSparkPaths({
+      app: "daemon",
+      env: { HOME: root },
+      overrides: { runtimeDir: join(root, "run"), stateDir: join(root, "state") },
+    });
+    const previousLauncher = process.env.SPARK_STABLE_LAUNCHER;
+    const previousWatchPath = process.env.SPARK_DEPLOYMENT_WATCH_PATH;
+    process.env.SPARK_STABLE_LAUNCHER = join(root, ".local", "bin", "spark");
+    process.env.SPARK_DEPLOYMENT_WATCH_PATH = join(root, "versions", "current", "build-info.json");
+    try {
+      const plist = readFileSync(
+        writeSparkDaemonLaunchdPlist(launchdPaths, { home: root }),
+        "utf8",
+      );
+      expect(plist).toContain(`<string>${process.env.SPARK_STABLE_LAUNCHER}</string>`);
+      expect(plist).toContain("<string>daemon</string>");
+      expect(plist).toContain("<string>__service-start</string>");
+      expect(plist).toContain("<key>SPARK_DEPLOYMENT_WATCH_PATH</key>");
+    } finally {
+      if (previousLauncher === undefined) delete process.env.SPARK_STABLE_LAUNCHER;
+      else process.env.SPARK_STABLE_LAUNCHER = previousLauncher;
+      if (previousWatchPath === undefined) delete process.env.SPARK_DEPLOYMENT_WATCH_PATH;
+      else process.env.SPARK_DEPLOYMENT_WATCH_PATH = previousWatchPath;
       rmSync(root, { recursive: true, force: true });
     }
   });

@@ -132,6 +132,9 @@ importers:
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:packages/spark-turn
+      '@zendev-lab/spark-update':
+        specifier: workspace:^
+        version: link:packages/spark-update
       '@zendev-lab/spark-web':
         specifier: workspace:^
         version: link:packages/spark-web
@@ -218,6 +221,9 @@ importers:
       '@zendev-lab/spark-tui-app':
         specifier: workspace:^
         version: link:../spark-tui
+      '@zendev-lab/spark-update':
+        specifier: workspace:^
+        version: link:../../packages/spark-update
 
   apps/spark-cockpit:
     dependencies:
@@ -263,6 +269,9 @@ importers:
       '@zendev-lab/spark-tasks':
         specifier: workspace:*
         version: link:../../packages/spark-tasks
+      '@zendev-lab/spark-update':
+        specifier: workspace:*
+        version: link:../../packages/spark-update
       bits-ui:
         specifier: ^2.18.1
         version: 2.18.1(@internationalized/date@3.12.2)(@sveltejs/kit@2.65.1(@opentelemetry/api@1.9.0)(@sveltejs/vite-plugin-svelte@7.2.0(@voidzero-dev/vite-plus-core@0.2.6(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.7))(@voidzero-dev/vite-plus-core@0.2.6(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(svelte@5.56.7)(typescript@6.0.3))(svelte@5.56.7)
@@ -378,6 +387,9 @@ importers:
       '@zendev-lab/spark-turn':
         specifier: workspace:^
         version: link:../../packages/spark-turn
+      '@zendev-lab/spark-update':
+        specifier: workspace:^
+        version: link:../../packages/spark-update
       '@zendev-lab/spark-workflows':
         specifier: workspace:^
         version: link:../../packages/spark-workflows
@@ -1122,6 +1134,28 @@ importers:
       vitest:
         specifier: 4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.1.10)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
+
+  packages/spark-update:
+    dependencies:
+      '@zendev-lab/spark-protocol':
+        specifier: workspace:^
+        version: link:../spark-protocol
+      '@zendev-lab/spark-system':
+        specifier: workspace:^
+        version: link:../spark-system
+    devDependencies:
+      '@stryker-mutator/core':
+        specifier: 'catalog:'
+        version: 9.6.1(@types/node@26.1.1)
+      '@stryker-mutator/vitest-runner':
+        specifier: 'catalog:'
+        version: 9.6.1(@stryker-mutator/core@9.6.1(@types/node@26.1.1))(vitest@4.1.10)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@4.1.10)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))(jsdom@27.4.0)
 
   packages/spark-web:
     dependencies:

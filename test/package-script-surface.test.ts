@@ -13,7 +13,7 @@ const canonicalRootScripts = [
   "fix",
   "prepare",
   "preview",
-  "publish",
+  "release:pack",
   "report:hygiene",
   "smoke",
   "test",
@@ -40,6 +40,7 @@ test("root package exposes one compact validation and release surface", async ()
 
   assert.deepEqual(Object.keys(scripts).toSorted(), canonicalRootScripts.toSorted());
   assert.equal(scripts.smoke, "node scripts/smoke-npm-product.mjs");
+  assert.equal(scripts["release:pack"], "node scripts/pack-release.mjs");
   assert.equal(scripts.test, "vp test run --config vitest.root.config.ts");
   assert.equal(scripts["check:test-quality"], "node scripts/check-test-quality.mjs");
   assert.equal(
@@ -75,6 +76,7 @@ test("root package exposes one compact validation and release surface", async ()
     );
   }
   for (const requiredUnitPhase of [
+    "pnpm --filter @zendev-lab/spark-cockpit exec svelte-kit sync",
     "vp test run --config vitest.root.config.ts",
     "pnpm -r --filter './packages/*' --if-present run check",
     "pnpm --filter @zendev-lab/spark-cockpit run test",
@@ -99,10 +101,6 @@ test("root package exposes one compact validation and release surface", async ()
   assert.match(scripts.typecheck ?? "", /^pnpm --filter @zendev-lab\/spark-cockpit run check/u);
   assert.match(scripts.typecheck ?? "", /vp check --no-fmt --no-lint/u);
   assert.match(scripts.typecheck ?? "", /@zendev-lab\/spark-daemon run check$/u);
-  assert.equal(
-    scripts.publish,
-    "pnpm run check && pnpm run smoke && pnpm publish dist/npm-package --access public --registry=https://registry.npmjs.org/",
-  );
   assert.doesNotMatch(
     Object.keys(scripts).join("\n"),
     /(?:test:file|(?:build|check|test|publish):npm-product|check:(?:architecture|boundaries|distribution))/u,

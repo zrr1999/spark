@@ -36,16 +36,21 @@ Inside an agent host, ordinary input is lightweight by default. `/plan` creates 
 
 ## Install
 
-The npm release exposes one public product and one executable:
+The npm release exposes one public product and one executable. A managed
+installation is recommended because it provides atomic upgrades and rollback:
 
 ```text
-npm install --global @zendev-lab/spark
+pnpm dlx @zendev-lab/spark install --managed
 spark --help
 spark daemon start
 spark cockpit
 ```
 
-Node `>=26 <27` is required. The source monorepo and its workspaces stay private implementation boundaries; they are compiled into the published product rather than becoming separate public packages.
+Node `>=26 <27` is required. A normal npm/pnpm install remains usable, but it
+only reports exact upgrade commands and never mutates its package-manager
+installation or a source checkout. The source monorepo and its workspaces stay
+private implementation boundaries; they are compiled into the published
+product rather than becoming separate public packages.
 
 ## Development
 
@@ -57,6 +62,11 @@ pnpm run preview
 node --experimental-strip-types scripts/spark-zellij-harness.mts --session spark
 ```
 
-pnpm `>=11 <12` is required for source development. Maintainers can run `pnpm run publish` to execute the full validation and clean-install smoke before publishing only the generated `@zendev-lab/spark` artifact. `.spark/` (including `.spark/memory/`) is local runtime state and should remain uncommitted unless explicitly exported. Legacy `.learnings/` directories are also ignored if present.
+pnpm `>=11 <12` is required for source development. `pnpm run release:pack`
+builds the single public tarball locally; only a version-matching `vX.Y.Z` tag
+may publish it through the protected release workflow. `.spark/` (including
+`.spark/memory/`) is local runtime state and should remain uncommitted unless
+explicitly exported. Legacy `.learnings/` directories are also ignored if
+present.
 
 Contracts, including state ownership and adapter boundaries, are indexed in [`docs/README.md`](./docs/README.md). Contributor and automation constraints are in [`AGENTS.md`](./AGENTS.md).

@@ -339,6 +339,10 @@ export function daemonRestart(value: unknown): LocalDaemonRestartResult {
     processGeneration: value.processGeneration,
     targetInstanceId: value.targetInstanceId,
     targetGeneration: value.targetGeneration,
+    ...(typeof value.targetVersion === "string" ? { targetVersion: value.targetVersion } : {}),
+    ...(typeof value.targetBuildFingerprint === "string"
+      ? { targetBuildFingerprint: value.targetBuildFingerprint }
+      : {}),
     requestedAt: value.requestedAt,
   };
 }

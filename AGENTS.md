@@ -50,7 +50,7 @@ Target package topology follows type-first names:
 | `pnpm run preview`                       | Start the local Spark Cockpit dev server                         |
 | `spark cockpit`                          | Start the built Spark Cockpit production server through the CLI   |
 | `pnpm install -g .`                      | Link the unified root `spark` CLI                                |
-| `pnpm run publish`                       | Validate, smoke, and publish only `@zendev-lab/spark`             |
+| `pnpm run release:pack`                  | Build the aggregate tarball and release manifest without publishing |
 
 ## CI
 
@@ -58,6 +58,7 @@ Target package topology follows type-first names:
 - `.github/workflows/ci-verify.yml` — parallel static, unit/integration, source-process, npm-product-process, and headless-Chromium Cockpit lanes with one aggregate `verify` result.
 - `.github/workflows/ce-mutation.yml` — weekly/manual leaf-package mutation CE (non-blocking).
 - `.github/workflows/ci-pr-checks.yml` — PR title validation (zendev).
+- `.github/workflows/cd-publish.yml` — protected, version-tag-only npm and GitHub Release publication.
 - `.github/workflows/ci-typos.yml` — spellcheck with `_typos.toml`.
 
 ## Extension boundary (Spark-owned; Pi SDK kernel retained)

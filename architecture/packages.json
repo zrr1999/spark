@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "maxWorkspacePackages": 38,
+  "maxWorkspacePackages": 39,
   "packages": {
     "@zendev-lab/spark-cli": {
       "path": "apps/spark-cli",
@@ -255,6 +255,14 @@
       "owner": "turn-runtime",
       "stability": "supported",
       "stateWriter": "none"
+    },
+    "@zendev-lab/spark-update": {
+      "path": "packages/spark-update",
+      "layer": "foundation",
+      "owner": "deployment",
+      "stability": "supported",
+      "stateWriter": "external",
+      "allowedWorkspaceDependencies": ["@zendev-lab/spark-protocol", "@zendev-lab/spark-system"]
     },
     "@zendev-lab/spark-web": {
       "path": "packages/spark-web",

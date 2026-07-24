@@ -8,6 +8,7 @@ export type ConsoleNavCopy = {
   registration: string;
   modelsProviders: string;
   invocationDiagnostics: string;
+  updateStatus: string;
 };
 
 export type ConsoleNavGroupCopy = {
@@ -89,6 +90,7 @@ export function buildConsoleNavGroups(input: {
           label: input.nav.invocationDiagnostics,
           icon: "activity",
         },
+        { href: "/settings/update", label: input.nav.updateStatus, icon: "retry" },
       ],
     });
   }
@@ -149,6 +151,7 @@ export function currentConsolePageLabel(input: {
     if (segments[1] === "channels") return input.nav.channels;
     if (segments[1] === "models") return input.nav.modelsProviders;
     if (segments[1] === "invocations") return input.nav.invocationDiagnostics;
+    if (segments[1] === "update") return input.nav.updateStatus;
     return input.nav.modelsProviders;
   }
 

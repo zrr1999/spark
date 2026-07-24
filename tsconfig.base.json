@@ -118,6 +118,8 @@
         "./packages/spark-cockpit-coordination/src/security.ts"
       ],
       "@zendev-lab/spark-turn": ["./packages/spark-turn/src/agent-loop.ts"],
+      "@zendev-lab/spark-update": ["./packages/spark-update/src/index.ts"],
+      "@zendev-lab/spark-update/cli": ["./packages/spark-update/src/cli.ts"],
       "@zendev-lab/spark-extension/extension": ["./packages/spark-extension/src/extension.ts"],
       "@zendev-lab/spark-extension/host-support": [
         "./packages/spark-extension/src/host-support.ts"
